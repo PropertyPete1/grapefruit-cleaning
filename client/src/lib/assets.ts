@@ -1,0 +1,22 @@
+// Central registry of all uploaded static assets (webdev storage URLs)
+export const ASSETS = {
+  logo: "/manus-storage/grapefruit-logo-transparent_3f6f58eb.png",
+  logoSquare: "/manus-storage/favicon-256_0edfb26b.png",
+  logoOriginal: "/manus-storage/grapefruit-logo_9a11bb63.jpg",
+  heroLivingRoom: "/manus-storage/hero-living-room_a74140cc.jpg",
+  kitchenWhite: "/manus-storage/kitchen-white_7c693816.jpg",
+  kitchenMinimal: "/manus-storage/kitchen-minimal_800eccdf.jpg",
+  livingRoomView: "/manus-storage/living-room-view_dbe0b6ab.jpg",
+  livingRoomWhite: "/manus-storage/living-room-white_a86954f1.jpg",
+  bathroomSpa: "/manus-storage/bathroom-spa_f6f662fd.jpg",
+  bathroomMarble: "/manus-storage/bathroom-marble_d468950f.jpg",
+  bedroomMinimal: "/manus-storage/bedroom-minimal_7c706bff.jpg",
+  bedroomCozy: "/manus-storage/bedroom-cozy_48b470e3.jpg",
+  officeModern: "/manus-storage/office-modern_27a29195.jpg",
+  officeOpen: "/manus-storage/office-open_3d3ffaf7.jpg",
+  airbnbLiving: "/manus-storage/airbnb-living_7ebafc3e.jpg",
+  airbnbKitchen: "/manus-storage/airbnb-kitchen_2383e473.jpg",
+  cleanerAction: "/manus-storage/cleaner-action_9f881ad7.jpg",
+  organizedPantry: "/manus-storage/organized-pantry_8f4d8980.jpg",
+  kitchenFridge: "/manus-storage/kitchen-fridge_9cb3edee.jpg",
+} as const;

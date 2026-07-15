@@ -1,52 +1,93 @@
+import { useEffect } from "react";
+import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { AlertCircle, Home } from "lucide-react";
-import { useLocation } from "wouter";
+import { ArrowRight, Sparkles } from "lucide-react";
+import { ASSETS } from "@/lib/assets";
 
+/**
+ * Premium bilingual 404 page. Detects locale from the URL prefix so it works
+ * both inside and outside the LocaleProvider tree.
+ */
 export default function NotFound() {
-  const [, setLocation] = useLocation();
+  const [location] = useLocation();
+  const isEs = location.startsWith("/es");
 
-  const handleGoHome = () => {
-    setLocation("/");
-  };
+  useEffect(() => {
+    document.title = isEs
+      ? "Página no encontrada | Grapefruit Cleaning Co."
+      : "Page Not Found | Grapefruit Cleaning Co.";
+    const meta = document.head.querySelector<HTMLMetaElement>('meta[name="robots"]') ?? (() => {
+      const el = document.createElement("meta");
+      el.setAttribute("name", "robots");
+      document.head.appendChild(el);
+      return el;
+    })();
+    meta.setAttribute("content", "noindex");
+    return () => {
+      meta.remove();
+    };
+  }, [isEs]);
+
+  const copy = isEs
+    ? {
+        code: "404",
+        title: "Esta página está impecable… porque no existe.",
+        body: "Es posible que el enlace haya cambiado o que la página se haya movido. Volvamos a un espacio reluciente.",
+        home: "Volver al inicio",
+        quote: "Obtener una cotización",
+        homePath: "/es",
+        quotePath: "/es/cotizacion",
+      }
+    : {
+        code: "404",
+        title: "This page is spotless… because it doesn't exist.",
+        body: "The link may have changed or the page may have moved. Let's get you back to a sparkling space.",
+        home: "Back to home",
+        quote: "Get an instant quote",
+        homePath: "/en",
+        quotePath: "/en/quote",
+      };
 
   return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-slate-50 to-slate-100">
-      <Card className="w-full max-w-lg mx-4 shadow-lg border-0 bg-white/80 backdrop-blur-sm">
-        <CardContent className="pt-8 pb-8 text-center">
-          <div className="flex justify-center mb-6">
-            <div className="relative">
-              <div className="absolute inset-0 bg-red-100 rounded-full animate-pulse" />
-              <AlertCircle className="relative h-16 w-16 text-red-500" />
-            </div>
-          </div>
+    <div className="relative min-h-screen w-full overflow-hidden bg-background flex items-center justify-center px-6">
+      {/* Soft brand glow */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -top-32 -right-32 h-96 w-96 rounded-full bg-primary/10 blur-3xl"
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -bottom-32 -left-32 h-96 w-96 rounded-full bg-emerald-500/10 blur-3xl"
+      />
 
-          <h1 className="text-4xl font-bold text-slate-900 mb-2">404</h1>
-
-          <h2 className="text-xl font-semibold text-slate-700 mb-4">
-            Page Not Found
-          </h2>
-
-          <p className="text-slate-600 mb-8 leading-relaxed">
-            Sorry, the page you are looking for doesn't exist.
-            <br />
-            It may have been moved or deleted.
-          </p>
-
-          <div
-            id="not-found-button-group"
-            className="flex flex-col sm:flex-row gap-3 justify-center"
-          >
-            <Button
-              onClick={handleGoHome}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 rounded-lg transition-all duration-200 shadow-md hover:shadow-lg"
-            >
-              <Home className="w-4 h-4 mr-2" />
-              Go Home
+      <div className="relative mx-auto max-w-xl text-center">
+        <img
+          src={ASSETS.logo}
+          alt="Grapefruit Cleaning Co."
+          className="mx-auto mb-10 h-16 w-auto"
+        />
+        <p className="text-7xl font-extrabold tracking-tight text-primary/90 md:text-8xl">{copy.code}</p>
+        <h1 className="mt-6 text-2xl font-bold tracking-tight text-foreground md:text-3xl">{copy.title}</h1>
+        <p className="mt-4 text-base leading-relaxed text-muted-foreground md:text-lg">{copy.body}</p>
+        <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
+          <Link href={copy.homePath}>
+            <Button size="lg" className="rounded-full px-8 shadow-md transition-transform hover:-translate-y-0.5">
+              {copy.home}
+              <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
-          </div>
-        </CardContent>
-      </Card>
+          </Link>
+          <Link href={copy.quotePath}>
+            <Button
+              size="lg"
+              variant="outline"
+              className="rounded-full px-8 transition-transform hover:-translate-y-0.5"
+            >
+              <Sparkles className="mr-2 h-4 w-4" />
+              {copy.quote}
+            </Button>
+          </Link>
+        </div>
+      </div>
     </div>
   );
 }
