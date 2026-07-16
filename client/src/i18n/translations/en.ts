@@ -128,6 +128,7 @@ export const en = {
     legal: "Legal",
     privacy: "Privacy Policy",
     terms: "Terms of Service",
+    staffLogin: "Staff login",
     rights: "All rights reserved.",
     hours: "Mon – Sat · 8:00 AM – 6:00 PM",
     serving: "Proudly serving the greater metro area",

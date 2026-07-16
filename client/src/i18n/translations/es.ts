@@ -131,6 +131,7 @@ export const es: Dictionary = {
     legal: "Legal",
     privacy: "Política de Privacidad",
     terms: "Términos de Servicio",
+    staffLogin: "Acceso para empleados",
     rights: "Todos los derechos reservados.",
     hours: "Lun – Sáb · 8:00 a.m. – 6:00 p.m.",
     serving: "Con orgullo al servicio del área metropolitana",

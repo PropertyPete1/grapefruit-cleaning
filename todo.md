@@ -227,3 +227,6 @@
 - [x] Replace /admin mobile pill strip with hamburger + slide-out drawer (15 items, icons, active highlight, bilingual)
 - [x] Review /staff mobile nav; apply drawer pattern if it has the same issue
 - [x] Desktop sidebars unchanged; verify on mobile viewport; tests green
+
+## Round 16 — Footer staff login link
+- [x] Add a discreet "Staff login" link to the site footer (bilingual), linking to /staff

@@ -147,6 +147,9 @@ export function SiteFooter() {
             <Link href={path("terms")} className="text-xs text-muted-foreground transition-colors hover:text-primary">
               {t.footer.terms}
             </Link>
+            <Link href="/staff" className="text-xs text-muted-foreground transition-colors hover:text-primary">
+              {t.footer.staffLogin}
+            </Link>
           </div>
         </div>
       </div>
