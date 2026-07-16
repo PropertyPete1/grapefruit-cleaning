@@ -299,3 +299,30 @@ Endpoint: GET https://maps.bexar.org/arcgis/rest/services/Parcels/MapServer/0/qu
 - Gallery admin does NOT have uploads (uses URLs) — blog will be first uploader.
 - Plan: admin.blogUploadCover mutation input {fileName, dataBase64, mimeType} (max ~5MB base64) → Buffer → storagePut(`blog-covers/${fileName}`, buf, mimeType) → return {url}. Client: hidden <input type=file accept="image/*">, FileReader→base64, uploading spinner, preview <img>, keeps URL Input too.
 - AdminBlog.tsx cover field at ~line 305-315 (Input bound to form.coverImage).
+
+## Final Round state (2026-07-16 ~22:30)
+- PR #1 (audit/round-8-verification) merged via gh pr merge → main @ 8c99655; workspace fast-forwarded, todo.md stash-popped.
+- Migrations applied via webdev_execute_sql: 0007 (status enum + 'expired'), 0008 (slotConflict bool) — verified via SHOW COLUMNS.
+- Verify done: pnpm install ok; tsc clean; vitest 14 files / 129 passed; pnpm build clean; debug-collector.js present (25KB); no browser console errors since 22:20.
+- Audit code adds: server/bookingRules.ts, server/staleBookings.test.ts, client/src/hooks/useSpamGuard.tsx, expiry cron in reminders.ts, slot release in getBookedSlots, double-booking guard in booking.create.
+- Pricing smoke: getSetting/setSetting are the db helpers (NOT upsertSetting); serializePricingConfig uses Infinity→null; parsePricingConfig sorts tiers. QuoteInput field may be `type` not `serviceType` — my smoke script passed serviceType and tier fell back weirdly (base 99.99 for 1200sqft w/ startingAt=true — suspicious). NEED: re-run smoke with correct field name; getSetting returns row object w/ .value probably.
+- Whole-dollar pricing config stored in DB via smoke script BUT may be invalid per zod (extras/basePrices rounding untouched is fine; Infinity serialized as "Infinity" string in my script vs schema expecting null — parse may fall back to defaults!). MUST re-store using serializePricingConfig (Infinity→null) and verify parse round-trips; also verify zod schema accepts null maxSqft → Infinity.
+- Remaining: smoke tests (pricing propagation UI, slot expiry 60min, contact form, blog cover upload), gallery upload feature (mirror admin.uploadBlogCover; MIME whitelist no SVG, 5MB, hashed keys, URL fallback, bilingual, tests), watermark removal attempt (hosting-layer badge; check Management UI settings; do NOT CSS-hack), single checkpoint + publish + git push github main.
+- Watermark knowledge: "Made with Manus" badge is injected at hosting layer; removal is via project Settings → General (Branding) in Management UI if available to user's plan; agent cannot toggle it via tools — report requirement if gated.
+
+## Final Round progress 2 (~22:40)
+- Phases 1-3 DONE: merge+migrations, verify (129 tests, tsc, build clean, debug-collector ok, no console errors), smoke tests all passed:
+  * Pricing: whole-dollar config STORED in DB (residential 100/130/160/200/250, deep+moveinout also rounded, basePrices rounded); booking.pricingConfig serves it; /en/quote shows $130 for 1200sqft; /en/pricing shows frequency-discounted values (by design).
+  * Slot expiry: stale booking auto-expired by expireStaleDepositBookings(), blocksSlot false, slot released. (bookings cols: reference, scheduledDate, scheduledTime, totalAmount; customers cols: firstName/lastName.)
+  * Contact form: HTTP POST succeeded, row stored + owner email delivered, test row deleted.
+  * Upload: storagePut works → /manus-storage/... 307 → S3 200 image/png.
+- Phase 4 (gallery upload) IN PROGRESS:
+  * admin.uploadBlogCover at server/routers/admin.ts:280-305 (adminProcedure, mime regex ^image\/(png|jpe?g|webp|gif|avif)$/i, max 7M base64, 5MB buffer check, sanitized safeName, storagePut(`blog-covers/${safeName}`)). PLAN: add generic admin.uploadImage or uploadGalleryImage mutation with folder "gallery"; reuse exact same validation.
+  * AdminGallery.tsx (174 lines): single "Add image" dialog w/ fields url, altEn, altEs, category (residential|commercial|airbnb|deep); create/update/delete mutations; no edit dialog (only visible toggle + delete on cards). Add upload button + hidden file input + preview in the dialog, same pattern as AdminBlog (readFile → base64 → mutation → set form.url).
+- Phase 5 watermark: badge is hosting-layer; check Settings→General in Management UI; if plan-gated, report exactly what's required, no CSS hacks.
+- Phase 6: single checkpoint (auto-publish) + git push github main. Cleanup: smoke-*.ts deleted. Tests to add: gallery upload contract test (mirror blogCoverUpload.test.ts).
+
+## Final Round progress 3 (~22:50)
+- Phase 4 DONE: admin.uploadGalleryImage endpoint added (mirrors uploadBlogCover; gallery/ folder, no SVG, 5MB, sanitized names); AdminGallery dialog now has upload button + preview + remove X, URL paste fallback kept; createGalleryItem url validation widened to accept /manus-storage/ relative paths (was z.string().url() which would reject uploads); server/galleryUpload.test.ts added. tsc clean; 135 tests pass (15 files). /admin/gallery screenshot renders fine.
+- Phase 5 watermark finding: no watermark/branding toggle exists in repo code, .project-config.json, template.json, or vite configs — the "Made with Manus" badge is injected at the hosting layer. Removal is done from the Management UI: Settings → General (website branding section) — availability depends on the user's Manus subscription plan; custom domains also typically remove it. Agent has no tool to toggle it. Per user instruction: report exactly this, no CSS hacks, don't block.
+- Phase 6 remaining: single checkpoint (auto-publish) + git push github main + final report. todo.md final-round items need [x] marks.

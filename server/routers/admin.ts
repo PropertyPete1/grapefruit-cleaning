@@ -205,7 +205,12 @@ export const adminRouter = router({
   createGalleryItem: adminProcedure
     .input(
       z.object({
-        url: z.string().url().max(500),
+        // Accepts absolute URLs and relative storage paths (e.g. /manus-storage/...)
+        url: z
+          .string()
+          .min(1)
+          .max(500)
+          .refine((v) => /^https?:\/\//i.test(v) || v.startsWith("/"), "Must be a URL or a storage path"),
         altEn: z.string().max(255).optional(),
         altEs: z.string().max(255).optional(),
         category: z.enum(["residential", "commercial", "airbnb", "deep"]),
@@ -301,6 +306,33 @@ export const adminRouter = router({
           .replace(/^[-.]+|[-.]+$/g, "")
           .slice(-80) || "cover.jpg";
       const { url } = await storagePut(`blog-covers/${safeName}`, buf, input.mimeType);
+      return { url } as const;
+    }),
+  /** Uploads a gallery image (base64) to S3 storage and returns its public URL. */
+  uploadGalleryImage: adminProcedure
+    .input(
+      z.object({
+        fileName: z.string().min(1).max(200),
+        mimeType: z
+          .string()
+          .regex(/^image\/(png|jpe?g|webp|gif|avif)$/i, "Only PNG, JPEG, WebP, GIF, or AVIF images are allowed"),
+        // ~5MB binary ≈ 6.8M base64 chars
+        dataBase64: z.string().min(1).max(7_000_000),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const buf = Buffer.from(input.dataBase64, "base64");
+      if (buf.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "Empty file" });
+      if (buf.length > 5 * 1024 * 1024)
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Image must be 5MB or smaller" });
+      // Sanitize the file name; storagePut appends a unique hash suffix itself.
+      const safeName =
+        input.fileName
+          .toLowerCase()
+          .replace(/[^a-z0-9._-]+/g, "-")
+          .replace(/^[-.]+|[-.]+$/g, "")
+          .slice(-80) || "photo.jpg";
+      const { url } = await storagePut(`gallery/${safeName}`, buf, input.mimeType);
       return { url } as const;
     }),
   createBlogPost: adminProcedure

@@ -213,3 +213,12 @@
 - [x] Browser-verify /en?from_webdev=1 boots without console errors
 - [x] Root cause: restore client/public/__manus__/debug-collector.js (deleted in Round 9; vite injects it in dev → HTML-as-JS SyntaxError in preview panel)
 - [x] Fix admin dashboard monthly revenue query (ONLY_FULL_GROUP_BY error — alias month expression in GROUP BY/ORDER BY)
+
+## Final Round — Sync merged audit code, migrate, verify, gallery upload, watermark
+- [x] Pull merged main from GitHub (audit PR #1) without losing local state
+- [x] Run migrations 0007 (expired status) + 0008 (slotConflict) via pnpm db:push before serving
+- [x] Verify: pnpm check clean, vitest ~128 pass/1 skip, prod build clean, debug-collector.js present, preview clean
+- [x] Smoke: pricing edit propagates + whole-dollar base prices; slot expiry ~60min; contact form; blog cover upload
+- [x] Gallery image upload (same pattern as blog cover, URL fallback, bilingual, tests)
+- [x] Watermark: no repo/config toggle exists — hosting-layer badge; removal via Management UI Settings → General (plan-dependent) — reported to user
+- [x] Single checkpoint, publish, GitHub sync confirmed
