@@ -10,6 +10,7 @@ import {
 import { parseSchedule, slotsForDate, SCHEDULE_SETTING_KEY } from "@shared/schedule";
 import * as db from "../db";
 import { assertRateLimit, clientIp } from "../antiSpam";
+import { STALE_DEPOSIT_MINUTES } from "../bookingRules";
 import { sendBookingEmails } from "../emails";
 import { lookupPropertySqft } from "../property";
 import { getStripe } from "../stripe";
@@ -141,7 +142,8 @@ export const bookingRouter = router({
       // date/time outside the admin-defined hours (e.g. Sundays when closed).
       const schedule = parseSchedule(await db.getSetting(SCHEDULE_SETTING_KEY));
       const validSlots = slotsForDate(input.date, schedule);
-      if (!validSlots.includes(input.time)) {
+      const takenSlots = await db.getBookedSlots(input.date);
+      if (!validSlots.includes(input.time) || takenSlots.includes(input.time)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message:
@@ -239,6 +241,10 @@ export const bookingRouter = router({
         customer_email: input.email,
         client_reference_id: String(bookingId),
         allow_promotion_codes: false,
+        // The payment link dies when the booking goes stale and releases its
+        // slot (STALE_DEPOSIT_MINUTES), so an old tab can't quietly pay for a
+        // slot that has been given away. Stripe allows 30 min–24 h.
+        expires_at: Math.floor(Date.now() / 1000) + STALE_DEPOSIT_MINUTES * 60,
         line_items: [
           {
             price_data: {
@@ -283,7 +289,7 @@ export const bookingRouter = router({
       if (booking.stripeSessionId !== input.sessionId)
         throw new TRPCError({ code: "BAD_REQUEST", message: "Session mismatch" });
 
-      if (booking.status === "pending_deposit") {
+      if (booking.status === "pending_deposit" || booking.status === "expired") {
         const stripe = getStripe();
         const session = await stripe.checkout.sessions.retrieve(input.sessionId);
         if (session.payment_status !== "paid") {
@@ -325,14 +331,29 @@ export const bookingRouter = router({
   }),
 });
 
-/** Shared finalization: mark confirmed, record payment, redeem coupon, send emails. */
+/**
+ * Shared finalization: mark confirmed, record payment, redeem coupon, send emails.
+ * Idempotent — only acts on unpaid bookings: pending_deposit, or expired
+ * (a stale checkout whose Stripe payment arrived late still gets confirmed).
+ */
 export async function finalizeBooking(bookingId: number, paymentIntentId: string | null): Promise<void> {
   const booking = await db.getBookingById(bookingId);
-  if (!booking || booking.status !== "pending_deposit") return;
+  if (!booking || (booking.status !== "pending_deposit" && booking.status !== "expired")) return;
+
+  // Defense in depth for late (expired-recovery) payments: the slot may have
+  // been retaken while this checkout sat expired. Still confirm — a paid
+  // deposit is never dropped silently — but flag the conflict so the owner
+  // notification asks them to reschedule one of the two bookings.
+  // (Safe to check only for expired bookings: an expired row never blocks the
+  // slot itself, whereas a fresh pending_deposit row would match its own slot.)
+  const slotConflict =
+    booking.status === "expired" &&
+    (await db.getBookedSlots(booking.scheduledDate)).includes(booking.scheduledTime);
 
   await db.updateBooking(bookingId, {
     status: "confirmed",
     stripePaymentIntentId: paymentIntentId ?? undefined,
+    slotConflict,
   });
 
   await db.createPayment({
@@ -370,6 +391,7 @@ export async function finalizeBooking(bookingId: number, paymentIntentId: string
       address: [booking.addressLine, booking.city, booking.zip].filter(Boolean).join(", "),
       locale,
       bizPhone,
+      slotConflict,
     });
   }
 }

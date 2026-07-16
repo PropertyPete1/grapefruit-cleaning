@@ -1,4 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// No DB in unit tests: pricing/schedule settings read as "not configured",
+// which makes the pricing engine fall back to DEFAULT_PRICING.
+vi.mock("./db", () => ({
+  getSetting: vi.fn().mockResolvedValue(null),
+}));
+
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 

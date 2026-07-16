@@ -64,9 +64,16 @@ function toEmailData(booking: Booking, customer: Customer, bizPhone?: string): B
   };
 }
 
-/** Scans upcoming bookings and sends any due reminders. Returns a summary. */
-export async function sendDueReminders(today?: string): Promise<{ scanned: number; sent: number; details: string[] }> {
+/**
+ * Scans upcoming bookings and sends any due reminders. Also expires stale
+ * unpaid (pending_deposit) checkouts so they release their calendar slots.
+ * Returns a summary.
+ */
+export async function sendDueReminders(
+  today?: string
+): Promise<{ scanned: number; sent: number; expired: number; details: string[] }> {
   const todayStr = today ?? new Date().toISOString().slice(0, 10);
+  const expired = await db.expireStaleDepositBookings();
   const bookings = await db.listUpcomingConfirmedBookings(todayStr);
   const details: string[] = [];
   let sent = 0;
@@ -83,5 +90,5 @@ export async function sendDueReminders(today?: string): Promise<{ scanned: numbe
     sent += 1;
     details.push(`${booking.reference}: ${kind} reminder → ${customer.email} (${delivered ? "delivered" : "logged"})`);
   }
-  return { scanned: bookings.length, sent, details };
+  return { scanned: bookings.length, sent, expired, details };
 }

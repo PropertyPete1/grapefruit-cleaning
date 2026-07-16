@@ -1,0 +1,1 @@
+ALTER TABLE `bookings` MODIFY COLUMN `status` enum('pending_deposit','confirmed','in_progress','completed','cancelled','expired') NOT NULL DEFAULT 'pending_deposit';

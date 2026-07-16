@@ -60,7 +60,7 @@ export const staffRouter = router({
     .input(
       z
         .object({
-          status: z.enum(["pending_deposit", "confirmed", "in_progress", "completed", "cancelled"]).optional(),
+          status: z.enum(["pending_deposit", "confirmed", "in_progress", "completed", "cancelled", "expired"]).optional(),
           date: z.string().optional(),
           mineOnly: z.boolean().optional(),
         })

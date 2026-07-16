@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { CheckCircle2, Clock, Loader2, Mail, MapPin, Phone, Send } from "lucide-react";
+import { useSpamGuard } from "@/hooks/useSpamGuard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -20,6 +21,7 @@ export default function Contact() {
   const [form, setForm] = useState({ name: "", email: "", phone: "", subject: "", message: "" });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [sent, setSent] = useState(false);
+  const { honeypotField, spamSignals } = useSpamGuard();
 
   const submitMutation = trpc.contact.submit.useMutation({
     onSuccess: () => setSent(true),
@@ -38,7 +40,7 @@ export default function Contact() {
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!validate()) return;
-    submitMutation.mutate({ ...form, locale });
+    submitMutation.mutate({ ...form, locale, ...spamSignals });
   };
 
   const info = [
@@ -106,6 +108,7 @@ export default function Contact() {
                 <>
                   <h2 className="font-display text-xl font-bold text-foreground">{t.contact.formTitle}</h2>
                   <form onSubmit={onSubmit} className="mt-6 space-y-5" noValidate>
+                    {honeypotField}
                     <div className="grid gap-5 sm:grid-cols-2">
                       <div className="space-y-2">
                         <Label htmlFor="name">{t.contact.name}</Label>

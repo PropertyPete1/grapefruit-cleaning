@@ -544,6 +544,7 @@ export const es: Dictionary = {
     heroSubtitle: "Guías, rutinas y sabiduría para anfitriones, de profesionales que limpian para vivir.",
     readTime: "min de lectura",
     backToBlog: "Volver al Blog",
+    empty: "Aún no hay artículos publicados. Vuelva pronto.",
   },
   privacy: {
     title: "Política de Privacidad",

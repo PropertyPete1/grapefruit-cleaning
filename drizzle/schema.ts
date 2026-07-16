@@ -61,7 +61,7 @@ export const bookings = mysqlTable("bookings", {
   locale: mysqlEnum("locale", ["en", "es"]).default("en").notNull(),
   totalAmount: int("totalAmount").notNull(),
   depositAmount: int("depositAmount").notNull(),
-  status: mysqlEnum("status", ["pending_deposit", "confirmed", "in_progress", "completed", "cancelled"])
+  status: mysqlEnum("status", ["pending_deposit", "confirmed", "in_progress", "completed", "cancelled", "expired"])
     .default("pending_deposit")
     .notNull(),
   employeeId: int("employeeId"),
@@ -79,6 +79,11 @@ export const bookings = mysqlTable("bookings", {
   sqftSource: varchar("sqftSource", { length: 30 }),
   /** True when the customer-entered sqft landed in a lower price tier than the verified record (price auto-corrected). */
   sqftMismatch: boolean("sqftMismatch").default(false).notNull(),
+  /**
+   * Set when a late payment recovered an expired booking whose date/time slot
+   * had already been retaken by another booking — owner must reschedule one.
+   */
+  slotConflict: boolean("slotConflict").default(false).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
