@@ -3,6 +3,7 @@ import { z } from "zod";
 import { calculateQuote, DEPOSIT_RATE, generateBookingReference, TIME_SLOTS } from "@shared/pricing";
 import * as db from "../db";
 import { sendBookingEmails } from "../emails";
+import { lookupPropertySqft } from "../property";
 import { getStripe } from "../stripe";
 import { publicProcedure, router } from "../_core/trpc";
 
@@ -49,6 +50,21 @@ export const bookingRouter = router({
   /** Server-side authoritative quote calculation. */
   calculate: publicProcedure.input(quoteInputSchema).query(({ input }) => calculateQuote(input)),
 
+  /**
+   * Verify a property's square footage against public county records
+   * (Bexar County Appraisal District GIS). Best-effort — returns
+   * { verified: false } when no record is found so the flow never blocks.
+   */
+  verifyProperty: publicProcedure
+    .input(
+      z.object({
+        address: z.string().min(3).max(255),
+        city: z.string().max(120).optional(),
+        zip: z.string().max(20).optional(),
+      })
+    )
+    .query(async ({ input }) => lookupPropertySqft(input.address, input.city, input.zip)),
+
   /** Available time slots for a given date. */
   availability: publicProcedure
     .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
@@ -92,7 +108,23 @@ export const bookingRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const breakdown = calculateQuote(input.quote);
+      // Verify square footage against public property records (best-effort).
+      // If the county record prices into a higher tier than the entered sqft,
+      // charge from the verified square footage so understated entries can't
+      // lower the price.
+      const property = await lookupPropertySqft(input.address, input.city, input.zip);
+      let effectiveSqft = input.quote.sqft;
+      let sqftMismatch = false;
+      if (property.verified && property.sqft) {
+        const entered = calculateQuote(input.quote);
+        const verified = calculateQuote({ ...input.quote, sqft: property.sqft });
+        if (verified.total > entered.total) {
+          effectiveSqft = property.sqft;
+          sqftMismatch = true;
+        }
+      }
+      const effectiveQuote = { ...input.quote, sqft: effectiveSqft };
+      const breakdown = calculateQuote(effectiveQuote);
       let total = breakdown.total;
       let discountApplied = 0;
       let couponCode: string | undefined;
@@ -136,7 +168,7 @@ export const bookingRouter = router({
         scheduledTime: input.time,
         bedrooms: input.quote.bedrooms,
         bathrooms: input.quote.bathrooms,
-        sqft: Math.round(input.quote.sqft),
+        sqft: Math.round(effectiveSqft),
         extras: JSON.stringify(input.quote.extras),
         addressLine: input.address,
         city: input.city,
@@ -148,6 +180,9 @@ export const bookingRouter = router({
         status: "pending_deposit",
         couponCode,
         discountApplied,
+        verifiedSqft: property.verified ? property.sqft : undefined,
+        sqftSource: property.verified ? property.source : undefined,
+        sqftMismatch,
       });
 
       // Create Stripe Checkout session for the deposit

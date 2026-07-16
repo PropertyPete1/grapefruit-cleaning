@@ -73,6 +73,12 @@ export const bookings = mysqlTable("bookings", {
   weekReminderSentAt: timestamp("weekReminderSentAt"),
   /** Timestamp when the 1-day-before reminder email was sent (null = not sent yet). */
   dayReminderSentAt: timestamp("dayReminderSentAt"),
+  /** Square footage verified against public property records (null = no record found / not looked up). */
+  verifiedSqft: int("verifiedSqft"),
+  /** Source of the verified square footage, e.g. "bexar_gis". */
+  sqftSource: varchar("sqftSource", { length: 30 }),
+  /** True when the customer-entered sqft landed in a lower price tier than the verified record (price auto-corrected). */
+  sqftMismatch: boolean("sqftMismatch").default(false).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

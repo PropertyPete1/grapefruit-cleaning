@@ -95,6 +95,21 @@ export default function AdminAppointments() {
                     </td>
                     <td className="max-w-44 truncate px-5 py-3.5 text-xs text-muted-foreground">
                       {b.addressLine}, {b.city}
+                      {b.sqftMismatch ? (
+                        <span
+                          className="mt-1 block w-fit rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800"
+                          title={`Customer-entered size was lower — price corrected to verified ${b.verifiedSqft?.toLocaleString() ?? "?"} sq ft from county records`}
+                        >
+                          Sqft corrected · {b.verifiedSqft?.toLocaleString()} ft² verified
+                        </span>
+                      ) : b.verifiedSqft ? (
+                        <span
+                          className="mt-1 block w-fit rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800"
+                          title="Square footage matched public county records"
+                        >
+                          {b.verifiedSqft.toLocaleString()} ft² verified
+                        </span>
+                      ) : null}
                     </td>
                     <td className="px-5 py-3.5">
                       <span className="font-semibold">{fmtMoney(b.totalAmount)}</span>

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -12,10 +12,13 @@ import {
   Home as HomeIcon,
   KeyRound,
   Layers,
+  Loader2,
+  MapPin,
   Microwave,
   PackageOpen,
   Refrigerator,
   Ruler,
+  ShieldCheck,
   Shirt,
   Sparkles,
   SprayCan,
@@ -25,10 +28,12 @@ import {
   Briefcase,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { useLocale } from "@/i18n/LocaleContext";
 import { useSeo } from "@/hooks/useSeo";
 import { AnimatedPrice } from "@/components/AnimatedPrice";
+import { trpc } from "@/lib/trpc";
 import {
   calculateQuote,
   type CleaningType,
@@ -91,6 +96,35 @@ export default function Quote() {
   const [sqft, setSqft] = useState(1200);
   const [extras, setExtras] = useState<ExtraId[]>([]);
   const [frequency, setFrequency] = useState<Frequency>("onetime");
+  // Optional address — verifies sqft against public county records and locks the slider to it.
+  const [address, setAddress] = useState("");
+  const [city, setCity] = useState("");
+  const [zip, setZip] = useState("");
+  const [debouncedAddress, setDebouncedAddress] = useState("");
+  const [debouncedCity, setDebouncedCity] = useState("");
+  const [debouncedZip, setDebouncedZip] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedAddress(address);
+      setDebouncedCity(city);
+      setDebouncedZip(zip);
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [address, city, zip]);
+  const propertyLookup = trpc.booking.verifyProperty.useQuery(
+    {
+      address: debouncedAddress,
+      city: debouncedCity.trim() || undefined,
+      zip: debouncedZip.trim() || undefined,
+    },
+    { enabled: debouncedAddress.trim().length >= 6, staleTime: 1000 * 60 * 10 }
+  );
+  const verifiedSqft =
+    propertyLookup.data?.verified && propertyLookup.data.sqft ? propertyLookup.data.sqft : null;
+  // Auto-fill the slider from the verified record.
+  useEffect(() => {
+    if (verifiedSqft) setSqft(Math.min(10000, Math.max(200, verifiedSqft)));
+  }, [verifiedSqft]);
 
   const breakdown = useMemo(
     () => calculateQuote({ type, bedrooms, bathrooms, sqft, extras, frequency }),
@@ -140,6 +174,9 @@ export default function Quote() {
       extras: extras.join(","),
       frequency,
     });
+    if (address.trim()) params.set("address", address.trim());
+    if (city.trim()) params.set("city", city.trim());
+    if (zip.trim()) params.set("zip", zip.trim());
     navigate(`${path("booking")}?${params.toString()}`);
   };
 
@@ -292,11 +329,73 @@ export default function Quote() {
                     </div>
                     {/* Square footage */}
                     <div>
+                      {/* Address-based verification (optional) */}
+                      <div className="mb-6">
+                        <label className="flex items-center gap-2 font-medium text-foreground" htmlFor="quote-address">
+                          <MapPin className="h-5 w-5 text-primary" /> {locale === "es" ? "Dirección (opcional)" : "Address (optional)"}
+                        </label>
+                        <div className="mt-3 flex flex-wrap gap-3">
+                          <Input
+                            id="quote-address"
+                            className="h-12 w-full min-w-[200px] flex-1 rounded-xl sm:w-auto"
+                            placeholder={locale === "es" ? "Ej. 5500 Grand Lake Dr" : "e.g. 5500 Grand Lake Dr"}
+                            value={address}
+                            onChange={e => setAddress(e.target.value)}
+                          />
+                          <Input
+                            id="quote-city"
+                            className="h-12 w-[calc(60%-0.375rem)] rounded-xl sm:w-36"
+                            placeholder={locale === "es" ? "Ciudad" : "City"}
+                            value={city}
+                            onChange={e => setCity(e.target.value)}
+                          />
+                          <Input
+                            id="quote-zip"
+                            className="h-12 w-[calc(40%-0.375rem)] rounded-xl sm:w-28"
+                            placeholder={locale === "es" ? "C.P." : "ZIP"}
+                            inputMode="numeric"
+                            maxLength={10}
+                            value={zip}
+                            onChange={e => setZip(e.target.value)}
+                          />
+                        </div>
+                        {debouncedAddress.trim().length >= 6 && propertyLookup.isFetching && (
+                          <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            {locale === "es"
+                              ? "Buscando en registros públicos del condado…"
+                              : "Checking public county records…"}
+                          </p>
+                        )}
+                        {verifiedSqft && !propertyLookup.isFetching && (
+                          <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-secondary">
+                            <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
+                            {locale === "es"
+                              ? `Verificado: ${verifiedSqft.toLocaleString()} pies² según registros del condado — aplicado abajo.`
+                              : `Verified: ${verifiedSqft.toLocaleString()} sq ft per county records — applied below.`}
+                          </p>
+                        )}
+                        {!verifiedSqft &&
+                          !propertyLookup.isFetching &&
+                          propertyLookup.data?.reason === "outside_coverage" && (
+                            <p className="mt-2 text-xs text-muted-foreground">
+                              {locale === "es"
+                                ? "Esta dirección está fuera de nuestra zona de verificación automática — su cotización usa el tamaño ingresado y se confirmará en la cita."
+                                : "This address is outside our automatic verification area — your quote uses the size you enter and will be confirmed at your appointment."}
+                            </p>
+                          )}
+                        <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+                          {locale === "es"
+                            ? "Ingrese su dirección para verificar los pies cuadrados automáticamente. Las cotizaciones se confirman con registros públicos."
+                            : "Enter your address to verify square footage automatically. Quotes are confirmed against public records."}
+                        </p>
+                      </div>
                       <div className="flex items-center justify-between">
                         <label className="flex items-center gap-2 font-medium text-foreground">
                           <Ruler className="h-5 w-5 text-primary" /> {t.quote.sqft}
                         </label>
-                        <span className="rounded-full bg-primary/10 px-3 py-1 text-sm font-bold text-primary">
+                        <span className="flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-sm font-bold text-primary">
+                          {verifiedSqft ? <ShieldCheck className="h-3.5 w-3.5" /> : null}
                           {sqft.toLocaleString()} ft²
                         </span>
                       </div>
@@ -307,11 +406,19 @@ export default function Quote() {
                         step={100}
                         value={[sqft]}
                         onValueChange={([v]) => setSqft(v)}
+                        disabled={Boolean(verifiedSqft)}
                       />
                       <div className="mt-2 flex justify-between text-xs text-muted-foreground">
                         <span>400 ft²</span>
                         <span>6,000+ ft²</span>
                       </div>
+                      {verifiedSqft && (
+                        <p className="mt-2 text-[11px] text-muted-foreground">
+                          {locale === "es"
+                            ? "El tamaño se fijó según el registro verificado. Borre la dirección para ajustarlo manualmente."
+                            : "Size locked to the verified record. Clear the address to adjust manually."}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </motion.div>

@@ -117,12 +117,24 @@ export default function Booking() {
     lastName: "",
     email: "",
     phone: "",
-    address: "",
-    city: "",
-    zip: "",
+    address: params.get("address") ?? "",
+    city: params.get("city") ?? "",
+    zip: params.get("zip") ?? "",
     notes: "",
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
+  // Debounced copy of the address line used for public-records sqft verification.
+  const [debouncedAddress, setDebouncedAddress] = useState("");
+  const [debouncedCity, setDebouncedCity] = useState("");
+  const [debouncedZip, setDebouncedZip] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedAddress(form.address);
+      setDebouncedCity(form.city);
+      setDebouncedZip(form.zip);
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [form.address, form.city, form.zip]);
 
   // Confirmation state (after Stripe return)
   const [confirmed, setConfirmed] = useState<null | {
@@ -136,10 +148,27 @@ export default function Booking() {
   }>(null);
   const [confirming, setConfirming] = useState(Boolean(sessionId && refParam));
 
-  const breakdown = useMemo(
-    () => calculateQuote({ type, bedrooms, bathrooms, sqft, extras, frequency }),
-    [type, bedrooms, bathrooms, sqft, extras, frequency]
+  // Verify sqft against county property records once an address is typed.
+  const propertyLookup = trpc.booking.verifyProperty.useQuery(
+    {
+      address: debouncedAddress,
+      city: debouncedCity.trim() || undefined,
+      zip: debouncedZip.trim() || undefined,
+    },
+    { enabled: debouncedAddress.trim().length >= 6, staleTime: 1000 * 60 * 10 }
   );
+  const verifiedSqft =
+    propertyLookup.data?.verified && propertyLookup.data.sqft ? propertyLookup.data.sqft : null;
+
+  // Match server behavior: price from the verified record when it lands in a higher tier.
+  const { breakdown, sqftAdjusted } = useMemo(() => {
+    const entered = calculateQuote({ type, bedrooms, bathrooms, sqft, extras, frequency });
+    if (verifiedSqft) {
+      const verified = calculateQuote({ type, bedrooms, bathrooms, sqft: verifiedSqft, extras, frequency });
+      if (verified.total > entered.total) return { breakdown: verified, sqftAdjusted: true };
+    }
+    return { breakdown: entered, sqftAdjusted: false };
+  }, [type, bedrooms, bathrooms, sqft, extras, frequency, verifiedSqft]);
   const deposit = Math.max(1, Math.round(breakdown.total * DEPOSIT_RATE));
 
   const dateString = date ? toDateString(date) : null;
@@ -676,6 +705,27 @@ export default function Booking() {
                         onChange={e => setForm(f => ({ ...f, address: e.target.value }))}
                       />
                       {errors.address && <p className="mt-1 text-xs text-destructive">{errors.address}</p>}
+                      {debouncedAddress.trim().length >= 6 && propertyLookup.isFetching && (
+                        <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          {locale === "es"
+                            ? "Verificando la propiedad en registros públicos…"
+                            : "Verifying property against public records…"}
+                        </p>
+                      )}
+                      {verifiedSqft && !propertyLookup.isFetching && (
+                        <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-secondary">
+                          <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
+                          {locale === "es"
+                            ? `Propiedad verificada: ${verifiedSqft.toLocaleString()} pies² según registros del condado.`
+                            : `Property verified: ${verifiedSqft.toLocaleString()} sq ft per county records.`}
+                        </p>
+                      )}
+                      <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+                        {locale === "es"
+                          ? "Los precios se verifican con registros públicos de la propiedad; el total se ajusta si los pies cuadrados no coinciden."
+                          : "Quotes are verified against public property records; the total adjusts if the square footage doesn't match."}
+                      </p>
                     </div>
                     <div>
                       <Label htmlFor="city">{t.booking.city}</Label>
@@ -759,6 +809,16 @@ export default function Booking() {
                     </div>
 
                     <div className="rounded-2xl bg-muted/60 p-6">
+                      {sqftAdjusted && verifiedSqft && (
+                        <div className="mb-4 flex items-start gap-2 rounded-xl bg-primary/10 p-3 text-xs leading-relaxed text-foreground">
+                          <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                          <span>
+                            {locale === "es"
+                              ? `El precio se actualizó según los ${verifiedSqft.toLocaleString()} pies² verificados en los registros públicos del condado.`
+                              : `Price updated based on the verified ${verifiedSqft.toLocaleString()} sq ft from public county records.`}
+                          </span>
+                        </div>
+                      )}
                       <div className="flex items-center justify-between">
                         <span className="text-muted-foreground">{t.booking.estimatedTotal}</span>
                         <span className="font-display text-xl font-bold text-foreground">${breakdown.total}</span>

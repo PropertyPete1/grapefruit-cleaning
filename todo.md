@@ -108,3 +108,18 @@
 
 ## Round 3 — bug reports
 - [x] BUG: /staff on production shows the public site instead of the staff dashboard — root cause: OAuth callback lands at "/" and the locale redirect sent users to /en, losing the /staff destination. Fixed: intended path saved before login and restored after callback. (User is admin role, verified in DB.)
+
+## Round 4 — address-based square footage verification
+- [x] Research property data source for sqft lookup by US address (assessor/property APIs, feasibility, cost)
+- [x] Test truly FREE sqft sources (county assessor open data, Regrid, other free APIs) per user request — user rejects paid/signup options
+- [x] Find and test Bexar County (San Antonio) public GIS/appraisal endpoint returning living-area sqft by address — VERIFIED working, free, no key (maps.bexar.org ArcGIS, GBA field)
+- [x] Server lookup resolves address automatically (Bexar GIS first); graceful unverified fallback outside coverage
+- [x] Address field wired into quote calculator (optional, auto-fills + locks verified sqft) and booking flow (debounced live verification)
+- [x] Server-side property lookup endpoint (booking.verifyProperty) returning verified sqft for an address
+- [x] Compare customer-entered sqft vs verified sqft; auto-correct price tier server-side + bilingual notices in UI
+- [x] Store verifiedSqft/sqftSource/sqftMismatch on booking record; badges in admin appointments view
+- [x] Tests for verification logic (address parsing + live GIS lookup; 46 tests passing)
+- [x] Send full address (street + city + ZIP) to verifyProperty; server ZIP-based Bexar coverage check (detectBexarCoverage: 100+ Bexar ZIPs + municipality list, ZIP wins over city)
+- [x] Guaranteed unverified fallback for non-Bexar addresses — outside_coverage short-circuits before any GIS query, preventing false street-name matches
+- [x] Tests for outside-coverage and ambiguous-address cases (Austin/Houston/Dallas ZIPs, ZIP-vs-city conflict, ambiguous "Main St"; 55 tests passing)
+- [x] Quote wizard collects street + city + ZIP and passes all three to verifyProperty; handoff to Booking prefills city/zip

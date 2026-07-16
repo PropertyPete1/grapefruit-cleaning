@@ -119,3 +119,32 @@ Fix plan:
 3. Make owner account definitely admin (upsert sets admin for OWNER_OPEN_ID). Verify user's row role in prod DB.
 4. Consider a /staff access-gate improvement: show sign-in button rather than instant redirect.
 Production URL: grapeclean-skvabkkr.manus.space. Prod /staff serves SPA 200 + bundle contains staff code (verified). Dev /staff renders fine (verified screenshots).
+
+## ROUND 4 — address-based sqft verification (research done)
+Chosen source: **RentCast API** (https://developers.rentcast.io)
+- Endpoint: GET https://api.rentcast.io/v1/properties?address=Street,%20City,%20State,%20Zip
+- Auth: header `X-Api-Key: <key>` (user must sign up free at app.rentcast.io/app/api)
+- Free tier: 50 calls/mo; paid $74/mo=1000 calls ($0.20/extra on free plan). 150M+ US property records (tax assessor data).
+- Response: array of property records; key field `squareFootage` (number, living area), also bedrooms, bathrooms, propertyType, yearBuilt, lotSize.
+- Data availability varies by county; must handle no-result gracefully (fall back to customer-entered sqft, flag as unverified).
+- No built-in Manus API Hub property source (checked: no Zillow/property/real estate APIs).
+- Manus Maps component exists: client/src/components/Map.tsx (Google Maps proxy) — can use Places Autocomplete for address input WITHOUT extra key (check webdev-maps-integration skill).
+Plan: address autocomplete (Google Places via built-in maps proxy) in Quote + Booking → server tRPC endpoint property.lookup (RentCast, cached in db table property_lookups to save quota) → compare entered vs verified sqft → auto-select tier from verified sqft; bilingual UI copy; store verifiedSqft + sqftMismatch on booking; show flag in admin appointments. Secret needed: RENTCAST_API_KEY via webdev_request_secrets.
+
+## ROUND 4b — user wants a truly FREE source ("sqft is public info")
+Findings:
+- AssessorSearch: NOT free — $50/mo min, only address-matching is 0 credits.
+- Zillow: no public API; Bridge Public Records API requires approval/enterprise. Scraping = ToS violation.
+- County appraisal district (Texas CADs: HCAD/TCAD/DCAD): free web search portals but no clean public JSON APIs; some counties expose ArcGIS REST parcel services with living-area fields — county-specific, need to know user's service area county.
+- Best pragmatic approach: county ArcGIS/open-data if service area known + deterrence mode fallback; RentCast free 50/mo as optional upgrade.
+- User asked which city/county they serve — awaiting answer (msg sent as info, not blocking).
+- IMPORTANT: user's business appears TX-based (owner email lifestyledesignrealty.com, CDT timezone). If county unknown, build provider-agnostic server lookup: tries (1) county ArcGIS endpoint if configured, (2) RentCast if key present, else returns unverified → deterrence mode.
+
+## ROUND 4c — VERIFIED FREE SOURCE: Bexar County GIS (user confirmed "typically bexar county")
+Endpoint: GET https://maps.bexar.org/arcgis/rest/services/Parcels/MapServer/0/query
+- Params: where=Situs LIKE '<NUM>%<STREET UPPER>%', outFields=PropID,Situs,GBA,TOT_GBA,YrBlt,Stories,PropUse, returnGeometry=false, f=json
+- VERIFIED WORKING: "5500 GRAND LAKE DR" → GBA=1878 (matches RentCast's squareFootage=1878 for same address!). GBA/TOT_GBA are STRINGS, may be "NULL".
+- Situs format: "5500  GRAND LAKE DR " (double space after number, trailing space, uppercase, no city/zip). Query strategy: extract house number + street name (drop suffix ambiguity), where=Situs LIKE '5500 %GRAND LAKE%'.
+- No API key, no auth, free public county service. Data updated annually (Sept/Oct) — fine for sqft (rarely changes).
+- PropUse=1 seems residential single family.
+- Fallback chain in server/property.ts: (1) Bexar GIS by Situs match, (2) RentCast if RENTCAST_API_KEY set, (3) unverified → deterrence mode. Cache lookups in property_lookups table.
