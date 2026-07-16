@@ -1,8 +1,15 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { calculateQuote, DEPOSIT_RATE, generateBookingReference } from "@shared/pricing";
+import {
+  calculateQuote,
+  generateBookingReference,
+  parsePricingConfig,
+  PRICING_SETTING_KEY,
+  type PricingConfig,
+} from "@shared/pricing";
 import { parseSchedule, slotsForDate, SCHEDULE_SETTING_KEY } from "@shared/schedule";
 import * as db from "../db";
+import { assertRateLimit, clientIp } from "../antiSpam";
 import { sendBookingEmails } from "../emails";
 import { lookupPropertySqft } from "../property";
 import { getStripe } from "../stripe";
@@ -47,9 +54,20 @@ export const EXTRA_NAMES: Record<string, { en: string; es: string }> = {
   organization: { en: "Home organization", es: "Organización del hogar" },
 };
 
+/** Load the live pricing configuration from settings (fallback: defaults). */
+export async function loadPricingConfig(): Promise<PricingConfig> {
+  return parsePricingConfig(await db.getSetting(PRICING_SETTING_KEY));
+}
+
 export const bookingRouter = router({
   /** Server-side authoritative quote calculation. */
-  calculate: publicProcedure.input(quoteInputSchema).query(({ input }) => calculateQuote(input)),
+  calculate: publicProcedure.input(quoteInputSchema).query(async ({ input }) => {
+    const config = await loadPricingConfig();
+    return calculateQuote(input, config);
+  }),
+
+  /** Live pricing configuration (tiers, extras, discounts, deposit rate) for public pages. */
+  pricingConfig: publicProcedure.query(async () => loadPricingConfig()),
 
   /**
    * Verify a property's square footage against public county records
@@ -117,6 +135,8 @@ export const bookingRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // Nuisance-bot protection: max 5 booking attempts per IP per minute.
+      assertRateLimit("booking", clientIp(ctx), 5, 60_000);
       // Enforce the configured booking schedule server-side: reject any
       // date/time outside the admin-defined hours (e.g. Sundays when closed).
       const schedule = parseSchedule(await db.getSetting(SCHEDULE_SETTING_KEY));
@@ -134,19 +154,20 @@ export const bookingRouter = router({
       // If the county record prices into a higher tier than the entered sqft,
       // charge from the verified square footage so understated entries can't
       // lower the price.
+      const pricing = await loadPricingConfig();
       const property = await lookupPropertySqft(input.address, input.city, input.zip);
       let effectiveSqft = input.quote.sqft;
       let sqftMismatch = false;
       if (property.verified && property.sqft) {
-        const entered = calculateQuote(input.quote);
-        const verified = calculateQuote({ ...input.quote, sqft: property.sqft });
+        const entered = calculateQuote(input.quote, pricing);
+        const verified = calculateQuote({ ...input.quote, sqft: property.sqft }, pricing);
         if (verified.total > entered.total) {
           effectiveSqft = property.sqft;
           sqftMismatch = true;
         }
       }
       const effectiveQuote = { ...input.quote, sqft: effectiveSqft };
-      const breakdown = calculateQuote(effectiveQuote);
+      const breakdown = calculateQuote(effectiveQuote, pricing);
       let total = breakdown.total;
       let discountApplied = 0;
       let couponCode: string | undefined;
@@ -167,7 +188,7 @@ export const bookingRouter = router({
         }
       }
 
-      const deposit = Math.max(1, Math.round(total * DEPOSIT_RATE));
+      const deposit = Math.max(1, Math.round(total * pricing.depositRate));
       const reference = generateBookingReference();
 
       const customerId = await db.findOrCreateCustomer({

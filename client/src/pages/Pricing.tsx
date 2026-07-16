@@ -5,20 +5,18 @@ import { Button } from "@/components/ui/button";
 import { useLocale } from "@/i18n/LocaleContext";
 import { useSeo, localBusinessJsonLd } from "@/hooks/useSeo";
 import { useReveal } from "@/hooks/useReveal";
+import { usePricing } from "@/hooks/usePricing";
 import { AnimatedPrice } from "@/components/AnimatedPrice";
 import {
-  BASE_PRICES,
-  EXTRA_PRICES,
-  FREQUENCY_DISCOUNTS,
-  PRICING_TIERS,
   type CleaningType,
   type ExtraId,
   type Frequency,
   type PricingTier,
+  type TieredType,
 } from "@shared/pricing";
 import { cn } from "@/lib/utils";
 
-const TIER_SERVICES: { id: CleaningType; planKey: "residential" | "deep" | "moveinout" }[] = [
+const TIER_SERVICES: { id: CleaningType & TieredType; planKey: "residential" | "deep" | "moveinout" }[] = [
   { id: "residential", planKey: "residential" },
   { id: "deep", planKey: "deep" },
   { id: "moveinout", planKey: "moveinout" },
@@ -41,6 +39,7 @@ export default function Pricing() {
   useSeo({ title: t.meta.pricing.title, description: t.meta.pricing.description, jsonLd: [localBusinessJsonLd()] });
   useReveal([locale]);
   const [frequency, setFrequency] = useState<Frequency>("biweekly");
+  const pricing = usePricing();
 
   const freqTabs: { id: Frequency; label: string; discount: string | null }[] = [
     { id: "onetime", label: t.pricing.onetime, discount: null },
@@ -49,7 +48,7 @@ export default function Pricing() {
     { id: "weekly", label: t.pricing.weekly, discount: t.pricing.weeklyDiscount },
   ];
 
-  const discountRate = FREQUENCY_DISCOUNTS[frequency];
+  const discountRate = pricing.frequencyDiscounts[frequency];
 
   return (
     <>
@@ -110,7 +109,7 @@ export default function Pricing() {
         <div className="mt-10 grid gap-6 lg:grid-cols-3">
           {TIER_SERVICES.map((svc, i) => {
             const planCopy = t.pricing.plans[svc.planKey];
-            const tiers = PRICING_TIERS[svc.id] ?? [];
+            const tiers = pricing.tiers[svc.id] ?? [];
             const popular = svc.id === "residential";
             return (
               <div
@@ -192,7 +191,7 @@ export default function Pricing() {
               <Check className="mr-1 inline h-3.5 w-3.5 text-secondary" />
               {t.pricing.startingAt}{" "}
               <span className="font-display text-base font-extrabold text-foreground">
-                ${round2(BASE_PRICES.airbnb * (1 - discountRate)).toFixed(2)}
+                ${round2(pricing.basePrices.airbnb * (1 - discountRate)).toFixed(2)}
               </span>
             </p>
             <Button asChild size="sm" variant="outline" className="press mt-4 w-fit rounded-full px-5">
@@ -233,7 +232,7 @@ export default function Pricing() {
                 style={{ transitionDelay: `${(i % 3) * 60}ms` }}
               >
                 <p className="text-sm font-semibold text-foreground">{t.extras[id]}</p>
-                <p className="mt-1 text-sm font-bold text-primary">+${EXTRA_PRICES[id]}</p>
+                <p className="mt-1 text-sm font-bold text-primary">+${pricing.extras[id]}</p>
               </div>
             ))}
           </div>

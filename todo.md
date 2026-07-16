@@ -161,3 +161,34 @@
 - [x] Booking calendar + slot picker read schedule from settings (no other UI changes)
 - [x] Server-side validation rejects bookings outside configured hours
 - [x] Tests for schedule logic; run full suite; checkpoint & deliver (91 tests passing)
+
+## Round 8 — GitHub export
+
+- [x] Push the full project to a new GitHub repo named "grapefruit-cleaning" (private) under the user's account — https://github.com/PropertyPete1/grapefruit-cleaning (201 files, full checkpoint history)
+- [x] Verify the push and deliver the repo link with hosting guidance (recommend built-in hosting + custom domain over Vercel)
+
+## Round 9 — Admin-editable pricing, blog CMS, spam protection (user's "ROUND 8")
+
+### Settings-driven pricing
+- [x] pricing_config setting (JSON): tiers (residential/deep/moveinout), extras, frequency discounts, deposit rate
+- [x] shared/pricing.ts: DEFAULT_PRICING fallback + zod parsePricingConfig() + calculateQuote(config param)
+- [x] Server loads stored config for ALL price calculations (single source of truth, no client spoofing)
+- [x] Public query booking.pricingConfig; Quote/Booking/Pricing/ServiceDetail read live prices (5-min staleTime)
+- [x] Admin → Services becomes editable pricing panel (tier prices, extras, discounts, deposit rate, reset to defaults)
+- [x] Tests: parse/fallback/override/deposit math
+
+### DB-driven blog
+- [x] blog_posts table (slug, bilingual title/excerpt/body markdown, coverImage, published, publishedAt)
+- [x] Migrate hardcoded posts from en.ts/es.ts into DB seed rows; remove from translations (keep Dictionary type compatible)
+- [x] Public queries content.blogPosts + content.blogPost(slug); Blog.tsx/BlogPost.tsx read from DB
+- [x] sitemap.xml includes published post URLs in both locales
+- [x] Admin → Blog module: list, bilingual create/edit dialog with markdown, publish toggle, delete
+
+### Spam protection
+- [x] Honeypot + min-fill-time on contact form and review form (silent server-side reject)
+- [x] In-memory per-IP rate limiting on contact.submit, content.submitReview, booking.create (5/min)
+
+### Housekeeping
+- [x] README.md (stack, scripts, env vars, plug-and-play guide)
+- [x] Delete client/public/__manus__/debug-collector.js and unused testimonials.items from en.ts/es.ts
+- [x] Screenshots of /pricing, /en/quote, /admin/services, /admin/blog, /blog; full suite; single checkpoint

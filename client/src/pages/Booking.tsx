@@ -34,11 +34,11 @@ import { AnimatedPrice } from "@/components/AnimatedPrice";
 import { trpc } from "@/lib/trpc";
 import {
   calculateQuote,
-  DEPOSIT_RATE,
   type CleaningType,
   type ExtraId,
   type Frequency,
 } from "@shared/pricing";
+import { usePricing } from "@/hooks/usePricing";
 
 const SERVICE_ICONS: Record<CleaningType, typeof HomeIcon> = {
   residential: HomeIcon,
@@ -162,16 +162,17 @@ export default function Booking() {
   const addressVerifiedCounty =
     !verifiedSqft && propertyLookup.data?.addressVerified ? (propertyLookup.data.county ?? null) : null;
 
+  const pricing = usePricing();
   // Match server behavior: price from the verified record when it lands in a higher tier.
   const { breakdown, sqftAdjusted } = useMemo(() => {
-    const entered = calculateQuote({ type, bedrooms, bathrooms, sqft, extras, frequency });
+    const entered = calculateQuote({ type, bedrooms, bathrooms, sqft, extras, frequency }, pricing);
     if (verifiedSqft) {
-      const verified = calculateQuote({ type, bedrooms, bathrooms, sqft: verifiedSqft, extras, frequency });
+      const verified = calculateQuote({ type, bedrooms, bathrooms, sqft: verifiedSqft, extras, frequency }, pricing);
       if (verified.total > entered.total) return { breakdown: verified, sqftAdjusted: true };
     }
     return { breakdown: entered, sqftAdjusted: false };
-  }, [type, bedrooms, bathrooms, sqft, extras, frequency, verifiedSqft]);
-  const deposit = Math.max(1, Math.round(breakdown.total * DEPOSIT_RATE));
+  }, [type, bedrooms, bathrooms, sqft, extras, frequency, verifiedSqft, pricing]);
+  const deposit = Math.max(1, Math.round(breakdown.total * pricing.depositRate));
 
   const dateString = date ? toDateString(date) : null;
   const availability = trpc.booking.availability.useQuery(

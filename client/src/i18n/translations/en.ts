@@ -461,38 +461,6 @@ export const en = {
   testimonials: {
     heroTitle: "What our clients say",
     heroSubtitle: "We measure success one five-star review at a time.",
-    items: [
-      {
-        name: "Sarah Mitchell",
-        role: "Homeowner · Weekly Plan",
-        text: "Grapefruit has completely changed how our home feels. The same wonderful team every week, and every corner is immaculate. Booking online takes seconds.",
-      },
-      {
-        name: "David Chen",
-        role: "Airbnb Superhost · 4 Properties",
-        text: "As a Superhost, my ratings live and die by cleanliness. Grapefruit's turnovers are flawless — photo verification and restocking included. My reviews have never been better.",
-      },
-      {
-        name: "Amanda Rodriguez",
-        role: "Office Manager",
-        text: "Our office has never looked this good. They work after hours, never miss a detail, and the team is unfailingly professional. Worth every penny.",
-      },
-      {
-        name: "Michael Torres",
-        role: "Move-Out Clean",
-        text: "Got my full deposit back thanks to their move-out cleaning. The landlord literally asked who cleaned the place. Incredible attention to detail.",
-      },
-      {
-        name: "Jennifer Park",
-        role: "Homeowner · Deep Clean",
-        text: "The deep clean exceeded every expectation. Baseboards, vents, light fixtures — things I didn't even know needed cleaning. My house feels brand new.",
-      },
-      {
-        name: "Robert Klein",
-        role: "Restaurant Owner",
-        text: "Health inspections don't worry us anymore. Grapefruit keeps our front-of-house and restrooms spotless. Reliable, insured, and genuinely nice people.",
-      },
-    ],
   },
   faq: {
     heroTitle: "Frequently asked questions",
@@ -567,93 +535,6 @@ export const en = {
     heroSubtitle: "Guides, routines, and hosting wisdom from professionals who clean for a living.",
     readTime: "min read",
     backToBlog: "Back to Blog",
-    posts: [
-      {
-        slug: "spring-deep-cleaning-checklist",
-        title: "The Ultimate Spring Deep Cleaning Checklist",
-        excerpt:
-          "A room-by-room guide to resetting your entire home this season — including the spots almost everyone forgets.",
-        readTime: 7,
-        date: "2026-06-02",
-        content: [
-          "Spring cleaning is more than a tradition — it's a full reset for your home and your headspace. But without a plan, it's easy to spend a whole weekend busy yet barely scratch the surface. This checklist is the same one our professional teams use, adapted for a motivated homeowner.",
-          "Start high, finish low. Dust falls, so always begin with ceiling fans, crown molding, and the tops of cabinets and door frames before working your way down to furniture and finally floors. Working in this order means you never clean the same surface twice.",
-          "In the kitchen, the difference-makers are the spots you don't see daily: pull out the refrigerator and vacuum the coils, degrease the range hood filter, and run a cleaning cycle on the dishwasher with a cup of white vinegar. Wipe cabinet fronts with a wood-safe cleaner — the area around handles collects far more grime than you'd expect.",
-          "Bathrooms reward patience. Let a quality descaler sit on shower glass and fixtures for a full ten minutes before scrubbing. Wash or replace the shower curtain liner, and don't skip the exhaust fan cover — a dusty fan is why mirrors keep fogging.",
-          "Finally, textiles hold onto winter. Wash duvet covers and pillow protectors hot, vacuum mattresses with an upholstery attachment, and steam or launder curtains. If it all sounds like more weekend than you're willing to give, our deep cleaning service handles every item on this list — and a few dozen more.",
-        ],
-      },
-      {
-        slug: "airbnb-five-star-cleanliness",
-        title: "How to Earn Five-Star Cleanliness Ratings on Every Airbnb Stay",
-        excerpt: "Cleanliness is the most scrutinized rating category. Here's the turnover system top hosts rely on.",
-        readTime: 6,
-        date: "2026-05-12",
-        content: [
-          "Ask any Superhost: the cleanliness rating is where five-star averages are won or lost. Guests forgive a squeaky door; they never forgive a hair in the bathroom. The good news is that flawless turnovers are a system, not a talent.",
-          "Build a written checklist that covers every room, every time. Consistency beats intensity — a turnover done from memory will always miss something eventually. Top hosts photograph the staged space after each clean, both for quality control and as protection against unfair claims.",
-          "Think in guest-eye order. Guests inspect the bathroom and the bed first, so those areas deserve disproportionate attention: crisp hotel-style bedding with hospital corners, polished fixtures, and zero traces of previous guests anywhere.",
-          "Restocking is part of cleanliness. Running out of toilet paper mid-stay reads as neglect. Standardize your inventory — soap, paper goods, coffee, spare linens — and audit it during every turnover.",
-          "Same-day turnovers are where most hosts break. Between checkout at 11 and check-in at 3, there's no margin for error. That's exactly why hundreds of hosts hand their turnovers to us: photo-verified cleaning, linen management, and restocking on autopilot, so their ratings stay spotless from anywhere.",
-        ],
-      },
-      {
-        slug: "weekly-home-cleaning-routine",
-        title: "The 30-Minute Weekly Routine That Keeps Your Home Guest-Ready",
-        excerpt: "Professional habits that prevent mess from accumulating — perfect between deep cleans.",
-        readTime: 5,
-        date: "2026-04-18",
-        content: [
-          "The secret to a consistently clean home isn't marathon cleaning sessions — it's short, strategic maintenance that stops grime from ever settling in. Here's the 30-minute weekly circuit we recommend to every client between professional visits.",
-          "Minutes 1–10: the kitchen. Clear and wipe counters, spot-clean the stovetop while it's still only lightly soiled, and run a microfiber cloth over appliance fronts and handles. A stitch in time here saves an hour of degreasing later.",
-          "Minutes 11–18: bathrooms. A daily shower spray does most of the work for you; weekly, give the toilet a quick scrub, wipe the vanity, and change towels. Keeping a squeegee in the shower cuts glass cleaning time by half.",
-          "Minutes 19–25: floors in traffic zones only. You don't need to vacuum under the sofa weekly — focus on entryways, the kitchen, and hallway paths where 90% of dirt actually lives.",
-          "Minutes 26–30: the reset. Fluff cushions, fold throws, clear surfaces of clutter, and empty trash. This final pass is what makes a home feel cleaned rather than just clean. And when life gets too busy even for thirty minutes, that's what our recurring plans are for.",
-        ],
-      },
-      {
-        slug: "eco-friendly-cleaning-products",
-        title: "Why We Switched to Eco-Friendly Products (and Never Looked Back)",
-        excerpt: "Non-toxic cleaning isn't a compromise anymore. Here's what actually works — and what to avoid.",
-        readTime: 6,
-        date: "2026-03-25",
-        content: [
-          "A decade ago, 'green cleaning' often meant weaker results and twice the elbow grease. Today, the best eco-certified products outperform their harsh chemical counterparts — without the fumes, residues, and risks to kids and pets.",
-          "The turning point was formulation science. Modern plant-based surfactants and enzyme cleaners break down grease and organic soils at the molecular level, matching or beating traditional solvents. In our side-by-side testing, the top eco products won on kitchens and bathrooms alike.",
-          "Indoor air quality is the hidden win. Conventional cleaners are a major source of volatile organic compounds (VOCs) in homes — a real concern for children, asthma sufferers, and pets who live at floor level, where residues concentrate.",
-          "Not every 'green' label is trustworthy, though. Look for third-party certifications rather than vague marketing terms like 'natural.' Genuine eco-certification requires verified ingredient disclosure and biodegradability testing.",
-          "Every Grapefruit cleaning uses products we've personally vetted for both safety and performance. Your home ends up spotless and safe to touch, breathe, and live in — the way clean should feel.",
-        ],
-      },
-      {
-        slug: "move-out-cleaning-deposit-guide",
-        title: "The Move-Out Cleaning Guide That Gets Your Full Deposit Back",
-        excerpt: "Landlords inspect the same spots every time. Clean these and your deposit comes home with you.",
-        readTime: 8,
-        date: "2026-02-14",
-        content: [
-          "Security deposits are lost in predictable places. After thousands of move-out cleans, we know exactly where landlords and property managers look first — and it's rarely where tenants spend their cleaning energy.",
-          "The oven is inspection point number one. A neglected oven signals a neglected home, fairly or not. Interior oven cleaning, including the door glass and racks, is the single highest-return task on your list.",
-          "Second: inside everything. Empty cabinets, drawers, closets, and the refrigerator must be wiped inside and out. Crumbs in a drawer corner have cost tenants real money. Remove shelf liners and clean beneath them.",
-          "Third: the details that prove care. Baseboards, light switch plates, door handles, window tracks, and vent covers. None of these take long individually, but together they're the difference between 'professionally cleaned' and 'tenant cleaned' in an inspector's notes.",
-          "Walls and floors close the deal. Magic-eraser scuff marks, dust every corner for cobwebs, and finish floors last, backing your way out of each room. Or skip the entire weekend of labor: our move in/out service is specifically designed to pass inspections, and it's our most-thanked service for a reason.",
-        ],
-      },
-      {
-        slug: "office-cleanliness-productivity",
-        title: "Clean Office, Sharper Team: The Productivity Case for Professional Cleaning",
-        excerpt: "Workplace cleanliness measurably affects focus, sick days, and even client trust. Here's the evidence.",
-        readTime: 5,
-        date: "2026-01-20",
-        content: [
-          "Office cleanliness is usually filed under 'facilities' — but its effects show up in performance metrics. Research consistently links clean work environments to improved concentration, lower stress, and meaningfully fewer sick days.",
-          "The health math is straightforward. The average desk harbors hundreds of times more bacteria than a toilet seat, and shared touchpoints — door handles, kitchen appliances, meeting room tables — are transmission highways during flu season. Routine professional disinfection breaks that chain.",
-          "There's a cognitive effect too. Studies from Princeton's Neuroscience Institute showed that visual clutter competes for attention and degrades task performance. A tidy, well-maintained space isn't aesthetic vanity; it's cognitive infrastructure.",
-          "Clients feel it as well. A spotless reception area communicates operational excellence before anyone says a word. The reverse is also true — and much more memorable.",
-          "Our office cleaning programs run after hours with consistent, security-conscious teams and customized checklists. The result: your team walks into a reset workspace every morning, and cleanliness becomes something you simply never think about.",
-        ],
-      },
-    ],
   },
   privacy: {
     title: "Privacy Policy",

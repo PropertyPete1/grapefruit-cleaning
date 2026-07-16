@@ -2,6 +2,7 @@ import { and, desc, eq, gte, like, lte, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
+  blogPosts,
   bookings,
   contactMessages,
   coupons,
@@ -423,6 +424,42 @@ export async function updateGalleryItem(id: number, data: Partial<typeof gallery
 export async function deleteGalleryItem(id: number) {
   const db = requireDb(await getDb());
   await db.delete(galleryItems).where(eq(galleryItems.id, id));
+}
+
+// ---------- Blog ----------
+export async function listBlogPosts(onlyPublished?: boolean) {
+  const db = requireDb(await getDb());
+  if (onlyPublished) {
+    return db
+      .select()
+      .from(blogPosts)
+      .where(eq(blogPosts.published, true))
+      .orderBy(desc(blogPosts.publishedAt), desc(blogPosts.id))
+      .limit(200);
+  }
+  return db.select().from(blogPosts).orderBy(desc(blogPosts.publishedAt), desc(blogPosts.id)).limit(500);
+}
+
+export async function getBlogPostBySlug(slug: string) {
+  const db = requireDb(await getDb());
+  const rows = await db.select().from(blogPosts).where(eq(blogPosts.slug, slug)).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function createBlogPost(data: typeof blogPosts.$inferInsert) {
+  const db = requireDb(await getDb());
+  const result = await db.insert(blogPosts).values(data);
+  return Number(result[0].insertId);
+}
+
+export async function updateBlogPost(id: number, data: Partial<typeof blogPosts.$inferInsert>) {
+  const db = requireDb(await getDb());
+  await db.update(blogPosts).set(data).where(eq(blogPosts.id, id));
+}
+
+export async function deleteBlogPost(id: number) {
+  const db = requireDb(await getDb());
+  await db.delete(blogPosts).where(eq(blogPosts.id, id));
 }
 
 // ---------- Coupons ----------

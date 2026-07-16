@@ -3,9 +3,11 @@ import { ArrowRight, CalendarDays, Clock3 } from "lucide-react";
 import { useLocale } from "@/i18n/LocaleContext";
 import { useSeo, localBusinessJsonLd } from "@/hooks/useSeo";
 import { useReveal } from "@/hooks/useReveal";
+import { trpc } from "@/lib/trpc";
+import { Skeleton } from "@/components/ui/skeleton";
 import { ASSETS } from "@/lib/assets";
 
-const POST_IMAGES = [
+const FALLBACK_IMAGES = [
   ASSETS.kitchenWhite,
   ASSETS.airbnbLiving,
   ASSETS.livingRoomWhite,
@@ -17,14 +19,17 @@ const POST_IMAGES = [
 export default function Blog() {
   const { t, locale, path } = useLocale();
   useSeo({ title: t.meta.blog.title, description: t.meta.blog.description, jsonLd: [localBusinessJsonLd()] });
-  useReveal([locale]);
+  const { data: posts, isLoading } = trpc.content.blogPosts.useQuery(undefined, { staleTime: 5 * 60 * 1000 });
+  useReveal([locale, isLoading, posts?.length]);
 
-  const fmt = (iso: string) =>
-    new Date(`${iso}T12:00:00`).toLocaleDateString(locale === "es" ? "es-MX" : "en-US", {
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-    });
+  const fmt = (iso: string | null) =>
+    iso
+      ? new Date(`${iso}T12:00:00`).toLocaleDateString(locale === "es" ? "es-MX" : "en-US", {
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+        })
+      : "";
 
   return (
     <>
@@ -44,38 +49,66 @@ export default function Blog() {
       </section>
 
       <section className="container pb-24 md:pb-32">
-        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-          {t.blog.posts.map((post, i) => (
-            <Link
-              key={post.slug}
-              href={path("blog", post.slug)}
-              className="reveal hover-lift group overflow-hidden rounded-3xl border border-border bg-card shadow-soft"
-              style={{ transitionDelay: `${(i % 3) * 70}ms` }}
-            >
-              <div className="img-zoom">
-                <img src={POST_IMAGES[i % POST_IMAGES.length]} alt={post.title} className="aspect-[16/10] w-full object-cover" loading="lazy" />
-              </div>
-              <div className="p-6">
-                <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                  <span className="flex items-center gap-1.5">
-                    <CalendarDays className="h-3.5 w-3.5" />
-                    {fmt(post.date)}
-                  </span>
-                  <span className="flex items-center gap-1.5">
-                    <Clock3 className="h-3.5 w-3.5" />
-                    {post.readTime} {t.blog.readTime}
-                  </span>
+        {isLoading ? (
+          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="overflow-hidden rounded-3xl border border-border bg-card shadow-soft">
+                <Skeleton className="aspect-[16/10] w-full" />
+                <div className="space-y-3 p-6">
+                  <Skeleton className="h-4 w-1/2" />
+                  <Skeleton className="h-5 w-full" />
+                  <Skeleton className="h-4 w-3/4" />
                 </div>
-                <h2 className="mt-3 font-display text-lg font-bold leading-snug text-foreground">{post.title}</h2>
-                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{post.excerpt}</p>
-                <span className="mt-4 inline-flex items-center gap-1.5 text-sm font-semibold text-primary">
-                  {t.common.readMore}
-                  <ArrowRight className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1" />
-                </span>
               </div>
-            </Link>
-          ))}
-        </div>
+            ))}
+          </div>
+        ) : !posts || posts.length === 0 ? (
+          <p className="py-12 text-center text-muted-foreground">
+            {locale === "es" ? "Aún no hay artículos publicados. Vuelva pronto." : "No articles published yet. Check back soon."}
+          </p>
+        ) : (
+          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            {posts.map((post, i) => {
+              const title = locale === "es" ? post.titleEs : post.titleEn;
+              const excerpt = locale === "es" ? post.excerptEs : post.excerptEn;
+              return (
+                <Link
+                  key={post.slug}
+                  href={path("blog", post.slug)}
+                  className="reveal hover-lift group overflow-hidden rounded-3xl border border-border bg-card shadow-soft"
+                  style={{ transitionDelay: `${(i % 3) * 70}ms` }}
+                >
+                  <div className="img-zoom">
+                    <img
+                      src={post.coverImage || FALLBACK_IMAGES[i % FALLBACK_IMAGES.length]}
+                      alt={title}
+                      className="aspect-[16/10] w-full object-cover"
+                      loading="lazy"
+                    />
+                  </div>
+                  <div className="p-6">
+                    <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                      <span className="flex items-center gap-1.5">
+                        <CalendarDays className="h-3.5 w-3.5" />
+                        {fmt(post.publishedAt)}
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <Clock3 className="h-3.5 w-3.5" />
+                        {post.readTime} {t.blog.readTime}
+                      </span>
+                    </div>
+                    <h2 className="mt-3 font-display text-lg font-bold leading-snug text-foreground">{title}</h2>
+                    <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{excerpt}</p>
+                    <span className="mt-4 inline-flex items-center gap-1.5 text-sm font-semibold text-primary">
+                      {t.common.readMore}
+                      <ArrowRight className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1" />
+                    </span>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        )}
       </section>
     </>
   );

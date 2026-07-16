@@ -191,3 +191,23 @@ export const siteSettings = mysqlTable("site_settings", {
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 export type SiteSetting = typeof siteSettings.$inferSelect;
+
+export const blogPosts = mysqlTable("blog_posts", {
+  id: int("id").autoincrement().primaryKey(),
+  slug: varchar("slug", { length: 160 }).notNull().unique(),
+  titleEn: varchar("titleEn", { length: 255 }).notNull(),
+  titleEs: varchar("titleEs", { length: 255 }).notNull(),
+  excerptEn: text("excerptEn"),
+  excerptEs: text("excerptEs"),
+  /** Markdown body (plain paragraphs also render fine). */
+  bodyEn: text("bodyEn").notNull(),
+  bodyEs: text("bodyEs").notNull(),
+  coverImage: varchar("coverImage", { length: 500 }),
+  readTime: int("readTime").default(5).notNull(),
+  published: boolean("published").default(false).notNull(),
+  /** Display date YYYY-MM-DD. */
+  publishedAt: varchar("publishedAt", { length: 10 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type BlogPost = typeof blogPosts.$inferSelect;

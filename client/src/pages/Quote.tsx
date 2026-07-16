@@ -39,8 +39,8 @@ import {
   type CleaningType,
   type ExtraId,
   type Frequency,
-  FREQUENCY_DISCOUNTS,
 } from "@shared/pricing";
+import { usePricing } from "@/hooks/usePricing";
 
 const SERVICE_ICONS: Record<CleaningType, typeof HomeIcon> = {
   residential: HomeIcon,
@@ -126,9 +126,10 @@ export default function Quote() {
     if (verifiedSqft) setSqft(Math.min(10000, Math.max(200, verifiedSqft)));
   }, [verifiedSqft]);
 
+  const pricing = usePricing();
   const breakdown = useMemo(
-    () => calculateQuote({ type, bedrooms, bathrooms, sqft, extras, frequency }),
-    [type, bedrooms, bathrooms, sqft, extras, frequency]
+    () => calculateQuote({ type, bedrooms, bathrooms, sqft, extras, frequency }, pricing),
+    [type, bedrooms, bathrooms, sqft, extras, frequency, pricing]
   );
 
   const stepTitles = [t.quote.steps.type, t.quote.steps.details, t.quote.steps.extras, t.quote.steps.frequency, t.quote.steps.result];
@@ -663,7 +664,7 @@ export default function Quote() {
                 )}
                 {breakdown.discount > 0 && (
                   <div className="flex justify-between text-emerald-400">
-                    <span>{frequencyLabels[frequency]} · {Math.round(FREQUENCY_DISCOUNTS[frequency] * 100)}%</span>
+                    <span>{frequencyLabels[frequency]} · {Math.round(pricing.frequencyDiscounts[frequency] * 100)}%</span>
                     <span className="font-medium">−${breakdown.discount}</span>
                   </div>
                 )}

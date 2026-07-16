@@ -43,6 +43,13 @@
       "when": 1784222694457,
       "tag": "0005_freezing_hex",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1784231105030,
+      "tag": "0006_stale_amazoness",
+      "breakpoints": true
     }
   ]
 }

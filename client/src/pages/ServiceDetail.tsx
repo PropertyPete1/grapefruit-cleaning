@@ -5,7 +5,8 @@ import { useLocale } from "@/i18n/LocaleContext";
 import { useSeo, localBusinessJsonLd } from "@/hooks/useSeo";
 import { useReveal } from "@/hooks/useReveal";
 import { ASSETS } from "@/lib/assets";
-import { BASE_PRICES, EXTRA_PRICES, type CleaningType, type ExtraId } from "@shared/pricing";
+import { type CleaningType, type ExtraId } from "@shared/pricing";
+import { usePricing } from "@/hooks/usePricing";
 
 const IMAGES: Record<CleaningType, { hero: string; secondary: string }> = {
   residential: { hero: ASSETS.livingRoomWhite, secondary: ASSETS.bedroomCozy },
@@ -29,6 +30,7 @@ export default function ServiceDetail({ serviceId }: { serviceId: CleaningType }
   const { t, locale, path } = useLocale();
   const copy = t.services[serviceId];
   const meta = t.meta[serviceId];
+  const pricing = usePricing();
   useSeo({
     title: meta.title,
     description: meta.description,
@@ -40,7 +42,7 @@ export default function ServiceDetail({ serviceId }: { serviceId: CleaningType }
         name: copy.name,
         provider: { "@type": "CleaningService", name: "Grapefruit Cleaning Co." },
         description: copy.short,
-        offers: { "@type": "Offer", price: BASE_PRICES[serviceId], priceCurrency: "USD" },
+        offers: { "@type": "Offer", price: pricing.basePrices[serviceId], priceCurrency: "USD" },
       },
     ],
   });
@@ -60,7 +62,7 @@ export default function ServiceDetail({ serviceId }: { serviceId: CleaningType }
           <div>
             <span className="reveal inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/5 px-4 py-1.5 text-xs font-semibold text-primary">
               <Sparkles className="h-3.5 w-3.5" />
-              {t.common.from} ${BASE_PRICES[serviceId]} {t.common.perVisit}
+              {t.common.from} ${pricing.basePrices[serviceId]} {t.common.perVisit}
             </span>
             <h1
               className="reveal mt-5 font-display text-4xl font-extrabold tracking-tight text-foreground md:text-5xl"
@@ -124,7 +126,7 @@ export default function ServiceDetail({ serviceId }: { serviceId: CleaningType }
               style={{ transitionDelay: `${i * 60}ms` }}
             >
               <p className="text-sm font-semibold text-foreground">{t.extras[id]}</p>
-              <p className="mt-1 text-sm font-bold text-primary">+${EXTRA_PRICES[id]}</p>
+              <p className="mt-1 text-sm font-bold text-primary">+${pricing.extras[id]}</p>
             </div>
           ))}
         </div>
@@ -140,4 +142,3 @@ export default function ServiceDetail({ serviceId }: { serviceId: CleaningType }
     </>
   );
 }
-

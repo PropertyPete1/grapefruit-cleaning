@@ -4,50 +4,65 @@ import { Button } from "@/components/ui/button";
 import { useLocale } from "@/i18n/LocaleContext";
 import { useSeo, localBusinessJsonLd } from "@/hooks/useSeo";
 import { useReveal } from "@/hooks/useReveal";
+import { trpc } from "@/lib/trpc";
+import { Skeleton } from "@/components/ui/skeleton";
 import { ASSETS } from "@/lib/assets";
 import NotFound from "./NotFound";
 
-const POST_IMAGES = [
-  ASSETS.kitchenWhite,
-  ASSETS.airbnbLiving,
-  ASSETS.livingRoomWhite,
-  ASSETS.organizedPantry,
-  ASSETS.kitchenMinimal,
-  ASSETS.officeModern,
-];
-
 export default function BlogPost({ slug }: { slug: string }) {
   const { t, locale, path } = useLocale();
-  const index = t.blog.posts.findIndex((p) => p.slug === slug);
-  const post = index >= 0 ? t.blog.posts[index] : undefined;
+  const { data: post, isLoading } = trpc.content.blogPost.useQuery({ slug }, { staleTime: 5 * 60 * 1000 });
+
+  const title = post ? (locale === "es" ? post.titleEs : post.titleEn) : undefined;
+  const excerpt = post ? (locale === "es" ? post.excerptEs : post.excerptEn) : undefined;
+  const body = post ? (locale === "es" ? post.bodyEs : post.bodyEn) : "";
 
   useSeo({
-    title: post ? `${post.title} | Grapefruit Cleaning Co.` : t.meta.notFound.title,
-    description: post?.excerpt ?? t.meta.notFound.description,
+    title: title ? `${title} | Grapefruit Cleaning Co.` : t.meta.blog.title,
+    description: excerpt ?? t.meta.blog.description,
     jsonLd: post
       ? [
           localBusinessJsonLd(),
           {
             "@context": "https://schema.org",
             "@type": "BlogPosting",
-            headline: post.title,
-            description: post.excerpt,
-            datePublished: post.date,
+            headline: title,
+            description: excerpt,
+            datePublished: post.publishedAt,
             author: { "@type": "Organization", name: "Grapefruit Cleaning Co." },
           },
         ]
       : [],
   });
-  useReveal([locale, slug]);
+  useReveal([locale, slug, isLoading]);
+
+  if (isLoading) {
+    return (
+      <article className="pt-32 pb-24 md:pt-40 md:pb-32">
+        <div className="container max-w-3xl space-y-6">
+          <Skeleton className="h-5 w-32" />
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-5 w-64" />
+          <Skeleton className="aspect-[16/9] w-full rounded-3xl" />
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-5/6" />
+        </div>
+      </article>
+    );
+  }
 
   if (!post) return <NotFound />;
 
-  const fmt = (iso: string) =>
-    new Date(`${iso}T12:00:00`).toLocaleDateString(locale === "es" ? "es-MX" : "en-US", {
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-    });
+  const fmt = (iso: string | null) =>
+    iso
+      ? new Date(`${iso}T12:00:00`).toLocaleDateString(locale === "es" ? "es-MX" : "en-US", {
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+        })
+      : "";
+
+  const paragraphs = body.split(/\n\n+/).filter((p) => p.trim().length > 0);
 
   return (
     <article className="pt-32 pb-24 md:pt-40 md:pb-32">
@@ -60,12 +75,12 @@ export default function BlogPost({ slug }: { slug: string }) {
           {t.blog.backToBlog}
         </Link>
         <h1 className="reveal mt-6 font-display text-3xl font-extrabold leading-tight tracking-tight text-foreground md:text-4xl" style={{ transitionDelay: "60ms" }}>
-          {post.title}
+          {title}
         </h1>
         <div className="reveal mt-4 flex items-center gap-5 text-sm text-muted-foreground" style={{ transitionDelay: "120ms" }}>
           <span className="flex items-center gap-1.5">
             <CalendarDays className="h-4 w-4" />
-            {fmt(post.date)}
+            {fmt(post.publishedAt)}
           </span>
           <span className="flex items-center gap-1.5">
             <Clock3 className="h-4 w-4" />
@@ -73,10 +88,10 @@ export default function BlogPost({ slug }: { slug: string }) {
           </span>
         </div>
         <div className="img-zoom reveal-scale mt-8 overflow-hidden rounded-3xl shadow-soft-lg" style={{ transitionDelay: "150ms" }}>
-          <img src={POST_IMAGES[index % POST_IMAGES.length]} alt={post.title} className="aspect-[16/9] w-full object-cover" loading="eager" />
+          <img src={post.coverImage || ASSETS.kitchenWhite} alt={title} className="aspect-[16/9] w-full object-cover" loading="eager" />
         </div>
         <div className="mt-10 space-y-6">
-          {post.content.map((para, i) => (
+          {paragraphs.map((para, i) => (
             <p key={i} className="reveal text-base leading-[1.85] text-foreground/85" style={{ transitionDelay: `${Math.min(i * 40, 200)}ms` }}>
               {para}
             </p>

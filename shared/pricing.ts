@@ -2,8 +2,9 @@
  * Grapefruit Cleaning Co. — shared pricing engine.
  * Single source of truth used by the quote calculator, booking flow, and server.
  *
- * FIXED PRICING STRUCTURE (per owner specification — do not estimate or
- * generate different values):
+ * Pricing is CONFIGURABLE from the admin panel (setting key "pricing_config").
+ * The values below are the owner-specified DEFAULTS used when no override is
+ * stored or the stored JSON is invalid:
  *
  * RESIDENTIAL CLEANING
  * - Under 1,000 sq ft: $99.99
@@ -26,6 +27,8 @@
  * - 2,000–2,500 sq ft: $299.99
  * - 2,500+ sq ft: Starting at $349.99
  */
+
+import { z } from "zod";
 
 export type CleaningType = "residential" | "commercial" | "airbnb" | "moveinout" | "deep" | "office";
 export type Frequency = "onetime" | "weekly" | "biweekly" | "monthly";
@@ -51,7 +54,7 @@ export interface QuoteInput {
 
 /** A single fixed pricing tier keyed by max square footage (exclusive). */
 export interface PricingTier {
-  /** Upper bound of the tier in sq ft; sqft < maxSqft matches this tier. Infinity = top tier. */
+  /** Upper bound of the tier in sq ft; sqft < tier.maxSqft matches this tier. Infinity = top tier. */
   maxSqft: number;
   /** Fixed price in USD. */
   price: number;
@@ -61,70 +64,195 @@ export interface PricingTier {
   customQuote?: boolean;
 }
 
-/** FIXED tier tables — the exact prices provided by the owner. NEVER alter. */
-export const PRICING_TIERS: Partial<Record<CleaningType, PricingTier[]>> = {
-  residential: [
-    { maxSqft: 1000, price: 99.99 },
-    { maxSqft: 1500, price: 129.99 },
-    { maxSqft: 2000, price: 159.99 },
-    { maxSqft: 2500, price: 199.99 },
-    { maxSqft: 3500, price: 249.99, startingAt: true },
-    { maxSqft: Infinity, price: 0, customQuote: true },
-  ],
-  deep: [
-    { maxSqft: 1000, price: 179.99 },
-    { maxSqft: 1500, price: 229.99 },
-    { maxSqft: 2500, price: 299.99 },
-    { maxSqft: Infinity, price: 399.99, startingAt: true },
-  ],
-  moveinout: [
-    { maxSqft: 1000, price: 169.99 },
-    { maxSqft: 1500, price: 199.99 },
-    { maxSqft: 2000, price: 249.99 },
-    { maxSqft: 2500, price: 299.99 },
-    { maxSqft: Infinity, price: 349.99, startingAt: true },
-  ],
+/** Types of cleaning that have their own tier table. */
+export type TieredType = "residential" | "deep" | "moveinout";
+
+/** Full pricing configuration — everything the admin can edit. */
+export interface PricingConfig {
+  tiers: Record<TieredType, PricingTier[]>;
+  /** Custom-quote baselines / service-visit minimums for non-tiered types. */
+  basePrices: Record<CleaningType, number>;
+  extras: Record<ExtraId, number>;
+  frequencyDiscounts: Record<Frequency, number>;
+  depositRate: number;
+}
+
+/** Setting key under which the pricing override JSON is stored. */
+export const PRICING_SETTING_KEY = "pricing_config";
+
+/** Owner-specified default pricing (fallback when no valid override stored). */
+export const DEFAULT_PRICING: PricingConfig = {
+  tiers: {
+    residential: [
+      { maxSqft: 1000, price: 99.99 },
+      { maxSqft: 1500, price: 129.99 },
+      { maxSqft: 2000, price: 159.99 },
+      { maxSqft: 2500, price: 199.99 },
+      { maxSqft: 3500, price: 249.99, startingAt: true },
+      { maxSqft: Infinity, price: 0, customQuote: true },
+    ],
+    deep: [
+      { maxSqft: 1000, price: 179.99 },
+      { maxSqft: 1500, price: 229.99 },
+      { maxSqft: 2500, price: 299.99 },
+      { maxSqft: Infinity, price: 399.99, startingAt: true },
+    ],
+    moveinout: [
+      { maxSqft: 1000, price: 169.99 },
+      { maxSqft: 1500, price: 199.99 },
+      { maxSqft: 2000, price: 249.99 },
+      { maxSqft: 2500, price: 299.99 },
+      { maxSqft: Infinity, price: 349.99, startingAt: true },
+    ],
+  },
+  basePrices: {
+    residential: 99.99,
+    commercial: 179.99,
+    airbnb: 99.99,
+    moveinout: 169.99,
+    deep: 179.99,
+    office: 179.99,
+  },
+  extras: {
+    pets: 20,
+    deepClean: 60,
+    moveOut: 70,
+    oven: 35,
+    refrigerator: 35,
+    windows: 45,
+    laundry: 30,
+    garage: 40,
+    organization: 50,
+  },
+  frequencyDiscounts: {
+    onetime: 0,
+    weekly: 0.2,
+    biweekly: 0.15,
+    monthly: 0.1,
+  },
+  depositRate: 0.2,
 };
+
+// ---------------------------------------------------------------------------
+// Config parsing / validation
+// ---------------------------------------------------------------------------
+
+/**
+ * JSON can't encode Infinity, so the top tier is serialized with maxSqft: null.
+ * The zod schema accepts number | null and maps null → Infinity.
+ */
+const tierSchema = z.object({
+  maxSqft: z
+    .union([z.number().positive(), z.null()])
+    .transform(v => (v === null ? Infinity : v)),
+  price: z.number().min(0).max(100000),
+  startingAt: z.boolean().optional(),
+  customQuote: z.boolean().optional(),
+});
+
+const tierTableSchema = z
+  .array(tierSchema)
+  .min(1)
+  .refine(
+    table => table.some(t => !Number.isFinite(t.maxSqft)),
+    { message: "tier table must end with an unbounded (null maxSqft) tier" }
+  );
+
+const pricingConfigSchema = z.object({
+  tiers: z.object({
+    residential: tierTableSchema,
+    deep: tierTableSchema,
+    moveinout: tierTableSchema,
+  }),
+  basePrices: z.object({
+    residential: z.number().min(0),
+    commercial: z.number().min(0),
+    airbnb: z.number().min(0),
+    moveinout: z.number().min(0),
+    deep: z.number().min(0),
+    office: z.number().min(0),
+  }),
+  extras: z.object({
+    pets: z.number().min(0),
+    deepClean: z.number().min(0),
+    moveOut: z.number().min(0),
+    oven: z.number().min(0),
+    refrigerator: z.number().min(0),
+    windows: z.number().min(0),
+    laundry: z.number().min(0),
+    garage: z.number().min(0),
+    organization: z.number().min(0),
+  }),
+  frequencyDiscounts: z.object({
+    onetime: z.number().min(0).max(0.95),
+    weekly: z.number().min(0).max(0.95),
+    biweekly: z.number().min(0).max(0.95),
+    monthly: z.number().min(0).max(0.95),
+  }),
+  depositRate: z.number().min(0.01).max(1),
+});
+
+/**
+ * Parse a stored pricing_config JSON string. Any missing/invalid payload
+ * falls back to DEFAULT_PRICING so pricing can never break the site.
+ */
+export function parsePricingConfig(raw: string | null | undefined): PricingConfig {
+  if (!raw) return DEFAULT_PRICING;
+  try {
+    const parsed = pricingConfigSchema.safeParse(JSON.parse(raw));
+    if (!parsed.success) return DEFAULT_PRICING;
+    // Sort tier tables by maxSqft so lookup order is always correct.
+    const sortTable = (t: PricingTier[]) => [...t].sort((a, b) => a.maxSqft - b.maxSqft);
+    const cfg = parsed.data;
+    return {
+      ...cfg,
+      tiers: {
+        residential: sortTable(cfg.tiers.residential),
+        deep: sortTable(cfg.tiers.deep),
+        moveinout: sortTable(cfg.tiers.moveinout),
+      },
+    };
+  } catch {
+    return DEFAULT_PRICING;
+  }
+}
+
+/** Serialize a PricingConfig to JSON (Infinity → null for the top tiers). */
+export function serializePricingConfig(config: PricingConfig): string {
+  return JSON.stringify(config, (_key, value) =>
+    typeof value === "number" && !Number.isFinite(value) ? null : value
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Backward-compatible constant exports (all derived from DEFAULT_PRICING)
+// ---------------------------------------------------------------------------
+
+/** @deprecated read from a PricingConfig instead; kept for compatibility. */
+export const PRICING_TIERS: Partial<Record<CleaningType, PricingTier[]>> = DEFAULT_PRICING.tiers;
 
 /**
  * Airbnb cleanings follow the residential tier table; commercial and office
  * spaces vary too widely for fixed tiers and always use a custom-quote
  * baseline, with the listed price as the service-visit minimum.
  */
-export const BASE_PRICES: Record<CleaningType, number> = {
-  residential: 99.99,
-  commercial: 179.99,
-  airbnb: 99.99,
-  moveinout: 169.99,
-  deep: 179.99,
-  office: 179.99,
-};
+export const BASE_PRICES: Record<CleaningType, number> = DEFAULT_PRICING.basePrices;
 
-export const EXTRA_PRICES: Record<ExtraId, number> = {
-  pets: 20,
-  deepClean: 60,
-  moveOut: 70,
-  oven: 35,
-  refrigerator: 35,
-  windows: 45,
-  laundry: 30,
-  garage: 40,
-  organization: 50,
-};
+export const EXTRA_PRICES: Record<ExtraId, number> = DEFAULT_PRICING.extras;
 
-export const FREQUENCY_DISCOUNTS: Record<Frequency, number> = {
-  onetime: 0,
-  weekly: 0.2,
-  biweekly: 0.15,
-  monthly: 0.1,
-};
+export const FREQUENCY_DISCOUNTS: Record<Frequency, number> = DEFAULT_PRICING.frequencyDiscounts;
 
 /** Deposit rate charged at booking (20%). */
-export const DEPOSIT_RATE = 0.2;
+export const DEPOSIT_RATE = DEFAULT_PRICING.depositRate;
 
-/** Resolve the fixed tier for a cleaning type + square footage. */
-export function getTier(type: CleaningType, sqft: number): PricingTier | null {
-  const table = PRICING_TIERS[type === "airbnb" ? "residential" : type];
+/** Resolve the tier for a cleaning type + square footage under a config. */
+export function getTier(
+  type: CleaningType,
+  sqft: number,
+  config: PricingConfig = DEFAULT_PRICING
+): PricingTier | null {
+  const key = type === "airbnb" ? "residential" : type;
+  const table = key === "residential" || key === "deep" || key === "moveinout" ? config.tiers[key] : null;
   if (!table) return null;
   for (const tier of table) {
     if (sqft < tier.maxSqft) return tier;
@@ -147,9 +275,9 @@ export interface QuoteBreakdown {
   customQuote: boolean;
 }
 
-export function calculateQuote(input: QuoteInput): QuoteBreakdown {
+export function calculateQuote(input: QuoteInput, config: PricingConfig = DEFAULT_PRICING): QuoteBreakdown {
   const sqft = Math.max(200, Math.min(20000, input.sqft));
-  const tier = getTier(input.type, sqft);
+  const tier = getTier(input.type, sqft, config);
 
   let base: number;
   let startingAt = false;
@@ -158,8 +286,10 @@ export function calculateQuote(input: QuoteInput): QuoteBreakdown {
   if (tier) {
     if (tier.customQuote) {
       customQuote = true;
-      // Use the last priced tier as the reference floor for deposit-free display.
-      base = 249.99;
+      // Use the last priced tier as the reference floor for display purposes.
+      const table = config.tiers[input.type === "airbnb" ? "residential" : (input.type as TieredType)];
+      const lastPriced = [...table].reverse().find(t => !t.customQuote);
+      base = lastPriced?.price ?? 0;
       startingAt = true;
     } else {
       base = tier.price;
@@ -167,7 +297,7 @@ export function calculateQuote(input: QuoteInput): QuoteBreakdown {
     }
   } else {
     // Commercial / office: custom-quote baseline with service-visit minimum.
-    base = BASE_PRICES[input.type] ?? BASE_PRICES.residential;
+    base = config.basePrices[input.type] ?? config.basePrices.residential;
     startingAt = true;
   }
 
@@ -175,12 +305,12 @@ export function calculateQuote(input: QuoteInput): QuoteBreakdown {
   // not change the base. (Kept in the breakdown as 0 for UI compatibility.)
   const rooms = 0;
   const sqftCharge = 0;
-  const extrasTotal = input.extras.reduce((sum, id) => sum + (EXTRA_PRICES[id] ?? 0), 0);
+  const extrasTotal = input.extras.reduce((sum, id) => sum + (config.extras[id] ?? 0), 0);
   const subtotal = round2(base + extrasTotal);
-  const discountRate = FREQUENCY_DISCOUNTS[input.frequency] ?? 0;
+  const discountRate = config.frequencyDiscounts[input.frequency] ?? 0;
   const discount = round2(subtotal * discountRate);
   const total = round2(subtotal - discount);
-  const deposit = round2(total * DEPOSIT_RATE);
+  const deposit = round2(total * config.depositRate);
   return { base, rooms, sqftCharge, extrasTotal, subtotal, discount, total, deposit, startingAt, customQuote };
 }
 

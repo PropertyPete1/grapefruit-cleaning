@@ -272,4 +272,71 @@ export const adminRouter = router({
       await db.setSetting(input.key, input.value);
       return { success: true } as const;
     }),
+
+  // ---------- Blog ----------
+  blogPosts: adminProcedure.query(() => db.listBlogPosts()),
+  createBlogPost: adminProcedure
+    .input(
+      z.object({
+        slug: z
+          .string()
+          .min(3)
+          .max(160)
+          .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Slug must be lowercase letters, numbers, and hyphens"),
+        titleEn: z.string().min(1).max(255),
+        titleEs: z.string().min(1).max(255),
+        excerptEn: z.string().max(2000).optional(),
+        excerptEs: z.string().max(2000).optional(),
+        bodyEn: z.string().min(1).max(60000),
+        bodyEs: z.string().min(1).max(60000),
+        coverImage: z.string().max(500).optional(),
+        readTime: z.number().int().min(1).max(60).default(5),
+        published: z.boolean().default(false),
+        publishedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const existing = await db.getBlogPostBySlug(input.slug);
+      if (existing) throw new TRPCError({ code: "BAD_REQUEST", message: "A post with this slug already exists" });
+      const id = await db.createBlogPost({
+        ...input,
+        publishedAt: input.publishedAt ?? new Date().toISOString().slice(0, 10),
+      });
+      return { id };
+    }),
+  updateBlogPost: adminProcedure
+    .input(
+      z.object({
+        id: z.number().int(),
+        slug: z
+          .string()
+          .min(3)
+          .max(160)
+          .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+          .optional(),
+        titleEn: z.string().min(1).max(255).optional(),
+        titleEs: z.string().min(1).max(255).optional(),
+        excerptEn: z.string().max(2000).optional(),
+        excerptEs: z.string().max(2000).optional(),
+        bodyEn: z.string().min(1).max(60000).optional(),
+        bodyEs: z.string().min(1).max(60000).optional(),
+        coverImage: z.string().max(500).optional(),
+        readTime: z.number().int().min(1).max(60).optional(),
+        published: z.boolean().optional(),
+        publishedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const { id, ...data } = input;
+      if (data.slug) {
+        const existing = await db.getBlogPostBySlug(data.slug);
+        if (existing && existing.id !== id) throw new TRPCError({ code: "BAD_REQUEST", message: "A post with this slug already exists" });
+      }
+      await db.updateBlogPost(id, data);
+      return { success: true } as const;
+    }),
+  deleteBlogPost: adminProcedure.input(z.object({ id: z.number().int() })).mutation(async ({ input }) => {
+    await db.deleteBlogPost(input.id);
+    return { success: true } as const;
+  }),
 });

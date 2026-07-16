@@ -470,38 +470,6 @@ export const es: Dictionary = {
   testimonials: {
     heroTitle: "Lo que dicen nuestros clientes",
     heroSubtitle: "Medimos el éxito una reseña de cinco estrellas a la vez.",
-    items: [
-      {
-        name: "Sarah Mitchell",
-        role: "Propietaria · Plan Semanal",
-        text: "Grapefruit cambió por completo cómo se siente nuestro hogar. El mismo equipo maravilloso cada semana, y cada rincón queda impecable. Reservar en línea toma segundos.",
-      },
-      {
-        name: "David Chen",
-        role: "Superhost de Airbnb · 4 Propiedades",
-        text: "Como Superhost, mis calificaciones dependen de la limpieza. Los cambios de huésped de Grapefruit son impecables: verificación fotográfica y reabastecimiento incluidos. Mis reseñas nunca habían sido mejores.",
-      },
-      {
-        name: "Amanda Rodríguez",
-        role: "Gerente de Oficina",
-        text: "Nuestra oficina nunca se había visto tan bien. Trabajan fuera de horario, no se les escapa ningún detalle y el equipo es siempre profesional. Vale cada centavo.",
-      },
-      {
-        name: "Michael Torres",
-        role: "Limpieza de Salida",
-        text: "Recuperé todo mi depósito gracias a su limpieza de mudanza. El arrendador literalmente preguntó quién había limpiado. Una atención al detalle increíble.",
-      },
-      {
-        name: "Jennifer Park",
-        role: "Propietaria · Limpieza Profunda",
-        text: "La limpieza profunda superó todas mis expectativas. Zócalos, rejillas, lámparas: cosas que ni sabía que necesitaban limpieza. Mi casa se siente como nueva.",
-      },
-      {
-        name: "Robert Klein",
-        role: "Dueño de Restaurante",
-        text: "Las inspecciones sanitarias ya no nos preocupan. Grapefruit mantiene nuestro comedor y sanitarios impecables. Confiables, asegurados y personas genuinamente amables.",
-      },
-    ],
   },
   faq: {
     heroTitle: "Preguntas frecuentes",
@@ -576,95 +544,6 @@ export const es: Dictionary = {
     heroSubtitle: "Guías, rutinas y sabiduría para anfitriones, de profesionales que limpian para vivir.",
     readTime: "min de lectura",
     backToBlog: "Volver al Blog",
-    posts: [
-      {
-        slug: "checklist-limpieza-profunda-primavera",
-        title: "La Lista Definitiva de Limpieza Profunda de Primavera",
-        excerpt:
-          "Una guía habitación por habitación para renovar todo su hogar esta temporada, incluyendo los rincones que casi todos olvidan.",
-        readTime: 7,
-        date: "2026-06-02",
-        content: [
-          "La limpieza de primavera es más que una tradición: es una renovación completa para su hogar y su mente. Pero sin un plan, es fácil pasar todo un fin de semana ocupado sin apenas rascar la superficie. Esta lista es la misma que usan nuestros equipos profesionales, adaptada para un propietario motivado.",
-          "Empiece arriba, termine abajo. El polvo cae, así que comience siempre por los ventiladores de techo, las molduras y la parte superior de gabinetes y marcos de puertas, antes de bajar a los muebles y finalmente a los pisos. Trabajar en este orden significa no limpiar nunca la misma superficie dos veces.",
-          "En la cocina, la diferencia está en los lugares que no ve a diario: mueva el refrigerador y aspire las bobinas, desengrase el filtro de la campana y ponga un ciclo de limpieza en el lavavajillas con una taza de vinagre blanco. Limpie los frentes de los gabinetes con un producto seguro para madera: el área alrededor de las manijas acumula mucha más suciedad de la que imagina.",
-          "Los baños premian la paciencia. Deje actuar un buen desincrustante sobre el vidrio de la regadera y las llaves durante diez minutos completos antes de tallar. Lave o reemplace la cortina de baño y no olvide la rejilla del extractor: un extractor sucio es la razón por la que los espejos se siguen empañando.",
-          "Por último, los textiles guardan el invierno. Lave fundas de edredón y protectores de almohada con agua caliente, aspire los colchones con el accesorio para tapicería y lave o planche las cortinas con vapor. Si todo esto suena a más fin de semana del que está dispuesto a ceder, nuestro servicio de limpieza profunda se encarga de cada punto de esta lista, y de varias docenas más.",
-        ],
-      },
-      {
-        slug: "airbnb-calificaciones-cinco-estrellas",
-        title: "Cómo Lograr Calificaciones de Limpieza Cinco Estrellas en Cada Estancia de Airbnb",
-        excerpt:
-          "La limpieza es la categoría más examinada por los huéspedes. Este es el sistema de cambio de huésped en el que confían los mejores anfitriones.",
-        readTime: 6,
-        date: "2026-05-12",
-        content: [
-          "Pregúntele a cualquier Superhost: la calificación de limpieza es donde se ganan o se pierden los promedios de cinco estrellas. Los huéspedes perdonan una puerta que rechina; nunca perdonan un cabello en el baño. La buena noticia es que los cambios impecables son un sistema, no un talento.",
-          "Cree una lista de verificación escrita que cubra cada habitación, todas las veces. La constancia vence a la intensidad: un cambio hecho de memoria siempre terminará omitiendo algo. Los mejores anfitriones fotografían el espacio preparado después de cada limpieza, tanto para control de calidad como para protegerse de reclamos injustos.",
-          "Piense en el orden en que mira el huésped. Los huéspedes inspeccionan primero el baño y la cama, así que esas áreas merecen una atención desproporcionada: ropa de cama impecable estilo hotel, llaves pulidas y cero rastros de huéspedes anteriores en cualquier lugar.",
-          "El reabastecimiento es parte de la limpieza. Quedarse sin papel higiénico a mitad de la estancia se percibe como descuido. Estandarice su inventario (jabón, artículos de papel, café, ropa de cama de repuesto) y revíselo en cada cambio.",
-          "Los cambios el mismo día son donde la mayoría de los anfitriones se quiebra. Entre la salida a las 11 y la entrada a las 3, no hay margen de error. Exactamente por eso cientos de anfitriones nos confían sus cambios: limpieza verificada con fotos, gestión de ropa de cama y reabastecimiento en piloto automático, para que sus calificaciones se mantengan impecables desde cualquier lugar.",
-        ],
-      },
-      {
-        slug: "rutina-semanal-limpieza-hogar",
-        title: "La Rutina Semanal de 30 Minutos que Mantiene su Hogar Listo para Visitas",
-        excerpt: "Hábitos profesionales que evitan que el desorden se acumule, perfectos entre limpiezas profundas.",
-        readTime: 5,
-        date: "2026-04-18",
-        content: [
-          "El secreto de un hogar siempre limpio no son las sesiones maratónicas de limpieza, sino el mantenimiento breve y estratégico que evita que la suciedad se asiente. Este es el circuito semanal de 30 minutos que recomendamos a cada cliente entre visitas profesionales.",
-          "Minutos 1–10: la cocina. Despeje y limpie las cubiertas, limpie la estufa mientras está apenas sucia y pase un paño de microfibra por los frentes y manijas de los electrodomésticos. Un minuto aquí ahorra una hora de desengrasado después.",
-          "Minutos 11–18: los baños. Un atomizador diario para la regadera hace la mayor parte del trabajo por usted; semanalmente, talle rápidamente el inodoro, limpie el lavabo y cambie las toallas. Tener un jalador de vidrios en la regadera reduce a la mitad el tiempo de limpieza del cristal.",
-          "Minutos 19–25: pisos solo en zonas de paso. No necesita aspirar debajo del sofá cada semana: concéntrese en las entradas, la cocina y los pasillos, donde realmente vive el 90% de la suciedad.",
-          "Minutos 26–30: el toque final. Acomode los cojines, doble las mantas, despeje las superficies y vacíe la basura. Esta pasada final es lo que hace que un hogar se sienta recién limpiado y no solo limpio. Y cuando la vida no le deje ni treinta minutos, para eso están nuestros planes recurrentes.",
-        ],
-      },
-      {
-        slug: "productos-limpieza-ecologicos",
-        title: "Por Qué Cambiamos a Productos Ecológicos (y Nunca Miramos Atrás)",
-        excerpt: "La limpieza no tóxica ya no es un sacrificio. Esto es lo que realmente funciona y lo que debe evitar.",
-        readTime: 6,
-        date: "2026-03-25",
-        content: [
-          "Hace una década, la 'limpieza verde' solía significar resultados más débiles y el doble de esfuerzo. Hoy, los mejores productos con certificación ecológica superan a sus contrapartes químicas agresivas, sin los vapores, residuos ni riesgos para niños y mascotas.",
-          "El punto de inflexión fue la ciencia de las formulaciones. Los surfactantes modernos de origen vegetal y los limpiadores enzimáticos descomponen la grasa y la suciedad orgánica a nivel molecular, igualando o superando a los solventes tradicionales. En nuestras pruebas comparativas, los mejores productos ecológicos ganaron tanto en cocinas como en baños.",
-          "La calidad del aire interior es la victoria oculta. Los limpiadores convencionales son una fuente importante de compuestos orgánicos volátiles (COV) en los hogares, una preocupación real para los niños, las personas con asma y las mascotas que viven a nivel del piso, donde se concentran los residuos.",
-          "Sin embargo, no toda etiqueta 'verde' es confiable. Busque certificaciones de terceros en lugar de términos vagos de mercadotecnia como 'natural'. La certificación ecológica genuina exige divulgación verificada de ingredientes y pruebas de biodegradabilidad.",
-          "Cada limpieza de Grapefruit utiliza productos que hemos evaluado personalmente tanto en seguridad como en desempeño. Su hogar queda impecable y seguro para tocar, respirar y vivir: así debe sentirse lo limpio.",
-        ],
-      },
-      {
-        slug: "guia-limpieza-mudanza-deposito",
-        title: "La Guía de Limpieza de Salida que le Devuelve Todo su Depósito",
-        excerpt: "Los arrendadores inspeccionan siempre los mismos lugares. Limpie estos y su depósito volverá con usted.",
-        readTime: 8,
-        date: "2026-02-14",
-        content: [
-          "Los depósitos de garantía se pierden en lugares predecibles. Después de miles de limpiezas de mudanza, sabemos exactamente dónde miran primero los arrendadores y administradores de propiedades, y rara vez es donde los inquilinos concentran su esfuerzo.",
-          "El horno es el punto de inspección número uno. Un horno descuidado sugiere un hogar descuidado, sea justo o no. La limpieza interior del horno, incluyendo el vidrio de la puerta y las parrillas, es la tarea de mayor retorno en su lista.",
-          "Segundo: el interior de todo. Los gabinetes, cajones, clósets y el refrigerador vacíos deben limpiarse por dentro y por fuera. Unas migajas en la esquina de un cajón les han costado dinero real a muchos inquilinos. Retire los forros de los estantes y limpie debajo de ellos.",
-          "Tercero: los detalles que demuestran cuidado. Zócalos, placas de apagadores, manijas de puertas, rieles de ventanas y rejillas de ventilación. Ninguno toma mucho tiempo por separado, pero en conjunto son la diferencia entre 'limpieza profesional' y 'limpieza de inquilino' en las notas de un inspector.",
-          "Las paredes y los pisos cierran el trato. Borre las marcas de rozaduras, quite el polvo y las telarañas de cada esquina y termine con los pisos, saliendo de espaldas de cada habitación. O ahórrese el fin de semana completo de trabajo: nuestro servicio de mudanza está diseñado específicamente para pasar inspecciones, y por algo es nuestro servicio más agradecido.",
-        ],
-      },
-      {
-        slug: "limpieza-oficina-productividad",
-        title: "Oficina Limpia, Equipo Más Agudo: El Argumento de Productividad de la Limpieza Profesional",
-        excerpt:
-          "La limpieza del lugar de trabajo afecta de forma medible la concentración, las ausencias por enfermedad e incluso la confianza de los clientes. Esta es la evidencia.",
-        readTime: 5,
-        date: "2026-01-20",
-        content: [
-          "La limpieza de la oficina suele archivarse bajo 'instalaciones', pero sus efectos aparecen en las métricas de desempeño. La investigación vincula consistentemente los entornos de trabajo limpios con mejor concentración, menos estrés y una reducción significativa de las ausencias por enfermedad.",
-          "La matemática de la salud es sencilla. El escritorio promedio alberga cientos de veces más bacterias que un asiento de inodoro, y los puntos de contacto compartidos (manijas, electrodomésticos de la cocina, mesas de juntas) son autopistas de transmisión durante la temporada de gripe. La desinfección profesional rutinaria rompe esa cadena.",
-          "También hay un efecto cognitivo. Estudios del Instituto de Neurociencia de Princeton demostraron que el desorden visual compite por la atención y degrada el desempeño en las tareas. Un espacio ordenado y bien mantenido no es vanidad estética; es infraestructura cognitiva.",
-          "Los clientes también lo perciben. Una recepción impecable comunica excelencia operativa antes de que alguien diga una palabra. Lo contrario también es cierto, y mucho más memorable.",
-          "Nuestros programas de limpieza de oficinas se ejecutan fuera del horario laboral con equipos constantes y conscientes de la seguridad, y listas de tareas personalizadas. El resultado: su equipo llega cada mañana a un espacio renovado, y la limpieza se convierte en algo en lo que simplemente nunca tiene que pensar.",
-        ],
-      },
-    ],
   },
   privacy: {
     title: "Política de Privacidad",

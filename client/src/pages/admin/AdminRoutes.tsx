@@ -10,6 +10,7 @@ import {
   Loader2,
   LogOut,
   MessageSquare,
+  Newspaper,
   Settings as SettingsIcon,
   Sparkles,
   Star,
@@ -37,6 +38,7 @@ const AdminServices = lazy(() => import("./AdminServices"));
 const AdminCoupons = lazy(() => import("./AdminCoupons"));
 const AdminSettings = lazy(() => import("./AdminSettings"));
 const AdminMessages = lazy(() => import("./AdminMessages"));
+const AdminBlog = lazy(() => import("./AdminBlog"));
 
 const NAV_ITEMS = [
   { path: "/admin", label: "Dashboard", icon: LayoutDashboard, exact: true },
@@ -51,6 +53,7 @@ const NAV_ITEMS = [
   { path: "/admin/reviews", label: "Reviews", icon: Star },
   { path: "/admin/gallery", label: "Gallery", icon: ImageIcon },
   { path: "/admin/services", label: "Services & Pricing", icon: Tag },
+  { path: "/admin/blog", label: "Blog", icon: Newspaper },
   { path: "/admin/coupons", label: "Coupons", icon: Ticket },
   { path: "/admin/settings", label: "Settings", icon: SettingsIcon },
 ];
@@ -178,6 +181,7 @@ export default function AdminRoutes() {
           <Route path="/admin/reviews" component={AdminReviews} />
           <Route path="/admin/gallery" component={AdminGallery} />
           <Route path="/admin/services" component={AdminServices} />
+          <Route path="/admin/blog" component={AdminBlog} />
           <Route path="/admin/coupons" component={AdminCoupons} />
           <Route path="/admin/settings" component={AdminSettings} />
           <Route component={AdminDashboard} />

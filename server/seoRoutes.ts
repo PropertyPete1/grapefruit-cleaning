@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { listBlogPosts } from "./db";
 
 const EN_PATHS = [
   "/en",
@@ -50,10 +51,22 @@ export function registerSeoRoutes(app: Express): void {
     res.type("text/plain").send(`User-agent: *\nAllow: /\nDisallow: /admin\n\nSitemap: ${origin}/sitemap.xml\n`);
   });
 
-  app.get("/sitemap.xml", (req: Request, res: Response) => {
+  app.get("/sitemap.xml", async (req: Request, res: Response) => {
     const origin = `${req.protocol}://${req.get("host")}`;
     const today = new Date().toISOString().slice(0, 10);
-    const urls = [...EN_PATHS, ...ES_PATHS]
+    // Published blog posts get locale-prefixed URLs in the sitemap too.
+    let blogPaths: { en: string; es: string; lastmod: string }[] = [];
+    try {
+      const posts = await listBlogPosts(true);
+      blogPaths = posts.map((p) => ({
+        en: `/en/blog/${p.slug}`,
+        es: `/es/blog/${p.slug}`,
+        lastmod: p.publishedAt ?? today,
+      }));
+    } catch {
+      // DB unavailable — static pages still get a valid sitemap.
+    }
+    const staticUrls = [...EN_PATHS, ...ES_PATHS]
       .map(p => {
         // hreflang alternates: pair EN/ES paths by index
         const enIdx = EN_PATHS.indexOf(p);
@@ -69,6 +82,20 @@ export function registerSeoRoutes(app: Express): void {
   </url>`;
       })
       .join("\n");
+    const blogUrls = blogPaths
+      .flatMap(({ en, es, lastmod }) =>
+        [en, es].map(
+          (loc) => `  <url>
+    <loc>${origin}${loc}</loc>
+    <lastmod>${lastmod}</lastmod>
+    <changefreq>monthly</changefreq>
+    <xhtml:link rel="alternate" hreflang="en" href="${origin}${en}"/>
+    <xhtml:link rel="alternate" hreflang="es" href="${origin}${es}"/>
+  </url>`
+        )
+      )
+      .join("\n");
+    const urls = blogUrls ? `${staticUrls}\n${blogUrls}` : staticUrls;
     res
       .type("application/xml")
       .send(
