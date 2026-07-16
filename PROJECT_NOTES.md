@@ -1,5 +1,11 @@
 # Grapefruit Cleaning Co. — Build Notes (internal)
 
+## ROUND 12 — Stale-chunk hardening (second "Unexpected token '<'" report, Jul 16)
+- Both user reports (20:11, 21:50 CDT) timestamp-match deploy rollout windows; deploys frequent today so stale tabs hit it.
+- Round 10 fix covers: dynamic-import chunks (vite:preloadError → one reload in main.tsx) + /assets 404 instead of HTML fallback (server/_core/vite.ts). VERIFIED live.
+- Uncovered path: the ENTRY script tag itself (script type=module src=/assets/index-*.js). If index.html is stale/cached, the entry 404s → page never boots → vite:preloadError never fires (only covers dynamic imports).
+- Round 12 fix: inline watchdog in client/index.html — 4s after window load, if #root empty → one cache-busted location.replace reload (sessionStorage "entry-reload" loop guard, cleared on successful boot).
+
 ## ROUND 9 (in progress, Jul 16 2026) — user's "ROUND 8": admin pricing, blog CMS, spam protection, housekeeping
 GitHub: repo PropertyPete1/grapefruit-cleaning is PUBLIC, remote name "github" in project git. Push new checkpoints there when asked.
 PHASE 1 PRICING: DONE ✅ (9 new tests pass; admin panel verified via screenshot at /admin/services — editable tier/extras/discount/deposit inputs + Save + Reset). NOTE: public pages must be screenshotted at LOCALE routes (/en/pricing etc.) — bare /pricing renders homepage.

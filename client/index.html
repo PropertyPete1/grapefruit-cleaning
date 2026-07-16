@@ -16,6 +16,32 @@
 
   <body>
     <div id="root"></div>
+    <script>
+      // Entry-script watchdog: a cached/stale index.html can reference a build
+      // file that no longer exists after a redeploy. The module script then
+      // fails (404 or "Unexpected token '<'") and React never mounts. The
+      // dynamic-import recovery in main.tsx cannot catch that case, so detect
+      // an empty #root shortly after load and force one cache-busted reload.
+      (function () {
+        var KEY = "entry-reload";
+        window.addEventListener("load", function () {
+          setTimeout(function () {
+            var root = document.getElementById("root");
+            if (root && root.childElementCount > 0) {
+              try { sessionStorage.removeItem(KEY); } catch (e) {}
+              return;
+            }
+            try {
+              if (sessionStorage.getItem(KEY) === "1") return; // no reload loops
+              sessionStorage.setItem(KEY, "1");
+            } catch (e) { return; }
+            var u = new URL(window.location.href);
+            u.searchParams.set("v", Date.now().toString(36));
+            window.location.replace(u.toString());
+          }, 4000);
+        });
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
     <script
       defer

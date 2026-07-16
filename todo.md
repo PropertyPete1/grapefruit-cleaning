@@ -199,6 +199,11 @@
 - [x] Harden clientIp() for contexts without req (test env)
 
 ## Round 11 — Blog cover image upload
-- [ ] Server: admin blog image upload endpoint (S3 via storagePut)
-- [ ] AdminBlog editor: upload button + preview alongside URL field
-- [ ] Test + checkpoint
+- [x] Server: admin blog image upload endpoint (S3 via storagePut)
+- [x] AdminBlog editor: upload button + preview alongside URL field
+- [x] Test + checkpoint
+
+## Round 12 — Stale-chunk error hardening
+- [x] Diagnose why the reload hook didn't cover the 21:50 error (entry script vs dynamic import)
+- [x] Strengthen recovery to cover the entry-script failure path
+- [x] Verify, checkpoint, sync GitHub
