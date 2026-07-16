@@ -19,6 +19,8 @@ import { Button } from "@/components/ui/button";
 import { useLocale } from "@/i18n/LocaleContext";
 import { useSeo, localBusinessJsonLd } from "@/hooks/useSeo";
 import { useReveal } from "@/hooks/useReveal";
+import { useSiteInfo } from "@/hooks/useSiteInfo";
+import { trpc } from "@/lib/trpc";
 import { ASSETS } from "@/lib/assets";
 import { cn } from "@/lib/utils";
 
@@ -33,10 +35,11 @@ const SERVICE_CARDS = [
 
 export default function Home() {
   const { t, locale, path } = useLocale();
+  const { info: site } = useSiteInfo();
   useSeo({
     title: t.meta.home.title,
     description: t.meta.home.description,
-    jsonLd: [localBusinessJsonLd()],
+    jsonLd: [localBusinessJsonLd(site)],
   });
   useReveal([locale]);
 
@@ -47,12 +50,14 @@ export default function Home() {
     { icon: Star, title: t.home.why4Title, text: t.home.why4Text },
   ];
 
+  // Real stats from Admin → Settings; entries left blank are hidden, and the
+  // whole band disappears until at least one stat is configured.
   const stats = [
-    { value: "500+", label: t.home.statsClients },
-    { value: "12,000+", label: t.home.statsCleanings },
-    { value: "8", label: t.home.statsYears },
-    { value: "5.0", label: t.home.statsRating },
-  ];
+    { value: site.stats_clients, label: t.home.statsClients },
+    { value: site.stats_cleanings, label: t.home.statsCleanings },
+    { value: site.stats_years, label: t.home.statsYears },
+    { value: site.stats_rating, label: t.home.statsRating },
+  ].filter((s) => s.value);
 
   return (
     <>
@@ -100,14 +105,21 @@ export default function Home() {
                 <Link href={path("services")}>{t.home.heroCtaSecondary}</Link>
               </Button>
             </div>
-            <div className="reveal mt-8 flex items-center gap-3" style={{ transitionDelay: "240ms" }}>
-              <div className="flex">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <Star key={i} className="h-4 w-4 fill-amber-400 text-amber-400" />
-                ))}
+            {/* Hero rating line — only shown once real stats are configured in Admin → Settings */}
+            {site.stats_rating && site.stats_clients && (
+              <div className="reveal mt-8 flex items-center gap-3" style={{ transitionDelay: "240ms" }}>
+                <div className="flex">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <Star key={i} className="h-4 w-4 fill-amber-400 text-amber-400" />
+                  ))}
+                </div>
+                <span className="text-sm font-medium text-muted-foreground">
+                  {locale === "es"
+                    ? `${site.stats_rating} de ${site.stats_clients} clientes satisfechos`
+                    : `${site.stats_rating} from ${site.stats_clients} happy clients`}
+                </span>
               </div>
-              <span className="text-sm font-medium text-muted-foreground">{t.home.heroRating}</span>
-            </div>
+            )}
           </div>
 
           <div className="reveal-scale relative" style={{ transitionDelay: "150ms" }}>
@@ -153,23 +165,28 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Trust bar */}
-        <div className="container relative mt-16 md:mt-24">
-          <p className="reveal text-center text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-            {t.home.trustedBy}
-          </p>
-          <div
-            className="reveal mx-auto mt-8 grid max-w-3xl grid-cols-2 gap-6 sm:grid-cols-4"
-            style={{ transitionDelay: "80ms" }}
-          >
-            {stats.map((s) => (
-              <div key={s.label} className="text-center">
-                <p className="font-display text-3xl font-extrabold text-foreground md:text-4xl">{s.value}</p>
-                <p className="mt-1 text-xs font-medium text-muted-foreground md:text-sm">{s.label}</p>
-              </div>
-            ))}
+        {/* Trust bar — only rendered once real stats are configured in Admin → Settings */}
+        {stats.length > 0 && (
+          <div className="container relative mt-16 md:mt-24">
+            <p className="reveal text-center text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+              {t.home.trustedBy}
+            </p>
+            <div
+              className={cn(
+                "reveal mx-auto mt-8 grid grid-cols-2 gap-6",
+                stats.length === 4 ? "max-w-3xl sm:grid-cols-4" : stats.length === 3 ? "max-w-2xl sm:grid-cols-3" : "max-w-xl",
+              )}
+              style={{ transitionDelay: "80ms" }}
+            >
+              {stats.map((s) => (
+                <div key={s.label} className="text-center">
+                  <p className="font-display text-3xl font-extrabold text-foreground md:text-4xl">{s.value}</p>
+                  <p className="mt-1 text-xs font-medium text-muted-foreground md:text-sm">{s.label}</p>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </section>
 
       {/* ============ SERVICES ============ */}
@@ -329,10 +346,21 @@ export default function Home() {
 function TestimonialsCarousel() {
   const { t } = useLocale();
   const [index, setIndex] = useState(0);
-  const items = t.testimonials.items;
+  // Live approved reviews from the database — no seeded/fake testimonials.
+  const reviewsQuery = trpc.content.reviews.useQuery(undefined, {
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+  const items = (reviewsQuery.data ?? []).map((r) => ({
+    name: r.customerName,
+    role: "",
+    text: r.text,
+    rating: r.rating,
+  }));
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
+    if (items.length === 0) return;
     timerRef.current = setInterval(() => setIndex((i) => (i + 1) % items.length), 6000);
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -344,6 +372,9 @@ function TestimonialsCarousel() {
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = setInterval(() => setIndex((i) => (i + 1) % items.length), 6000);
   };
+
+  // Hide the entire section until the first real review is approved in the admin panel.
+  if (items.length === 0) return null;
 
   return (
     <section className="py-20 md:py-28">
@@ -370,7 +401,7 @@ function TestimonialsCarousel() {
                 <figure key={item.name} className="w-full shrink-0 px-1">
                   <div className="rounded-[2rem] border border-border bg-card p-8 text-center shadow-soft md:p-12">
                     <div className="flex justify-center">
-                      {Array.from({ length: 5 }).map((_, i) => (
+                      {Array.from({ length: item.rating }).map((_, i) => (
                         <Star key={i} className="h-4 w-4 fill-amber-400 text-amber-400" />
                       ))}
                     </div>
@@ -379,7 +410,7 @@ function TestimonialsCarousel() {
                     </blockquote>
                     <figcaption className="mt-6">
                       <p className="font-display text-sm font-bold text-foreground">{item.name}</p>
-                      <p className="mt-0.5 text-xs text-muted-foreground">{item.role}</p>
+                      {item.role && <p className="mt-0.5 text-xs text-muted-foreground">{item.role}</p>}
                     </figcaption>
                   </div>
                 </figure>
@@ -421,4 +452,3 @@ function TestimonialsCarousel() {
     </section>
   );
 }
-

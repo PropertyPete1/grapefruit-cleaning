@@ -161,7 +161,7 @@ export const es: Dictionary = {
       "Grapefruit Cleaning Co. ofrece limpieza residencial y comercial cinco estrellas con profesionales verificados, productos ecológicos y reservas en línea sin complicaciones.",
     heroCtaPrimary: "Cotización Instantánea",
     heroCtaSecondary: "Explorar Servicios",
-    heroRating: "5.0 de más de 500 clientes satisfechos",
+    heroRating: "Servicio cinco estrellas, garantizado",
     trustedBy: "La confianza de propietarios, oficinas y los anfitriones de Airbnb mejor calificados",
     statsClients: "Clientes satisfechos",
     statsCleanings: "Limpiezas realizadas",
@@ -301,7 +301,7 @@ export const es: Dictionary = {
     storyText1:
       "Grapefruit Cleaning Co. nació de la frustración con una industria estancada en el pasado: horarios poco confiables, precios opacos y calidad inconsistente. Sabíamos que las familias y las empresas merecían algo mejor.",
     storyText2:
-      "Así que construimos una empresa de limpieza diferente: con cotizaciones instantáneas y transparentes, equipos capacitados profesionalmente y con antecedentes verificados, productos ecológicos y tecnología que hace que reservar sea tan fácil como pedir un café. Hoy, cientos de hogares, oficinas y rentas vacacionales confían en nosotros semana tras semana.",
+      "Así que construimos una empresa de limpieza diferente: con cotizaciones instantáneas y transparentes, equipos capacitados profesionalmente y con antecedentes verificados, productos ecológicos y tecnología que hace que reservar sea tan fácil como pedir un café. Hogares, oficinas y rentas vacacionales de toda el área confían en nosotros semana tras semana.",
     valuesTitle: "Nuestros valores",
     value1Title: "Transparencia radical",
     value1Text: "Cotizaciones instantáneas, listas de tareas claras y comunicación honesta: siempre sabrá exactamente por qué está pagando.",
@@ -524,7 +524,7 @@ export const es: Dictionary = {
       },
       {
         q: "¿Debo estar en casa durante la limpieza?",
-        a: "Es totalmente su decisión. Muchos clientes nos dejan instrucciones de acceso: un código de puerta, una caja de seguridad o una llave con un vecino. Nuestros equipos cuentan con la confianza de cientos de hogares cada semana.",
+        a: "Es totalmente su decisión. Muchos clientes nos dejan instrucciones de acceso: un código de puerta, una caja de seguridad o una llave con un vecino. Nuestros equipos con antecedentes verificados están capacitados para tratar cada hogar con cuidado.",
       },
       {
         q: "¿Puedo solicitar al mismo profesional en cada visita?",
@@ -700,7 +700,7 @@ export const es: Dictionary = {
       },
       {
         heading: "Sus derechos",
-        body: "Usted tiene derecho a acceder, corregir o eliminar la información personal que tenemos sobre usted, así como a oponerse o restringir cierto procesamiento. Para ejercer cualquiera de estos derechos, escríbanos a hello@grapefruitcleaning.com y le responderemos en un plazo de 30 días.",
+        body: "Usted tiene derecho a acceder, corregir o eliminar la información personal que tenemos sobre usted, así como a oponerse o restringir cierto procesamiento. Para ejercer cualquiera de estos derechos, contáctenos usando los datos de nuestra página de Contacto y le responderemos en un plazo de 30 días.",
       },
       {
         heading: "Cookies y analítica",
@@ -708,7 +708,7 @@ export const es: Dictionary = {
       },
       {
         heading: "Contacto",
-        body: "Si tiene preguntas sobre esta Política de Privacidad o sobre cómo manejamos sus datos, contacte a Grapefruit Cleaning Co. en hello@grapefruitcleaning.com o llame al (555) 472-3384.",
+        body: "Si tiene preguntas sobre esta Política de Privacidad o sobre cómo manejamos sus datos, contacte a Grapefruit Cleaning Co. usando los datos de nuestra página de Contacto.",
       },
     ],
     termsSections: [
@@ -750,7 +750,7 @@ export const es: Dictionary = {
       },
       {
         heading: "Contacto",
-        body: "Para preguntas sobre estos Términos de Servicio, contacte a Grapefruit Cleaning Co. en hello@grapefruitcleaning.com o al (555) 472-3384.",
+        body: "Para preguntas sobre estos Términos de Servicio, contacte a Grapefruit Cleaning Co. usando los datos de nuestra página de Contacto.",
       },
     ],
   },

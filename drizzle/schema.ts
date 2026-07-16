@@ -107,6 +107,12 @@ export const employees = mysqlTable("employees", {
   phone: varchar("phone", { length: 40 }),
   role: varchar("role", { length: 100 }).default("Cleaner"),
   active: boolean("active").default(true).notNull(),
+  /** Secure invite token for connecting this employee to a user account (null once accepted or revoked). */
+  inviteToken: varchar("inviteToken", { length: 64 }),
+  /** When the current invite token was generated. */
+  inviteSentAt: timestamp("inviteSentAt"),
+  /** When the employee accepted the invite and their account was linked. */
+  inviteAcceptedAt: timestamp("inviteAcceptedAt"),
   hiredAt: timestamp("hiredAt").defaultNow().notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });

@@ -16,6 +16,31 @@ const staffProcedure = protectedProcedure.use(({ ctx, next }) => {
 });
 
 export const staffRouter = router({
+  /**
+   * Accepts a staff-dashboard invite: any signed-in user with a valid token is
+   * linked to the matching employee record and promoted to the staff role.
+   * The token is single-use — cleared on success.
+   */
+  acceptInvite: protectedProcedure
+    .input(z.object({ token: z.string().min(16).max(64) }))
+    .mutation(async ({ ctx, input }) => {
+      const employee = await db.getEmployeeByInviteToken(input.token);
+      if (!employee) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "This invite link is invalid or has already been used." });
+      }
+      if (employee.userId && employee.userId !== ctx.user.id) {
+        throw new TRPCError({ code: "CONFLICT", message: "This invite was already accepted by another account." });
+      }
+      await db.updateEmployee(employee.id, {
+        userId: ctx.user.id,
+        inviteToken: null,
+        inviteAcceptedAt: new Date(),
+        active: true,
+      });
+      if (ctx.user.role !== "admin") await db.setUserRole(ctx.user.id, "staff");
+      return { success: true, employeeName: `${employee.firstName} ${employee.lastName}` } as const;
+    }),
+
   /** KPI summary for the staff home screen. */
   overview: staffProcedure.query(async ({ ctx }) => {
     const employee = await db.getEmployeeByUserId(ctx.user.id);

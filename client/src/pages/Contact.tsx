@@ -7,12 +7,14 @@ import { Label } from "@/components/ui/label";
 import { useLocale } from "@/i18n/LocaleContext";
 import { useSeo, localBusinessJsonLd } from "@/hooks/useSeo";
 import { useReveal } from "@/hooks/useReveal";
+import { useSiteInfo } from "@/hooks/useSiteInfo";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 
 export default function Contact() {
   const { t, locale } = useLocale();
-  useSeo({ title: t.meta.contact.title, description: t.meta.contact.description, jsonLd: [localBusinessJsonLd()] });
+  const { info: site } = useSiteInfo();
+  useSeo({ title: t.meta.contact.title, description: t.meta.contact.description, jsonLd: [localBusinessJsonLd(site)] });
   useReveal([locale]);
 
   const [form, setForm] = useState({ name: "", email: "", phone: "", subject: "", message: "" });
@@ -40,11 +42,11 @@ export default function Contact() {
   };
 
   const info = [
-    { icon: Phone, label: t.contact.phoneLabel, value: "(555) 472-3384" },
-    { icon: Mail, label: t.contact.emailLabel, value: "hello@grapefruitcleaning.com" },
-    { icon: Clock, label: t.contact.hoursLabel, value: t.contact.hoursValue },
-    { icon: MapPin, label: t.contact.areaLabel, value: t.contact.areaValue },
-  ];
+    { icon: Phone, label: t.contact.phoneLabel, value: site.business_phone },
+    { icon: Mail, label: t.contact.emailLabel, value: site.business_email },
+    { icon: Clock, label: t.contact.hoursLabel, value: site.business_hours },
+    { icon: MapPin, label: t.contact.areaLabel, value: site.service_area },
+  ].filter((item) => item.value);
 
   return (
     <>
@@ -68,6 +70,13 @@ export default function Contact() {
           <div className="lg:col-span-2">
             <div className="reveal space-y-5">
               <h2 className="font-display text-xl font-bold text-foreground">{t.contact.infoTitle}</h2>
+              {info.length === 0 && (
+                <p className="rounded-2xl border border-border bg-card p-5 text-sm leading-relaxed text-muted-foreground shadow-soft">
+                  {locale === "es"
+                    ? "La forma más rápida de contactarnos es enviando el formulario — respondemos en menos de una hora hábil."
+                    : "The fastest way to reach us is the message form — we respond within one business hour."}
+                </p>
+              )}
               {info.map((item) => {
                 const Icon = item.icon;
                 return (

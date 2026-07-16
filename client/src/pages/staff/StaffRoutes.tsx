@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link, Route, Switch, useLocation } from "wouter";
+import { Link, Route, Switch, useLocation, useRoute } from "wouter";
 import {
   CalendarDays,
   ChevronLeft,
@@ -20,6 +20,7 @@ import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { ASSETS } from "@/lib/assets";
 import { PageHeader, StatusBadge, SERVICE_LABELS, fmtMoney, fmtDate } from "../admin/adminShared";
+import StaffJoin from "./StaffJoin";
 
 const NAV_ITEMS = [
   { path: "/staff", label: "My Day", icon: SunMedium, exact: true },
@@ -388,6 +389,9 @@ function StaffShell({ children }: { children: React.ReactNode }) {
 
 export default function StaffRoutes() {
   const { user, loading, isAuthenticated } = useAuth({ redirectOnUnauthenticated: true });
+  // Invite links must work for accounts that don't have the staff role yet —
+  // accepting the invite is what grants it. Render the join page before gating.
+  const [isJoin, joinParams] = useRoute("/staff/join/:token");
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -396,6 +400,9 @@ export default function StaffRoutes() {
     );
   }
   if (!isAuthenticated) return null;
+  if (isJoin && joinParams?.token) {
+    return <StaffJoin token={joinParams.token} />;
+  }
   if (user?.role !== "staff" && user?.role !== "admin") {
     return (
       <div className="flex min-h-screen items-center justify-center bg-muted/30 px-4">

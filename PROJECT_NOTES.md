@@ -1,5 +1,36 @@
 # Grapefruit Cleaning Co. — Build Notes (internal)
 
+## ROUND 6 — Production-ready & plug-and-play (in progress, Jul 16 2026)
+DB VERIFIED EMPTY (explicit counts): bookings=0 customers=0 reviews=0 coupons=0 gallery=0 payments=0 invoices=0 employees=0 contact=0 settings=0 users=1 (owner/admin only). Test booking GFC-8LGLJ9 + its customer were purged earlier.
+
+DONE (phase 2 — employee invite onboarding):
+- employees table: added inviteToken varchar(64), inviteSentAt, inviteAcceptedAt (migration 0005 applied; all 3 columns verified via SHOW COLUMNS)
+- db.ts: getEmployeeByInviteToken(token)
+- emails.ts: buildStaffInviteEmail(firstName, inviteUrl)
+- admin router: createEmployee returns {id} (verified line 86); sendStaffInvite({employeeId, origin}) → crypto token, emails when employee.email set, returns {inviteUrl, emailed}; revokeStaffInvite({employeeId})
+- staff router: acceptInvite({token}) protectedProcedure — links employee.userId, clears token, sets inviteAcceptedAt, grants staff role (admins not demoted); idempotent same-account; CONFLICT other-account
+- client: StaffJoin.tsx at /staff/join/:token rendered inside StaffRoutes BEFORE role gate (useRoute); auto-accepts after sign-in (post-login redirect preserves /staff/*), navigates to /staff
+- AdminEmployees.tsx: "Send invite right away" toggle on add, invite-ready dialog w/ copy link, Resend/Revoke buttons, status (Connected/Invite pending/Not connected)
+- Tests: server/staffInvite.test.ts — 6 pass. TS clean. /admin/employees screenshot OK.
+
+REMAINING (phases 3-5):
+PHASE 3 DONE: shared/const.ts PUBLIC_SETTING_KEYS (10 keys incl stats_clients/cleanings/years/rating) + SiteInfo type; content.siteInfo public query (whitelist, trimmed); client/src/hooks/useSiteInfo.ts (EMPTY defaults, 5min staleTime); AdminSettings.tsx rewritten w/ 3 sections (Contact/Social/Homepage stats) + invalidates content.siteInfo, note says blank=hidden.
+
+PHASE 4 progress:
+- DONE SiteFooter.tsx: live info, rows hidden when empty, tel:/mailto: links, Instagram/Facebook icon links when set.
+- DONE Contact.tsx: info cards from site settings, filtered when empty; localBusinessJsonLd(site).
+- DONE useSeo.ts localBusinessJsonLd(site?): no more hardcoded telephone/email/aggregateRating; emits only when configured; areaServed; rating only when stats_rating+stats_clients set.
+PHASE 4 DONE:
+1. Home.tsx: stats band from useSiteInfo (hidden when none, responsive grid by count); hero rating line from stats_rating+stats_clients (hidden otherwise); localBusinessJsonLd(site); TestimonialsCarousel → trpc.content.reviews (approved only), hides when none, per-review star count.
+2. Testimonials.tsx rewritten: live reviews grid, empty state ("be the first"), bilingual ReviewForm → content.submitReview (pending approval), CTA kept.
+3. useSeo.ts localBusinessJsonLd(site?) — no hardcoded phone/email/rating; emits only when configured.
+4. emails.ts: BookingEmailData.bizPhone optional; contact lines adapt ("just reply to this email" when unset); booking.ts finalizeBooking + reminders.ts sendDueReminders fetch business_phone setting.
+5. en.ts/es.ts privacy/terms placeholders → "details on our Contact page" wording; heroRating key → "Five-star service, guaranteed" (unused in Home now but kept for dict type); About story + FAQ "hundreds of homes" softened.
+6. SiteFooter: live info rows w/ tel:/mailto:, social icons when set. Contact.tsx: cards from settings, filtered.
+7. grep verified: zero 472-3384 / grapefruitcleaning.com refs outside tests.
+NOTE: emails.test.ts may reference old email copy — check/update. testimonials.items in en/es dicts now unused by pages (kept for Dictionary type compat) — could strip later.
+PHASE 5 TODO: pnpm test full suite (fix email test expectations if broken), screenshots (/, /contact, /testimonials, /admin/settings, /admin/employees), verify no TS errors, single checkpoint (auto-publish), deliver with plug-and-play guide (add employee → invite; settings; approve reviews; Stripe claim; Gmail app password).
+
 ## ROUND 5 FINAL: Multi-county verification WORKING (Jul 16, 2026)
 All 68 vitest tests pass. server/property.ts now a multi-county provider chain:
 - Bexar (FULL sqft): maps.bexar.org ArcGIS Parcels — unchanged.

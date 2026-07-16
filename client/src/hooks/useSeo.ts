@@ -84,17 +84,25 @@ export function useSeo({ title, description, jsonLd, ogImage }: SeoOptions) {
   }, [title, description, locale, location, jsonLd, ogImage]);
 }
 
-/** Reusable LocalBusiness JSON-LD for Grapefruit Cleaning Co. */
-export function localBusinessJsonLd() {
-  return {
+/**
+ * Reusable LocalBusiness JSON-LD for Grapefruit Cleaning Co.
+ * Contact fields and ratings are only emitted when real values are configured
+ * in Admin → Settings — no placeholder data ever reaches search engines.
+ */
+export function localBusinessJsonLd(site?: {
+  business_phone?: string;
+  business_email?: string;
+  service_area?: string;
+  stats_rating?: string;
+  stats_clients?: string;
+}) {
+  const jsonLd: Record<string, unknown> = {
     "@context": "https://schema.org",
     "@type": "CleaningService",
     name: "Grapefruit Cleaning Co.",
     image: `${typeof window !== "undefined" ? window.location.origin : ""}${ASSETS.logoOriginal}`,
     description:
       "Premium residential and commercial cleaning services: recurring house cleaning, deep cleaning, move in/out, Airbnb turnovers, and office cleaning.",
-    telephone: "+1-555-472-3384",
-    email: "hello@grapefruitcleaning.com",
     priceRange: "$$",
     openingHoursSpecification: {
       "@type": "OpeningHoursSpecification",
@@ -102,10 +110,19 @@ export function localBusinessJsonLd() {
       opens: "08:00",
       closes: "18:00",
     },
-    aggregateRating: {
-      "@type": "AggregateRating",
-      ratingValue: "5.0",
-      reviewCount: "500",
-    },
   };
+  if (site?.business_phone) jsonLd.telephone = site.business_phone;
+  if (site?.business_email) jsonLd.email = site.business_email;
+  if (site?.service_area) jsonLd.areaServed = site.service_area;
+  if (site?.stats_rating && site?.stats_clients) {
+    const reviewCount = site.stats_clients.replace(/[^\d]/g, "");
+    if (reviewCount) {
+      jsonLd.aggregateRating = {
+        "@type": "AggregateRating",
+        ratingValue: site.stats_rating,
+        reviewCount,
+      };
+    }
+  }
+  return jsonLd;
 }

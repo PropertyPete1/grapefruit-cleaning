@@ -43,7 +43,7 @@ export function dueReminderKind(
   return null;
 }
 
-function toEmailData(booking: Booking, customer: Customer): BookingEmailData {
+function toEmailData(booking: Booking, customer: Customer, bizPhone?: string): BookingEmailData {
   const locale = booking.locale as "en" | "es";
   const extras: string[] = JSON.parse(booking.extras ?? "[]");
   return {
@@ -60,6 +60,7 @@ function toEmailData(booking: Booking, customer: Customer): BookingEmailData {
     customerPhone: customer.phone ?? undefined,
     address: [booking.addressLine, booking.city, booking.zip].filter(Boolean).join(", "),
     locale,
+    bizPhone,
   };
 }
 
@@ -69,12 +70,13 @@ export async function sendDueReminders(today?: string): Promise<{ scanned: numbe
   const bookings = await db.listUpcomingConfirmedBookings(todayStr);
   const details: string[] = [];
   let sent = 0;
+  const bizPhone = (await db.getSetting("business_phone"))?.trim() || undefined;
   for (const booking of bookings) {
     const kind = dueReminderKind(booking, todayStr);
     if (!kind) continue;
     const customer = await db.getCustomerById(booking.customerId);
     if (!customer) continue;
-    const email = buildReminderEmail(toEmailData(booking, customer), kind);
+    const email = buildReminderEmail(toEmailData(booking, customer, bizPhone), kind);
     const delivered = await deliverEmail(customer.email, email.subject, email.body);
     // Mark as sent even on fallback-log so a misconfigured mailbox can't spam customers later.
     await db.markReminderSent(booking.id, kind);
@@ -83,4 +85,3 @@ export async function sendDueReminders(today?: string): Promise<{ scanned: numbe
   }
   return { scanned: bookings.length, sent, details };
 }
-

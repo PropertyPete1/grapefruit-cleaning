@@ -24,6 +24,8 @@ export interface BookingEmailData {
   customerPhone?: string;
   address?: string;
   locale: "en" | "es";
+  /** Live business phone from Admin → Settings; omitted when not configured. */
+  bizPhone?: string;
 }
 
 const fmtUsd = (n: number) => `$${n.toFixed(0)} USD`;
@@ -141,7 +143,9 @@ export function buildCustomerConfirmation(data: BookingEmailData): { subject: st
         `• Puede reprogramar o cancelar sin costo hasta 24 horas antes.`,
         `• Su equipo de limpieza verificado llegará puntual.`,
         ``,
-        `¿Preguntas? Responda a este correo o llámenos al (555) 472-3384.`,
+        data.bizPhone
+          ? `¿Preguntas? Responda a este correo o llámenos al ${data.bizPhone}.`
+          : `¿Preguntas? Simplemente responda a este correo.`,
         ``,
         `Con aprecio,`,
         `El equipo de Grapefruit Cleaning Co.`,
@@ -176,7 +180,9 @@ export function buildCustomerConfirmation(data: BookingEmailData): { subject: st
       `• You can reschedule or cancel free of charge up to 24 hours ahead.`,
       `• Your vetted cleaning team will arrive right on time.`,
       ``,
-      `Questions? Reply to this email or call us at (555) 472-3384.`,
+      data.bizPhone
+        ? `Questions? Reply to this email or call us at ${data.bizPhone}.`
+        : `Questions? Just reply to this email.`,
       ``,
       `Warmly,`,
       `The Grapefruit Cleaning Co. Team`,
@@ -219,7 +225,7 @@ export function buildReminderEmail(
         ``,
         `Saldo restante a pagar al completar el servicio: ${fmtUsd(data.total - data.deposit)}`,
         ``,
-        `¿Necesita reprogramar? Responda a este correo o llámenos al (555) 472-3384${kind === "week" ? " — sin costo hasta 24 horas antes de su cita" : ""}.`,
+        `¿Necesita reprogramar? ${data.bizPhone ? `Responda a este correo o llámenos al ${data.bizPhone}` : `Responda a este correo`}${kind === "week" ? " — sin costo hasta 24 horas antes de su cita" : ""}.`,
         ``,
         `Con aprecio,`,
         `El equipo de Grapefruit Cleaning Co.`,
@@ -254,7 +260,7 @@ export function buildReminderEmail(
       ``,
       `Remaining balance due on completion: ${fmtUsd(data.total - data.deposit)}`,
       ``,
-      `Need to reschedule? Reply to this email or call us at (555) 472-3384${kind === "week" ? " — free of charge up to 24 hours before your appointment" : ""}.`,
+      `Need to reschedule? ${data.bizPhone ? `Reply to this email or call us at ${data.bizPhone}` : `Just reply to this email`}${kind === "week" ? " — free of charge up to 24 hours before your appointment" : ""}.`,
       ``,
       `Warmly,`,
       `The Grapefruit Cleaning Co. Team`,
@@ -319,6 +325,32 @@ export interface ContactEmailData {
   subject?: string;
   message: string;
   locale: "en" | "es";
+}
+
+/** Builds the staff dashboard invitation email for a new team member. */
+export function buildStaffInviteEmail(firstName: string, inviteUrl: string): { subject: string; body: string } {
+  return {
+    subject: `You're invited to the Grapefruit Cleaning Co. team dashboard`,
+    body: [
+      `Hi ${firstName},`,
+      ``,
+      `Welcome to the Grapefruit Cleaning Co. team! Your staff dashboard is ready — it's where you'll see your assigned jobs, the daily schedule, customer addresses, and job details.`,
+      ``,
+      `GET SET UP IN 2 STEPS`,
+      `1. Open your personal invite link below.`,
+      `2. Sign in (or create an account) — your access is connected automatically.`,
+      ``,
+      `Your invite link:`,
+      `${inviteUrl}`,
+      ``,
+      `This link is personal to you — please don't share it with anyone.`,
+      ``,
+      `If you have any questions, just reply to this email.`,
+      ``,
+      `Warmly,`,
+      `Grapefruit Cleaning Co.`,
+    ].join("\n"),
+  };
 }
 
 export async function sendContactNotification(data: ContactEmailData): Promise<void> {

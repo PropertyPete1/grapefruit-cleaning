@@ -135,3 +135,18 @@
 - [x] Update coverage tests + live lookup tests for each new county (68 tests passing, live CAD hits verified)
 - [x] Update customer-facing copy: county-specific "address verified" notice in Quote + Booking (EN/ES)
 - [x] Run full test suite, checkpoint, deliver
+
+## Round 6 — Production-ready & plug-and-play
+
+- [x] Audit site for all placeholder/demo/fake data (stats, testimonials, contact info, hardcoded copy)
+- [x] Employee onboarding: admin form to add employee (name, email, phone, role) generating a secure invite link
+- [x] Invite link flow: /staff/join/:token — employee signs in, token links their account to the employee record and grants staff role automatically
+- [x] Invite management: pending/accepted status, copy link, resend/revoke invite
+- [x] Invite email via Gmail SMTP sent to the new employee
+- [x] Business settings module in admin: phone, email, service area/address, business hours, social links, homepage stats (clients/cleanings/years/rating)
+- [x] Public site reads business settings via public endpoint (header, footer, contact page, JSON-LD, emails)
+- [x] Remove fake homepage stats (500+ clients, 12,000+ cleanings, 5.0 rating) — settings-driven, section hidden when unset
+- [x] Remove illustrative testimonials from public pages — show only real approved DB reviews; hide sections when none; public review-submission form added
+- [x] Replace placeholder contact info everywhere ((555) 472-3384, hello@grapefruitcleaning.com) with settings values; emails say "reply to this email" when phone unset
+- [x] Verify no seeded/test data in database tables — purged the one Stripe-test booking + its customer; all other tables empty
+- [x] Tests for invite flow + settings endpoints; run full suite (77 tests passing); checkpoint & deliver

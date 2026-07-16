@@ -280,6 +280,13 @@ export async function getEmployeeByUserId(userId: number) {
   return rows[0] ?? null;
 }
 
+/** Find an employee by their invite token. */
+export async function getEmployeeByInviteToken(token: string) {
+  const db = requireDb(await getDb());
+  const rows = await db.select().from(employees).where(eq(employees.inviteToken, token)).limit(1);
+  return rows[0] ?? null;
+}
+
 /** All auth users (for the admin staff-linking UI). */
 export async function listAllUsers() {
   const db = requireDb(await getDb());

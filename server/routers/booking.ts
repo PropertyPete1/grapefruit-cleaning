@@ -311,6 +311,7 @@ export async function finalizeBooking(bookingId: number, paymentIntentId: string
   if (customer) {
     const locale = booking.locale as "en" | "es";
     const extras: string[] = JSON.parse(booking.extras ?? "[]");
+    const bizPhone = (await db.getSetting("business_phone"))?.trim() || undefined;
     await sendBookingEmails({
       reference: booking.reference,
       serviceName: SERVICE_NAMES[booking.serviceType][locale],
@@ -325,6 +326,7 @@ export async function finalizeBooking(bookingId: number, paymentIntentId: string
       customerPhone: customer.phone ?? undefined,
       address: [booking.addressLine, booking.city, booking.zip].filter(Boolean).join(", "),
       locale,
+      bizPhone,
     });
   }
 }

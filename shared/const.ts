@@ -4,6 +4,27 @@ export const AXIOS_TIMEOUT_MS = 30_000;
 export const UNAUTHED_ERR_MSG = 'Please login (10001)';
 export const NOT_ADMIN_ERR_MSG = 'You do not have required permission (10002)';
 
+/**
+ * Public business-settings keys editable from Admin → Settings.
+ * Only these keys are ever exposed through the public siteInfo endpoint.
+ */
+export const PUBLIC_SETTING_KEYS = [
+  "business_phone",
+  "business_email",
+  "business_hours",
+  "service_area",
+  "instagram_url",
+  "facebook_url",
+  "stats_clients",
+  "stats_cleanings",
+  "stats_years",
+  "stats_rating",
+] as const;
+export type PublicSettingKey = (typeof PUBLIC_SETTING_KEYS)[number];
+
+/** Business info shape served to the public site. Empty string = not configured (hide it). */
+export type SiteInfo = Record<PublicSettingKey, string>;
+
 // One-time nonce cookie that binds an OAuth login to the browser that started
 // it. The `__Host-` prefix forces the cookie host-only (Secure, Path=/, no
 // Domain), so a sibling *.manus.space site cannot plant a matching value in a

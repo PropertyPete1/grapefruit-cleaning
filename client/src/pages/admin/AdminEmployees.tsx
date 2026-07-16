@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { KeyRound, Plus, Trash2 } from "lucide-react";
+import { Check, Copy, KeyRound, Mail, Plus, Send, Trash2, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -29,16 +29,38 @@ export default function AdminEmployees() {
   const authUsers = trpc.admin.listUsers.useQuery();
   const [open, setOpen] = useState(false);
   const [linkTarget, setLinkTarget] = useState<{ id: number; name: string; userId: number | null } | null>(null);
+  const [inviteResult, setInviteResult] = useState<{ name: string; url: string; emailed: boolean } | null>(null);
+  const [copied, setCopied] = useState(false);
   const [form, setForm] = useState({ firstName: "", lastName: "", email: "", phone: "", role: "Cleaner" });
+  const [sendInviteOnCreate, setSendInviteOnCreate] = useState(true);
 
   const create = trpc.admin.createEmployee.useMutation({
-    onSuccess: () => {
+    onSuccess: async (data) => {
       utils.admin.employees.invalidate();
       setOpen(false);
+      const name = `${form.firstName} ${form.lastName}`;
+      if (sendInviteOnCreate) {
+        try {
+          const res = await sendInvite.mutateAsync({ employeeId: data.id, origin: window.location.origin });
+          setInviteResult({ name, url: res.inviteUrl, emailed: res.emailed });
+        } catch {
+          toast.error("Member added, but the invite could not be created. Use 'Send invite' on their card.");
+        }
+      }
       setForm({ firstName: "", lastName: "", email: "", phone: "", role: "Cleaner" });
       toast.success("Team member added");
     },
     onError: () => toast.error("Failed to add team member"),
+  });
+  const sendInvite = trpc.admin.sendStaffInvite.useMutation({
+    onSuccess: () => utils.admin.employees.invalidate(),
+  });
+  const revokeInvite = trpc.admin.revokeStaffInvite.useMutation({
+    onSuccess: () => {
+      utils.admin.employees.invalidate();
+      toast.success("Invite revoked — the link no longer works");
+    },
+    onError: () => toast.error("Failed to revoke invite"),
   });
   const update = trpc.admin.updateEmployee.useMutation({
     onSuccess: () => utils.admin.employees.invalidate(),
@@ -62,6 +84,26 @@ export default function AdminEmployees() {
   });
 
   const userById = (id: number | null) => (authUsers.data ?? []).find(u => u.id === id);
+
+  const copyInviteUrl = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      toast.success("Invite link copied");
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("Could not copy — select and copy the link manually");
+    }
+  };
+
+  const handleSendInvite = async (e: { id: number; firstName: string; lastName: string; email: string | null }) => {
+    try {
+      const res = await sendInvite.mutateAsync({ employeeId: e.id, origin: window.location.origin });
+      setInviteResult({ name: `${e.firstName} ${e.lastName}`, url: res.inviteUrl, emailed: res.emailed });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to create invite");
+    }
+  };
 
   return (
     <div>
@@ -127,6 +169,15 @@ export default function AdminEmployees() {
                   />
                 </div>
               </div>
+              <label className="flex cursor-pointer items-center gap-2.5 rounded-xl bg-muted/50 p-3">
+                <Switch checked={sendInviteOnCreate} onCheckedChange={setSendInviteOnCreate} />
+                <span className="text-sm text-foreground">
+                  Send staff dashboard invite right away
+                  <span className="block text-xs text-muted-foreground">
+                    Creates their personal join link{form.email ? ` and emails it to ${form.email}` : " (add an email to auto-send it)"}
+                  </span>
+                </span>
+              </label>
               <Button
                 className="mt-2 w-full rounded-xl"
                 disabled={!form.firstName || !form.lastName || create.isPending}
@@ -198,7 +249,11 @@ export default function AdminEmployees() {
                 <div className="min-w-0">
                   <p className="text-xs font-medium text-muted-foreground">Staff dashboard access</p>
                   <p className="truncate text-xs font-semibold text-foreground">
-                    {e.userId ? (userById(e.userId)?.name ?? userById(e.userId)?.email ?? `User #${e.userId}`) : "Not linked"}
+                    {e.userId
+                      ? `Connected — ${userById(e.userId)?.name ?? userById(e.userId)?.email ?? `User #${e.userId}`}`
+                      : e.inviteToken
+                        ? "Invite pending"
+                        : "Not connected"}
                   </p>
                 </div>
                 <Button
@@ -210,10 +265,73 @@ export default function AdminEmployees() {
                   <KeyRound className="mr-1.5 h-3.5 w-3.5" /> {e.userId ? "Manage" : "Grant"}
                 </Button>
               </div>
+              {!e.userId && (
+                <div className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3">
+                  <Button
+                    size="sm"
+                    className="rounded-full"
+                    disabled={sendInvite.isPending}
+                    onClick={() => handleSendInvite(e)}
+                  >
+                    <Send className="mr-1.5 h-3.5 w-3.5" />
+                    {e.inviteToken ? "Resend invite" : "Send invite"}
+                  </Button>
+                  {e.inviteToken && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="rounded-full bg-card text-muted-foreground"
+                      disabled={revokeInvite.isPending}
+                      onClick={() => revokeInvite.mutate({ employeeId: e.id })}
+                    >
+                      <XCircle className="mr-1.5 h-3.5 w-3.5" /> Revoke
+                    </Button>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>
       )}
+
+      {/* Invite created dialog: shows the link to copy/share */}
+      <Dialog open={inviteResult !== null} onOpenChange={v => !v && setInviteResult(null)}>
+        <DialogContent className="rounded-2xl sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Invite ready — {inviteResult?.name}</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            {inviteResult?.emailed ? (
+              <>
+                <Mail className="mr-1.5 inline h-4 w-4 text-secondary" />
+                The invite was emailed to them. You can also share this personal link directly (text message works
+                great):
+              </>
+            ) : (
+              <>Share this personal link with them (text message works great). When they open it and sign in, their
+                staff dashboard access connects automatically:</>
+            )}
+          </p>
+          <div className="flex items-center gap-2">
+            <Input readOnly value={inviteResult?.url ?? ""} className="rounded-xl text-xs" onFocus={ev => ev.target.select()} />
+            <Button
+              size="icon"
+              variant="outline"
+              className="shrink-0 rounded-xl bg-card"
+              onClick={() => inviteResult && copyInviteUrl(inviteResult.url)}
+              aria-label="Copy invite link"
+            >
+              {copied ? <Check className="h-4 w-4 text-secondary" /> : <Copy className="h-4 w-4" />}
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            The link is single-use and personal. You can resend or revoke it anytime from their card.
+          </p>
+          <Button className="mt-1 w-full rounded-xl" onClick={() => setInviteResult(null)}>
+            Done
+          </Button>
+        </DialogContent>
+      </Dialog>
 
       {/* Staff access linking dialog */}
       <Dialog open={linkTarget !== null} onOpenChange={v => !v && setLinkTarget(null)}>

@@ -158,7 +158,7 @@ export const en = {
       "Grapefruit Cleaning Co. delivers five-star residential and commercial cleaning with vetted professionals, eco-friendly products, and effortless online booking.",
     heroCtaPrimary: "Get an Instant Quote",
     heroCtaSecondary: "Explore Services",
-    heroRating: "5.0 from 500+ happy clients",
+    heroRating: "Five-star service, guaranteed",
     trustedBy: "Trusted by homeowners, offices, and top-rated Airbnb hosts",
     statsClients: "Happy clients",
     statsCleanings: "Cleanings completed",
@@ -293,7 +293,7 @@ export const en = {
     storyText1:
       "Grapefruit Cleaning Co. was born from frustration with an industry stuck in the past — unreliable scheduling, opaque pricing, and inconsistent quality. We knew families and businesses deserved better.",
     storyText2:
-      "So we built a different kind of cleaning company: one with transparent instant quotes, professionally trained and background-checked teams, eco-friendly products, and technology that makes booking as easy as ordering coffee. Today, hundreds of homes, offices, and vacation rentals trust us week after week.",
+      "So we built a different kind of cleaning company: one with transparent instant quotes, professionally trained and background-checked teams, eco-friendly products, and technology that makes booking as easy as ordering coffee. Homes, offices, and vacation rentals across the area trust us week after week.",
     valuesTitle: "What we stand for",
     value1Title: "Radical transparency",
     value1Text: "Instant quotes, clear checklists, and honest communication — you always know exactly what you're paying for.",
@@ -515,7 +515,7 @@ export const en = {
       },
       {
         q: "Do I need to be home during the cleaning?",
-        a: "It's entirely up to you. Many clients provide entry instructions — a door code, lockbox, or key with a neighbor. Our teams are trusted in hundreds of homes every week.",
+        a: "It's entirely up to you. Many clients provide entry instructions — a door code, lockbox, or key with a neighbor. Our background-checked teams are trained to treat every home with care.",
       },
       {
         q: "Can I request the same cleaner every visit?",
@@ -689,7 +689,7 @@ export const en = {
       },
       {
         heading: "Your Rights",
-        body: "You have the right to access, correct, or delete the personal information we hold about you, and to object to or restrict certain processing. To exercise any of these rights, contact us at hello@grapefruitcleaning.com and we will respond within 30 days.",
+        body: "You have the right to access, correct, or delete the personal information we hold about you, and to object to or restrict certain processing. To exercise any of these rights, reach us using the details on our Contact page and we will respond within 30 days.",
       },
       {
         heading: "Cookies and Analytics",
@@ -697,7 +697,7 @@ export const en = {
       },
       {
         heading: "Contact Us",
-        body: "If you have questions about this Privacy Policy or how we handle your data, contact Grapefruit Cleaning Co. at hello@grapefruitcleaning.com or call (555) 472-3384.",
+        body: "If you have questions about this Privacy Policy or how we handle your data, contact Grapefruit Cleaning Co. using the details on our Contact page.",
       },
     ],
     termsSections: [
@@ -739,7 +739,7 @@ export const en = {
       },
       {
         heading: "Contact",
-        body: "For questions about these Terms of Service, contact Grapefruit Cleaning Co. at hello@grapefruitcleaning.com or (555) 472-3384.",
+        body: "For questions about these Terms of Service, contact Grapefruit Cleaning Co. using the details on our Contact page.",
       },
     ],
   },

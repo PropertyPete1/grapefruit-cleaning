@@ -1,6 +1,8 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { randomBytes } from "node:crypto";
 import * as db from "../db";
+import { buildStaffInviteEmail, deliverEmail } from "../emails";
 import { protectedProcedure, router } from "../_core/trpc";
 
 /** Admin-only procedure guard. */
@@ -106,6 +108,33 @@ export const adminRouter = router({
   }),
   /** Auth users list for the staff-access linking UI. */
   listUsers: adminProcedure.query(() => db.listAllUsers()),
+  /**
+   * Generates (or regenerates) a secure staff-dashboard invite for an employee
+   * and emails it to them when they have an email on file. Returns the invite URL.
+   */
+  sendStaffInvite: adminProcedure
+    .input(z.object({ employeeId: z.number().int(), origin: z.string().url().max(500) }))
+    .mutation(async ({ input }) => {
+      const employee = (await db.listEmployees()).find((e) => e.id === input.employeeId);
+      if (!employee) throw new TRPCError({ code: "NOT_FOUND", message: "Employee not found" });
+      if (employee.userId) throw new TRPCError({ code: "BAD_REQUEST", message: "This team member is already connected" });
+      const token = randomBytes(24).toString("hex");
+      await db.updateEmployee(input.employeeId, { inviteToken: token, inviteSentAt: new Date(), inviteAcceptedAt: null });
+      const inviteUrl = `${new URL(input.origin).origin}/staff/join/${token}`;
+      let emailed = false;
+      if (employee.email) {
+        const invite = buildStaffInviteEmail(employee.firstName, inviteUrl);
+        emailed = await deliverEmail(employee.email, invite.subject, invite.body);
+      }
+      return { inviteUrl, emailed } as const;
+    }),
+  /** Revokes a pending staff invite so the link stops working. */
+  revokeStaffInvite: adminProcedure
+    .input(z.object({ employeeId: z.number().int() }))
+    .mutation(async ({ input }) => {
+      await db.updateEmployee(input.employeeId, { inviteToken: null, inviteSentAt: null });
+      return { success: true } as const;
+    }),
   /**
    * Grant staff access: links an employee record to a signed-in user account
    * and promotes that user to the "staff" role (or revokes it when unlinking).

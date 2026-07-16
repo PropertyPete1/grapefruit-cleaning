@@ -36,6 +36,13 @@
       "when": 1784214530801,
       "tag": "0004_melted_thaddeus_ross",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1784222694457,
+      "tag": "0005_freezing_hex",
+      "breakpoints": true
     }
   ]
 }
