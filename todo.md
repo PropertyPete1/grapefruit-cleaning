@@ -197,3 +197,8 @@
 - [x] Fix "Uncaught SyntaxError: Unexpected token '<'" on /en: reload once on vite:preloadError (stale hashed chunks after deploy)
 - [x] Serve 404 for missing /assets files instead of HTML SPA fallback
 - [x] Harden clientIp() for contexts without req (test env)
+
+## Round 11 — Blog cover image upload
+- [ ] Server: admin blog image upload endpoint (S3 via storagePut)
+- [ ] AdminBlog editor: upload button + preview alongside URL field
+- [ ] Test + checkpoint

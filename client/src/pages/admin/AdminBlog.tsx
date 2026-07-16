@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { useRef, useState } from "react";
+import { ImageUp, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -73,6 +73,7 @@ export default function AdminBlog() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<PostForm>(EMPTY);
   const [deleteId, setDeleteId] = useState<number | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const isEdit = form.id !== undefined;
 
   const invalidate = () => {
@@ -109,6 +110,33 @@ export default function AdminBlog() {
     },
     onError: () => toast.error("Failed to delete"),
   });
+  const uploadCover = trpc.admin.uploadBlogCover.useMutation({
+    onSuccess: ({ url }) => {
+      setForm((f) => ({ ...f, coverImage: url }));
+      toast.success("Cover image uploaded");
+    },
+    onError: (e) => toast.error(e.message || "Upload failed — try a smaller image"),
+  });
+
+  const handleCoverFile = (file: File | undefined | null) => {
+    if (!file) return;
+    if (!/^image\/(png|jpe?g|webp|gif|avif)$/i.test(file.type)) {
+      toast.error("Please choose a PNG, JPEG, WebP, GIF, or AVIF image");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("Image must be 5MB or smaller");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const base64 = result.slice(result.indexOf(",") + 1);
+      uploadCover.mutate({ fileName: file.name, mimeType: file.type, dataBase64: base64 });
+    };
+    reader.onerror = () => toast.error("Could not read the file");
+    reader.readAsDataURL(file);
+  };
 
   const openCreate = () => {
     setForm({ ...EMPTY, publishedAt: new Date().toISOString().slice(0, 10) });
@@ -307,12 +335,59 @@ export default function AdminBlog() {
                 />
               </div>
               <div className="space-y-1.5">
-                <Label>Cover image URL (optional)</Label>
-                <Input
-                  value={form.coverImage}
-                  onChange={(e) => setForm((f) => ({ ...f, coverImage: e.target.value }))}
-                  placeholder="https://... or /manus-storage/..."
-                />
+                <Label>Cover image (optional)</Label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={form.coverImage}
+                    onChange={(e) => setForm((f) => ({ ...f, coverImage: e.target.value }))}
+                    placeholder="Upload or paste an image URL"
+                  />
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif,image/avif"
+                    className="hidden"
+                    onChange={(e) => {
+                      handleCoverFile(e.target.files?.[0]);
+                      e.target.value = "";
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="shrink-0"
+                    disabled={uploadCover.isPending}
+                    onClick={() => fileInputRef.current?.click()}
+                    title="Upload image"
+                  >
+                    {uploadCover.isPending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <ImageUp className="h-4 w-4" />
+                    )}
+                  </Button>
+                </div>
+                {form.coverImage ? (
+                  <div className="relative mt-1 inline-block">
+                    <img
+                      src={form.coverImage}
+                      alt="Cover preview"
+                      className="h-20 w-32 rounded-lg border object-cover"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = "none";
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="absolute -right-2 -top-2 rounded-full border bg-background p-0.5 shadow-sm transition-colors hover:bg-muted"
+                      onClick={() => setForm((f) => ({ ...f, coverImage: "" }))}
+                      title="Remove cover image"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ) : null}
               </div>
               <div className="space-y-1.5">
                 <Label>Display date</Label>

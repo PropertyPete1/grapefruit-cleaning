@@ -3,6 +3,7 @@ import { z } from "zod";
 import { randomBytes } from "node:crypto";
 import * as db from "../db";
 import { buildStaffInviteEmail, deliverEmail } from "../emails";
+import { storagePut } from "../storage";
 import { protectedProcedure, router } from "../_core/trpc";
 
 /** Admin-only procedure guard. */
@@ -275,6 +276,33 @@ export const adminRouter = router({
 
   // ---------- Blog ----------
   blogPosts: adminProcedure.query(() => db.listBlogPosts()),
+  /** Uploads a blog cover image (base64) to S3 storage and returns its public URL. */
+  uploadBlogCover: adminProcedure
+    .input(
+      z.object({
+        fileName: z.string().min(1).max(200),
+        mimeType: z
+          .string()
+          .regex(/^image\/(png|jpe?g|webp|gif|avif)$/i, "Only PNG, JPEG, WebP, GIF, or AVIF images are allowed"),
+        // ~5MB binary ≈ 6.8M base64 chars
+        dataBase64: z.string().min(1).max(7_000_000),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const buf = Buffer.from(input.dataBase64, "base64");
+      if (buf.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "Empty file" });
+      if (buf.length > 5 * 1024 * 1024)
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Image must be 5MB or smaller" });
+      // Sanitize the file name; storagePut appends a unique hash suffix itself.
+      const safeName =
+        input.fileName
+          .toLowerCase()
+          .replace(/[^a-z0-9._-]+/g, "-")
+          .replace(/^[-.]+|[-.]+$/g, "")
+          .slice(-80) || "cover.jpg";
+      const { url } = await storagePut(`blog-covers/${safeName}`, buf, input.mimeType);
+      return { url } as const;
+    }),
   createBlogPost: adminProcedure
     .input(
       z.object({
