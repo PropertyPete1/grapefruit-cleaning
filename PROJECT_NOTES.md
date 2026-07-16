@@ -101,3 +101,12 @@ Site is PUBLISHED at grapeclean-skvabkkr.manus.space.
 - REMAINING: (a) real email delivery — request secrets RESEND_API_KEY, EMAIL_FROM, OWNER_EMAIL via webdev_request_secrets (user said "let me know when ready for email"); update server/emails.ts to send via Resend fetch API w/ console fallback; write vitest for email sending logic; (b) verify stripeWebhook calls sendBookingEmails; (c) run all tests, checkpoint (auto-publishes), deliver.
 - User note: user was told sandbox claim link earlier; auto-publish ENABLED (checkpoint = live).
 - Stale vite error about AdminSettings/AdminCoupons imports in logs is old (files exist, tsc 0 errors, /admin 200).
+
+## ROUND 2 FINAL STATE (Jul 16, 2026)
+- Emails now via Gmail SMTP (nodemailer) in server/emails.ts. Secrets set + live-verified: GMAIL_USER=grapefruit@grapefruitclean.com + GMAIL_APP_PASSWORD (app password). server/gmail.verify.test.ts PASSED against smtp.gmail.com.
+- Deposit confirmation email: triggered by Stripe webhook checkout.session.completed → finalizeBooking → sendBookingEmails (customer bilingual + owner copy to GMAIL_USER/OWNER_EMAIL).
+- Reminders: server/reminders.ts (dueReminderKind: week reminder 2-7 days out only if booked ≥7 days ahead; day reminder ≤1 day out; idempotent via bookings.weekReminderSentAt/dayReminderSentAt — migration applied). Handler POST /api/scheduled/sendReminders in server/scheduledRoutes.ts registered in _core/index.ts.
+- Heartbeat cron created: daily-booking-reminders, task_uid=jnGJSVTd5zwvu9vksDDRLm, cron "0 0 14 * * *" (14:00 UTC = 9am CDT daily).
+- Checkpoint a3f9c16b saved (auto-publish = live). Production URL: grapeclean-skvabkkr.manus.space (per earlier note). grapefruit-cleaning.manus.space 404s — use grapeclean-skvabkkr.
+- Tests: 38 passing + 1 live gmail verify. TS clean.
+- Remaining: verify production URL serves latest + reminder endpoint reachable, final delivery.

@@ -101,7 +101,7 @@
 - [x] Reminder email 1 day before cleaning, bilingual
 - [x] Scheduled reminder handler /api/scheduled/sendReminders with sent-tracking to avoid duplicates
 - [x] Tests for reminder scheduling logic and Gmail transport fallback (38 tests + live SMTP verify)
-- [ ] Create daily Heartbeat cron for reminders (after deploy)
-- [ ] Real customer email delivery on deposit payment (Resend integration, bilingual)
-- [ ] Email owner + customer after Stripe webhook confirms deposit
-- [ ] Test everything, checkpoint, deliver
+- [x] Create daily Heartbeat cron for reminders (task_uid: jnGJSVTd5zwvu9vksDDRLm, daily 14:00 UTC / 9am CDT)
+- [x] Real customer email delivery on deposit payment (via Gmail SMTP instead of Resend, bilingual)
+- [x] Email owner + customer after Stripe webhook confirms deposit (Gmail SMTP + owner notification)
+- [x] Test everything, checkpoint, deliver (38 tests pass, live SMTP verified, test email delivered, prod endpoint reachable, cron registered)
