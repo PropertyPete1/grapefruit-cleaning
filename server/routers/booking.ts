@@ -10,6 +10,7 @@ import {
 import { parseSchedule, slotsForDate, SCHEDULE_SETTING_KEY } from "@shared/schedule";
 import * as db from "../db";
 import { assertRateLimit, clientIp } from "../antiSpam";
+import { STALE_DEPOSIT_MINUTES } from "../bookingRules";
 import { sendBookingEmails } from "../emails";
 import { lookupPropertySqft } from "../property";
 import { getStripe } from "../stripe";
@@ -240,6 +241,10 @@ export const bookingRouter = router({
         customer_email: input.email,
         client_reference_id: String(bookingId),
         allow_promotion_codes: false,
+        // The payment link dies when the booking goes stale and releases its
+        // slot (STALE_DEPOSIT_MINUTES), so an old tab can't quietly pay for a
+        // slot that has been given away. Stripe allows 30 min–24 h.
+        expires_at: Math.floor(Date.now() / 1000) + STALE_DEPOSIT_MINUTES * 60,
         line_items: [
           {
             price_data: {
@@ -335,9 +340,20 @@ export async function finalizeBooking(bookingId: number, paymentIntentId: string
   const booking = await db.getBookingById(bookingId);
   if (!booking || (booking.status !== "pending_deposit" && booking.status !== "expired")) return;
 
+  // Defense in depth for late (expired-recovery) payments: the slot may have
+  // been retaken while this checkout sat expired. Still confirm — a paid
+  // deposit is never dropped silently — but flag the conflict so the owner
+  // notification asks them to reschedule one of the two bookings.
+  // (Safe to check only for expired bookings: an expired row never blocks the
+  // slot itself, whereas a fresh pending_deposit row would match its own slot.)
+  const slotConflict =
+    booking.status === "expired" &&
+    (await db.getBookedSlots(booking.scheduledDate)).includes(booking.scheduledTime);
+
   await db.updateBooking(bookingId, {
     status: "confirmed",
     stripePaymentIntentId: paymentIntentId ?? undefined,
+    slotConflict,
   });
 
   await db.createPayment({
@@ -375,6 +391,7 @@ export async function finalizeBooking(bookingId: number, paymentIntentId: string
       address: [booking.addressLine, booking.city, booking.zip].filter(Boolean).join(", "),
       locale,
       bizPhone,
+      slotConflict,
     });
   }
 }

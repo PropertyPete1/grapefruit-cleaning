@@ -92,6 +92,14 @@ export default function AdminAppointments() {
                     <td className="px-5 py-3.5">
                       {fmtDate(b.scheduledDate)}
                       <span className="block text-xs text-muted-foreground">{b.scheduledTime}</span>
+                      {b.slotConflict && (
+                        <span
+                          className="mt-1 block w-fit rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-700"
+                          title="This booking was paid after its checkout expired and another booking now holds the same date and time — reschedule one of them"
+                        >
+                          ⚠ Slot conflict
+                        </span>
+                      )}
                     </td>
                     <td className="max-w-44 truncate px-5 py-3.5 text-xs text-muted-foreground">
                       {b.addressLine}, {b.city}

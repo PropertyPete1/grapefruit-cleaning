@@ -56,6 +56,19 @@ describe("booking confirmation emails", () => {
     expect(content).toContain("Deposit paid: $50 USD");
   });
 
+  it("warns the owner when a late payment recovered a booking into a retaken slot", () => {
+    const { title, content } = buildOwnerNotification({ ...baseData, slotConflict: true });
+    expect(title).toContain("SCHEDULING CONFLICT");
+    expect(content).toContain("SCHEDULING CONFLICT");
+    expect(content).toContain("reschedule");
+  });
+
+  it("adds no conflict warning on a normal confirmation", () => {
+    const { title, content } = buildOwnerNotification(baseData);
+    expect(title).not.toContain("CONFLICT");
+    expect(content).not.toContain("CONFLICT");
+  });
+
   it("handles bookings without extras gracefully", () => {
     const { body } = buildCustomerConfirmation({ ...baseData, extras: [] });
     expect(body).toContain("Extras: None");

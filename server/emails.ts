@@ -26,6 +26,11 @@ export interface BookingEmailData {
   locale: "en" | "es";
   /** Live business phone from Admin → Settings; omitted when not configured. */
   bizPhone?: string;
+  /**
+   * True when a late (expired-recovery) payment confirmed this booking after
+   * its slot was retaken — the owner notification must warn about the clash.
+   */
+  slotConflict?: boolean;
 }
 
 const fmtUsd = (n: number) => `$${n.toFixed(0)} USD`;
@@ -272,8 +277,14 @@ export function buildReminderEmail(
 
 export function buildOwnerNotification(data: BookingEmailData): { title: string; content: string } {
   return {
-    title: `New booking ${data.reference} — ${data.serviceName} on ${data.date} at ${data.time}`,
+    title: `${data.slotConflict ? "⚠️ SCHEDULING CONFLICT — " : ""}New booking ${data.reference} — ${data.serviceName} on ${data.date} at ${data.time}`,
     content: [
+      ...(data.slotConflict
+        ? [
+            `⚠️ SCHEDULING CONFLICT: this booking was paid AFTER its checkout expired, and another booking now holds the same date and time. Both customers have paid — please contact one of them to reschedule.`,
+            ``,
+          ]
+        : []),
       `A new booking was confirmed with a paid deposit.`,
       ``,
       `Reference: ${data.reference}`,
