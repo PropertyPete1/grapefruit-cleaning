@@ -199,6 +199,17 @@
 - [x] Harden clientIp() for contexts without req (test env)
 
 ## Round 11 — Blog cover image upload
-- [ ] Server: admin blog image upload endpoint (S3 via storagePut)
-- [ ] AdminBlog editor: upload button + preview alongside URL field
-- [ ] Test + checkpoint
+- [x] Server: admin blog image upload endpoint (S3 via storagePut)
+- [x] AdminBlog editor: upload button + preview alongside URL field
+- [x] Test + checkpoint
+
+## Round 12 — Stale-chunk error hardening
+- [x] Diagnose why the reload hook didn't cover the 21:50 error (entry script vs dynamic import)
+- [x] Strengthen recovery to cover the entry-script failure path
+- [x] Verify, checkpoint, sync GitHub
+
+## Round 13 — Verify third stale-chunk report against live watchdog build
+- [x] Verify live production serves watchdog build and entry JS loads clean
+- [x] Browser-verify /en?from_webdev=1 boots without console errors
+- [x] Root cause: restore client/public/__manus__/debug-collector.js (deleted in Round 9; vite injects it in dev → HTML-as-JS SyntaxError in preview panel)
+- [x] Fix admin dashboard monthly revenue query (ONLY_FULL_GROUP_BY error — alias month expression in GROUP BY/ORDER BY)
