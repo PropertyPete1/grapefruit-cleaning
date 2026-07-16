@@ -105,3 +105,6 @@
 - [x] Real customer email delivery on deposit payment (via Gmail SMTP instead of Resend, bilingual)
 - [x] Email owner + customer after Stripe webhook confirms deposit (Gmail SMTP + owner notification)
 - [x] Test everything, checkpoint, deliver (38 tests pass, live SMTP verified, test email delivered, prod endpoint reachable, cron registered)
+
+## Round 3 — bug reports
+- [x] BUG: /staff on production shows the public site instead of the staff dashboard — root cause: OAuth callback lands at "/" and the locale redirect sent users to /en, losing the /staff destination. Fixed: intended path saved before login and restored after callback. (User is admin role, verified in DB.)

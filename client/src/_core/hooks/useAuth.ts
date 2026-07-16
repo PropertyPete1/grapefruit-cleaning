@@ -76,6 +76,15 @@ export function useAuth(options?: UseAuthOptions) {
     if (typeof window === "undefined") return;
     if (redirectPath && window.location.pathname === redirectPath) return;
 
+    // Remember where the user was headed so we can restore it after the
+    // OAuth callback lands back at "/". Consumed by RootRedirect in App.tsx.
+    try {
+      localStorage.setItem(
+        "gfc-post-login-redirect",
+        window.location.pathname + window.location.search
+      );
+    } catch {}
+
     // Navigate at this moment only. startLogin() mints the nonce + cookie itself.
     if (redirectPath) {
       window.location.href = redirectPath;

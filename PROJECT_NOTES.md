@@ -110,3 +110,12 @@ Site is PUBLISHED at grapeclean-skvabkkr.manus.space.
 - Checkpoint a3f9c16b saved (auto-publish = live). Production URL: grapeclean-skvabkkr.manus.space (per earlier note). grapefruit-cleaning.manus.space 404s — use grapeclean-skvabkkr.
 - Tests: 38 passing + 1 live gmail verify. TS clean.
 - Remaining: verify production URL serves latest + reminder endpoint reachable, final delivery.
+
+## ROUND 3 — /staff bug (user report: "/staff looks the same as where people book")
+Debug diagnosis (medium confidence): StaffRoutes uses useAuth({redirectOnUnauthenticated:true}) → startLogin() → OAuth returns to '/' → RootRedirect sends to /en → user sees public site; original /staff path never restored. ALSO user may be authenticated but role='user' → access-denied card (but they described public site, so returnTo loss is likely).
+Fix plan:
+1. In useAuth or StaffRoutes/AdminRoutes: before startLogin(), save window.location.pathname+search to localStorage key 'gfc-post-login-redirect'.
+2. In App.tsx RootRedirect (runs at '/'): if 'gfc-post-login-redirect' exists and user just authenticated, navigate there once and clear it.
+3. Make owner account definitely admin (upsert sets admin for OWNER_OPEN_ID). Verify user's row role in prod DB.
+4. Consider a /staff access-gate improvement: show sign-in button rather than instant redirect.
+Production URL: grapeclean-skvabkkr.manus.space. Prod /staff serves SPA 200 + bundle contains staff code (verified). Dev /staff renders fine (verified screenshots).

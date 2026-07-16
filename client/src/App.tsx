@@ -30,6 +30,17 @@ import StaffRoutes from "./pages/staff/StaffRoutes";
 function RootRedirect() {
   const [, navigate] = useLocation();
   useEffect(() => {
+    // If the user was heading somewhere gated (e.g. /staff or /admin) before
+    // being sent through OAuth, restore that destination now — the OAuth
+    // callback always lands back at "/".
+    try {
+      const saved = localStorage.getItem("gfc-post-login-redirect");
+      if (saved && (saved.startsWith("/staff") || saved.startsWith("/admin"))) {
+        localStorage.removeItem("gfc-post-login-redirect");
+        navigate(saved, { replace: true });
+        return;
+      }
+    } catch {}
     navigate(`/${detectPreferredLocale()}`, { replace: true });
   }, [navigate]);
   return null;
