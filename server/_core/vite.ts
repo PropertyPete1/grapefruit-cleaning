@@ -60,6 +60,14 @@ export function serveStatic(app: Express) {
 
   app.use(express.static(distPath));
 
+  // Hashed build assets that no longer exist (e.g. a browser holding a stale
+  // index.html after a redeploy) must 404 — never fall through to index.html.
+  // Returning HTML for a .js request causes "Uncaught SyntaxError: Unexpected
+  // token '<'" and a broken page instead of a clean, recoverable load error.
+  app.use("/assets", (_req, res) => {
+    res.status(404).end();
+  });
+
   // fall through to index.html if the file doesn't exist
   app.use("*", (_req, res) => {
     res.sendFile(path.resolve(distPath, "index.html"));

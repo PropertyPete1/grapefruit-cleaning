@@ -10,6 +10,22 @@ import "./index.css";
 
 const queryClient = new QueryClient();
 
+// After each deployment the hashed JS chunk filenames change. A browser that
+// still has the previous index.html (or a cached copy) will request old chunk
+// URLs; the SPA fallback answers with HTML, which surfaces as
+// "Uncaught SyntaxError: Unexpected token '<'". Vite fires vite:preloadError
+// for failed dynamic imports — reload once to fetch the fresh build.
+window.addEventListener("vite:preloadError", event => {
+  if (sessionStorage.getItem("chunk-reload") === "1") return; // no reload loops
+  sessionStorage.setItem("chunk-reload", "1");
+  event.preventDefault();
+  window.location.reload();
+});
+window.addEventListener("load", () => {
+  // Clear the guard after a successful load so future deploys can also recover.
+  setTimeout(() => sessionStorage.removeItem("chunk-reload"), 5000);
+});
+
 const redirectToLoginIfUnauthorized = (error: unknown) => {
   if (!(error instanceof TRPCClientError)) return;
   if (typeof window === "undefined") return;

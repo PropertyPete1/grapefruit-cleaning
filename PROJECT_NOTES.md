@@ -278,3 +278,9 @@ Endpoint: GET https://maps.bexar.org/arcgis/rest/services/Parcels/MapServer/0/qu
 - Phase 3 DONE: server/antiSpam.ts (assertRateLimit 5/min per IP per scope, clientIp x-forwarded-for, looksLikeSpam honeypot+3s minfill, _resetRateLimits); wired contact.submit + content.submitReview (silent success on spam) + booking.create (rate limit); Contact.tsx & Testimonials.tsx have hidden honeypot inputs + renderedAt. TS clean.
 - Phase 4 REMAINING: README.md, delete client/public/__manus__/debug-collector.js, verify testimonials.items gone from i18n.
 - Phase 5 REMAINING: antiSpam vitest, full suite, screenshots /en/pricing /en/quote /admin/services /admin/blog /en/blog, single checkpoint (auto-publish).
+
+## ROUND 11 — Blog cover image upload (in progress)
+- storagePut(relKey, data:Buffer|Uint8Array|string, contentType) → {key,url} in server/storage.ts; auto hash suffix.
+- Gallery admin does NOT have uploads (uses URLs) — blog will be first uploader.
+- Plan: admin.blogUploadCover mutation input {fileName, dataBase64, mimeType} (max ~5MB base64) → Buffer → storagePut(`blog-covers/${fileName}`, buf, mimeType) → return {url}. Client: hidden <input type=file accept="image/*">, FileReader→base64, uploading spinner, preview <img>, keeps URL Input too.
+- AdminBlog.tsx cover field at ~line 305-315 (Input bound to form.coverImage).

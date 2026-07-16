@@ -192,3 +192,13 @@
 - [x] README.md (stack, scripts, env vars, plug-and-play guide)
 - [x] Delete client/public/__manus__/debug-collector.js and unused testimonials.items from en.ts/es.ts
 - [x] Screenshots of /pricing, /en/quote, /admin/services, /admin/blog, /blog; full suite; single checkpoint
+
+## Round 10 — Stale-chunk error fix
+- [x] Fix "Uncaught SyntaxError: Unexpected token '<'" on /en: reload once on vite:preloadError (stale hashed chunks after deploy)
+- [x] Serve 404 for missing /assets files instead of HTML SPA fallback
+- [x] Harden clientIp() for contexts without req (test env)
+
+## Round 11 — Blog cover image upload
+- [ ] Server: admin blog image upload endpoint (S3 via storagePut)
+- [ ] AdminBlog editor: upload button + preview alongside URL field
+- [ ] Test + checkpoint
