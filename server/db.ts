@@ -548,13 +548,13 @@ export async function getMonthlyRevenue() {
   const db = requireDb(await getDb());
   return db
     .select({
-      month: sql<string>`DATE_FORMAT(${payments.createdAt}, '%Y-%m')`,
+      month: sql<string>`DATE_FORMAT(${payments.createdAt}, '%Y-%m')`.as("month"),
       total: sql<number>`SUM(${payments.amount})`,
     })
     .from(payments)
     .where(eq(payments.status, "succeeded"))
-    .groupBy(sql`DATE_FORMAT(${payments.createdAt}, '%Y-%m')`)
-    .orderBy(sql`DATE_FORMAT(${payments.createdAt}, '%Y-%m')`);
+    .groupBy(sql`month`)
+    .orderBy(sql`month`);
 }
 
 export async function getBookingsByService() {

@@ -1,5 +1,14 @@
 # Grapefruit Cleaning Co. — Build Notes (internal)
 
+## ROUND 13 — TRUE ROOT CAUSE of "Unexpected token '<'" FOUND & FIXED (Jul 16 ~22:00)
+- User clarified: error appears ONLY in the Manus preview panel (dev server), not production browser tabs.
+- Repro in real browser on dev URL /en?from_webdev=1: fetch-probed all script tags → /__manus__/debug-collector.js returned
+  200 text/html (SPA fallback) because I DELETED client/public/__manus__/debug-collector.js in Round 9 housekeeping.
+  vite.config.ts (line ~79 "manus-debug-collector" plugin) injects that script tag in dev → HTML-as-JS → SyntaxError on EVERY preview load since Round 9.
+- FIX: restored the file via `git checkout c65ac5f -- client/public/__manus__/debug-collector.js`. Verified dev now serves 200 text/javascript.
+- Earlier deploy-window/stale-chunk fixes (Rounds 10/12: /assets 404, vite:preloadError reload, index.html entry watchdog) remain valid defense-in-depth for production.
+- LESSON: never delete files under client/public/__manus__/ — the dev tooling references them.
+
 ## ROUND 12 — Stale-chunk hardening (second "Unexpected token '<'" report, Jul 16)
 - Both user reports (20:11, 21:50 CDT) timestamp-match deploy rollout windows; deploys frequent today so stale tabs hit it.
 - Round 10 fix covers: dynamic-import chunks (vite:preloadError → one reload in main.tsx) + /assets 404 instead of HTML fallback (server/_core/vite.ts). VERIFIED live.
