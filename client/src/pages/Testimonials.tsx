@@ -10,6 +10,7 @@ import { useLocale } from "@/i18n/LocaleContext";
 import { useSeo, localBusinessJsonLd } from "@/hooks/useSeo";
 import { useReveal } from "@/hooks/useReveal";
 import { useSiteInfo } from "@/hooks/useSiteInfo";
+import { useSpamGuard } from "@/hooks/useSpamGuard";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -115,6 +116,7 @@ function ReviewForm() {
   const isSpanish = locale === "es";
   const [form, setForm] = useState({ customerName: "", rating: 5, text: "" });
   const [sent, setSent] = useState(false);
+  const { honeypotField, spamSignals } = useSpamGuard();
 
   const submit = trpc.content.submitReview.useMutation({
     onSuccess: () => setSent(true),
@@ -127,7 +129,7 @@ function ReviewForm() {
       toast.error(isSpanish ? "Complete su nombre y reseña" : "Please fill in your name and review");
       return;
     }
-    submit.mutate(form);
+    submit.mutate({ ...form, ...spamSignals });
   };
 
   return (
@@ -155,6 +157,7 @@ function ReviewForm() {
               : "Worked with us? We'd love to hear about your experience."}
           </p>
           <form onSubmit={onSubmit} className="mt-6 space-y-5" noValidate>
+            {honeypotField}
             <div className="space-y-2">
               <Label htmlFor="review-name">{isSpanish ? "Su nombre" : "Your name"}</Label>
               <Input

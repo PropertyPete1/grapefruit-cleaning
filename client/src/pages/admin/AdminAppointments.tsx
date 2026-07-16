@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/select";
 import { PageHeader, SERVICE_LABELS, StatusBadge, fmtDate, fmtMoney } from "./adminShared";
 
-const STATUSES = ["pending_deposit", "confirmed", "in_progress", "completed", "cancelled"] as const;
+const STATUSES = ["pending_deposit", "confirmed", "in_progress", "completed", "cancelled", "expired"] as const;
 
 export default function AdminAppointments() {
   const [statusFilter, setStatusFilter] = useState<string>("all");

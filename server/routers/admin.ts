@@ -11,7 +11,7 @@ const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   return next({ ctx });
 });
 
-const bookingStatusEnum = z.enum(["pending_deposit", "confirmed", "in_progress", "completed", "cancelled"]);
+const bookingStatusEnum = z.enum(["pending_deposit", "confirmed", "in_progress", "completed", "cancelled", "expired"]);
 
 export const adminRouter = router({
   // ---------- Dashboard & statistics ----------

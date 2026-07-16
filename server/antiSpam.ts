@@ -17,12 +17,14 @@ const buckets = new Map<string, Bucket>();
 const MAX_BUCKETS = 10_000;
 
 export function clientIp(ctx: TrpcContext): string {
-  const req = ctx.req;
-  const fwd = req.headers["x-forwarded-for"];
+  // Internal callers (tests, jobs) may construct a context without a real
+  // request — treat those as a single "unknown" client instead of crashing.
+  const req = ctx.req as Partial<TrpcContext["req"]> | undefined;
+  const fwd = req?.headers?.["x-forwarded-for"];
   if (typeof fwd === "string" && fwd.length > 0) {
     return fwd.split(",")[0]!.trim();
   }
-  return req.socket?.remoteAddress ?? "unknown";
+  return req?.socket?.remoteAddress ?? "unknown";
 }
 
 /**

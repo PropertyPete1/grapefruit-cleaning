@@ -63,9 +63,7 @@ export default function Blog() {
             ))}
           </div>
         ) : !posts || posts.length === 0 ? (
-          <p className="py-12 text-center text-muted-foreground">
-            {locale === "es" ? "Aún no hay artículos publicados. Vuelva pronto." : "No articles published yet. Check back soon."}
-          </p>
+          <p className="py-12 text-center text-muted-foreground">{t.blog.empty}</p>
         ) : (
           <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
             {posts.map((post, i) => {

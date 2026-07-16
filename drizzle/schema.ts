@@ -61,7 +61,7 @@ export const bookings = mysqlTable("bookings", {
   locale: mysqlEnum("locale", ["en", "es"]).default("en").notNull(),
   totalAmount: int("totalAmount").notNull(),
   depositAmount: int("depositAmount").notNull(),
-  status: mysqlEnum("status", ["pending_deposit", "confirmed", "in_progress", "completed", "cancelled"])
+  status: mysqlEnum("status", ["pending_deposit", "confirmed", "in_progress", "completed", "cancelled", "expired"])
     .default("pending_deposit")
     .notNull(),
   employeeId: int("employeeId"),

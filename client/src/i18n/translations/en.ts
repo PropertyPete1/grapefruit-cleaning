@@ -535,6 +535,7 @@ export const en = {
     heroSubtitle: "Guides, routines, and hosting wisdom from professionals who clean for a living.",
     readTime: "min read",
     backToBlog: "Back to Blog",
+    empty: "No articles published yet. Check back soon.",
   },
   privacy: {
     title: "Privacy Policy",

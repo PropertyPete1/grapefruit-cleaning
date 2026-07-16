@@ -16,6 +16,7 @@ import {
   users,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
+import { blocksSlot, STALE_DEPOSIT_MINUTES } from "./bookingRules";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -221,10 +222,29 @@ export async function listBookingsForCustomer(customerId: number) {
 export async function getBookedSlots(date: string) {
   const db = requireDb(await getDb());
   const rows = await db
-    .select({ time: bookings.scheduledTime })
+    .select({ time: bookings.scheduledTime, status: bookings.status, createdAt: bookings.createdAt })
     .from(bookings)
-    .where(and(eq(bookings.scheduledDate, date), sql`${bookings.status} != 'cancelled'`));
-  return rows.map(r => r.time);
+    .where(and(eq(bookings.scheduledDate, date), sql`${bookings.status} NOT IN ('cancelled', 'expired')`));
+  // Stale unpaid checkouts release their slot (see blocksSlot).
+  const now = new Date();
+  return rows.filter(r => blocksSlot(r, now)).map(r => r.time);
+}
+
+/**
+ * Marks unpaid (pending_deposit) bookings older than STALE_DEPOSIT_MINUTES as
+ * expired so they stop appearing as held slots. A late Stripe payment can
+ * still recover an expired booking (finalizeBooking accepts both states).
+ * Returns the number of bookings expired.
+ */
+export async function expireStaleDepositBookings(now: Date = new Date()): Promise<number> {
+  const db = requireDb(await getDb());
+  const cutoff = new Date(now.getTime() - STALE_DEPOSIT_MINUTES * 60_000);
+  const result = await db
+    .update(bookings)
+    .set({ status: "expired" })
+    .where(and(eq(bookings.status, "pending_deposit"), lte(bookings.createdAt, cutoff)));
+  const header = Array.isArray(result) ? result[0] : result;
+  return (header as { affectedRows?: number })?.affectedRows ?? 0;
 }
 
 /** Confirmed/in-progress bookings scheduled within the next 8 days (reminder scan window). */

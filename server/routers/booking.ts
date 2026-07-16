@@ -141,7 +141,8 @@ export const bookingRouter = router({
       // date/time outside the admin-defined hours (e.g. Sundays when closed).
       const schedule = parseSchedule(await db.getSetting(SCHEDULE_SETTING_KEY));
       const validSlots = slotsForDate(input.date, schedule);
-      if (!validSlots.includes(input.time)) {
+      const takenSlots = await db.getBookedSlots(input.date);
+      if (!validSlots.includes(input.time) || takenSlots.includes(input.time)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message:
@@ -283,7 +284,7 @@ export const bookingRouter = router({
       if (booking.stripeSessionId !== input.sessionId)
         throw new TRPCError({ code: "BAD_REQUEST", message: "Session mismatch" });
 
-      if (booking.status === "pending_deposit") {
+      if (booking.status === "pending_deposit" || booking.status === "expired") {
         const stripe = getStripe();
         const session = await stripe.checkout.sessions.retrieve(input.sessionId);
         if (session.payment_status !== "paid") {
@@ -325,10 +326,14 @@ export const bookingRouter = router({
   }),
 });
 
-/** Shared finalization: mark confirmed, record payment, redeem coupon, send emails. */
+/**
+ * Shared finalization: mark confirmed, record payment, redeem coupon, send emails.
+ * Idempotent — only acts on unpaid bookings: pending_deposit, or expired
+ * (a stale checkout whose Stripe payment arrived late still gets confirmed).
+ */
 export async function finalizeBooking(bookingId: number, paymentIntentId: string | null): Promise<void> {
   const booking = await db.getBookingById(bookingId);
-  if (!booking || booking.status !== "pending_deposit") return;
+  if (!booking || (booking.status !== "pending_deposit" && booking.status !== "expired")) return;
 
   await db.updateBooking(bookingId, {
     status: "confirmed",

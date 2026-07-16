@@ -318,8 +318,6 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-export const TIME_SLOTS = ["08:00", "09:00", "10:00", "11:00", "13:00", "14:00", "15:00", "16:00"] as const;
-
 export function generateBookingReference(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let ref = "GFC-";
