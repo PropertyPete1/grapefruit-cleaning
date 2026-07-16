@@ -222,3 +222,8 @@
 - [x] Gallery image upload (same pattern as blog cover, URL fallback, bilingual, tests)
 - [x] Watermark: no repo/config toggle exists — hosting-layer badge; removal via Management UI Settings → General (plan-dependent) — reported to user
 - [x] Single checkpoint, publish, GitHub sync confirmed
+
+## Round 15 — Mobile admin/staff nav drawer
+- [x] Replace /admin mobile pill strip with hamburger + slide-out drawer (15 items, icons, active highlight, bilingual)
+- [x] Review /staff mobile nav; apply drawer pattern if it has the same issue
+- [x] Desktop sidebars unchanged; verify on mobile viewport; tests green

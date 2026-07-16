@@ -1,4 +1,5 @@
 import { lazy, Suspense } from "react";
+import { useState } from "react";
 import { Link, Route, Switch, useLocation } from "wouter";
 import {
   BarChart3,
@@ -9,6 +10,7 @@ import {
   LayoutDashboard,
   Loader2,
   LogOut,
+  Menu,
   MessageSquare,
   Newspaper,
   Settings as SettingsIcon,
@@ -22,6 +24,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { ASSETS } from "@/lib/assets";
 
 const AdminDashboard = lazy(() => import("./AdminDashboard"));
@@ -61,6 +64,10 @@ const NAV_ITEMS = [
 function AdminShell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const { user, logout } = useAuth();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const activeItem = NAV_ITEMS.find(item =>
+    item.exact ? location === item.path : location.startsWith(item.path)
+  );
 
   return (
     <div className="flex min-h-screen bg-muted/30">
@@ -105,22 +112,63 @@ function AdminShell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      {/* Mobile top bar */}
-      <div className="fixed inset-x-0 top-0 z-40 flex items-center gap-2 overflow-x-auto border-b border-border bg-card px-4 py-3 lg:hidden">
-        {NAV_ITEMS.map(item => {
-          const active = item.exact ? location === item.path : location.startsWith(item.path);
-          return (
-            <Link
-              key={item.path}
-              href={item.path}
-              className={`whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-semibold ${
-                active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
-              }`}
-            >
-              {item.label}
-            </Link>
-          );
-        })}
+      {/* Mobile top bar: hamburger + current section */}
+      <div className="fixed inset-x-0 top-0 z-40 flex items-center gap-3 border-b border-border bg-card px-4 py-3 lg:hidden">
+        <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
+          <SheetTrigger asChild>
+            <Button variant="outline" size="icon" className="shrink-0 rounded-xl" aria-label="Open navigation menu">
+              <Menu className="h-5 w-5" />
+            </Button>
+          </SheetTrigger>
+          <SheetContent side="left" className="w-72 p-0">
+            <SheetHeader className="border-b border-border px-6 py-5 text-left">
+              <SheetTitle className="flex items-center gap-2.5">
+                <img src={ASSETS.logo} alt="Grapefruit Cleaning Co." className="h-9 w-auto" />
+                <span>
+                  <span className="block text-sm font-bold leading-tight text-foreground">Grapefruit</span>
+                  <span className="block text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                    Admin
+                  </span>
+                </span>
+              </SheetTitle>
+            </SheetHeader>
+            <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-4">
+              {NAV_ITEMS.map(item => {
+                const active = item.exact ? location === item.path : location.startsWith(item.path);
+                return (
+                  <Link
+                    key={item.path}
+                    href={item.path}
+                    onClick={() => setDrawerOpen(false)}
+                    className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
+                      active
+                        ? "bg-primary/10 text-primary"
+                        : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                    }`}
+                  >
+                    <item.icon className="h-4 w-4 shrink-0" />
+                    {item.label}
+                  </Link>
+                );
+              })}
+            </nav>
+            <div className="border-t border-border p-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-foreground">{user?.name ?? "Admin"}</p>
+                  <p className="truncate text-xs text-muted-foreground">{user?.email ?? ""}</p>
+                </div>
+                <Button variant="ghost" size="icon" onClick={() => logout()} aria-label="Sign out">
+                  <LogOut className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          </SheetContent>
+        </Sheet>
+        <div className="flex min-w-0 items-center gap-2">
+          {activeItem ? <activeItem.icon className="h-4 w-4 shrink-0 text-primary" /> : null}
+          <p className="truncate text-sm font-semibold text-foreground">{activeItem?.label ?? "Admin"}</p>
+        </div>
       </div>
 
       <main className="flex-1 px-4 pb-16 pt-20 lg:ml-64 lg:px-10 lg:pt-10">{children}</main>
