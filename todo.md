@@ -123,3 +123,15 @@
 - [x] Guaranteed unverified fallback for non-Bexar addresses — outside_coverage short-circuits before any GIS query, preventing false street-name matches
 - [x] Tests for outside-coverage and ambiguous-address cases (Austin/Houston/Dallas ZIPs, ZIP-vs-city conflict, ambiguous "Main St"; 55 tests passing)
 - [x] Quote wizard collects street + city + ZIP and passes all three to verifyProperty; handoff to Booking prefills city/zip
+
+## Round 5 — Multi-county sqft verification (Comal, Guadalupe, Medina, Kendall)
+
+- [x] Research/probe public GIS or appraisal-district endpoints for Comal County — CAD AGOL service verifies address; living-area sqft NOT published publicly
+- [x] Research/probe public GIS or appraisal-district endpoints for Guadalupe County — same (address-verify)
+- [x] Research/probe public GIS or appraisal-district endpoints for Medina County — same (address-verify; trailing-space situs_num handled)
+- [x] Research/probe public GIS or appraisal-district endpoints for Kendall County — same (address-verify)
+- [x] Refactor property.ts into a multi-county provider architecture with automatic county detection (ZIP/city → county)
+- [x] Extend coverage maps: ZIP and municipality lists for all five counties
+- [x] Update coverage tests + live lookup tests for each new county (68 tests passing, live CAD hits verified)
+- [x] Update customer-facing copy: county-specific "address verified" notice in Quote + Booking (EN/ES)
+- [x] Run full test suite, checkpoint, deliver

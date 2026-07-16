@@ -377,6 +377,17 @@ export default function Quote() {
                         )}
                         {!verifiedSqft &&
                           !propertyLookup.isFetching &&
+                          propertyLookup.data?.addressVerified &&
+                          propertyLookup.data.county && (
+                            <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-secondary">
+                              <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
+                              {locale === "es"
+                                ? `Dirección verificada en los registros del condado de ${propertyLookup.data.county}. Los pies cuadrados se confirmarán en su cita.`
+                                : `Address verified in ${propertyLookup.data.county} County records. Square footage will be confirmed at your appointment.`}
+                            </p>
+                          )}
+                        {!verifiedSqft &&
+                          !propertyLookup.isFetching &&
                           propertyLookup.data?.reason === "outside_coverage" && (
                             <p className="mt-2 text-xs text-muted-foreground">
                               {locale === "es"

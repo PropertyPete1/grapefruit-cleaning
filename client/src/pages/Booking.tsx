@@ -159,6 +159,8 @@ export default function Booking() {
   );
   const verifiedSqft =
     propertyLookup.data?.verified && propertyLookup.data.sqft ? propertyLookup.data.sqft : null;
+  const addressVerifiedCounty =
+    !verifiedSqft && propertyLookup.data?.addressVerified ? (propertyLookup.data.county ?? null) : null;
 
   // Match server behavior: price from the verified record when it lands in a higher tier.
   const { breakdown, sqftAdjusted } = useMemo(() => {
@@ -719,6 +721,14 @@ export default function Booking() {
                           {locale === "es"
                             ? `Propiedad verificada: ${verifiedSqft.toLocaleString()} pies² según registros del condado.`
                             : `Property verified: ${verifiedSqft.toLocaleString()} sq ft per county records.`}
+                        </p>
+                      )}
+                      {addressVerifiedCounty && !propertyLookup.isFetching && (
+                        <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-secondary">
+                          <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
+                          {locale === "es"
+                            ? `Dirección verificada en los registros del condado de ${addressVerifiedCounty}. Los pies cuadrados se confirmarán en su cita.`
+                            : `Address verified in ${addressVerifiedCounty} County records. Square footage will be confirmed at your appointment.`}
                         </p>
                       )}
                       <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">

@@ -181,7 +181,7 @@ export const bookingRouter = router({
         couponCode,
         discountApplied,
         verifiedSqft: property.verified ? property.sqft : undefined,
-        sqftSource: property.verified ? property.source : undefined,
+        sqftSource: property.verified || property.addressVerified ? property.source : undefined,
         sqftMismatch,
       });
 

@@ -1,5 +1,18 @@
 # Grapefruit Cleaning Co. — Build Notes (internal)
 
+## ROUND 5 FINAL: Multi-county verification WORKING (Jul 16, 2026)
+All 68 vitest tests pass. server/property.ts now a multi-county provider chain:
+- Bexar (FULL sqft): maps.bexar.org ArcGIS Parcels — unchanged.
+- Comal/Guadalupe/Medina/Kendall (ADDRESS-VERIFY only, CADs don't publish living area): AGOL CAD services, fields situs_num/situs_street_prefx/situs_street/situs_street_sufix/situs_city/situs_zip.
+  - Comal: services7.arcgis.com/Yz6eib2o8WvEgWq8/.../ComalCADWebService/FeatureServer/0
+  - Guadalupe: services9.arcgis.com/1l4hbpt78hjlsIcl/.../GuadalupeCADWebService/FeatureServer/0
+  - Medina: services6.arcgis.com/j94FvPaik4etwHFk/.../MedinaCADWebService/FeatureServer/0 (situs_num may have trailing spaces)
+  - Kendall: services9.arcgis.com/AugxDVA2CqlsdRYC/.../KendallCADWebService/FeatureServer/0
+- parseStreetAddress extracts leading directional into prefix ("424 S Castell Ave" → CASTELL + prefix S); streetVariants expands AVENUE↔AVE; pickBestCadMatch scores whole-word street + prefix + ZIP agreement; situs_num matched with trailing-space variants.
+- detectCounties(city, zip) → candidate counties (ZIP wins over city); lookupPropertySqft falls through candidates; result contract adds addressVerified/county/matchedAddress, reason "address_verified".
+- UI (Quote + Booking): green "address verified in X County records; sqft confirmed at appointment" notice for addressVerified; full sqft verify remains Bexar-only. booking.create persists sqftSource for both cases.
+- Live-verified addresses: 424 S Castell Ave New Braunfels 78130 (Comal), 211 W Court St Seguin 78155 (Guadalupe), 603 Avenue M Hondo 78861 (Medina), 201 E San Antonio Ave Boerne 78006 (Kendall), 5500 Grand Lake Dr SA 78244 (Bexar sqft).
+
 ## Uploaded asset URLs (use exactly as-is in code, also in client/src/lib/assets.ts)
 - Logo transparent: /manus-storage/grapefruit-logo-transparent_3f6f58eb.png
 - Logo original jpg (OG image): /manus-storage/grapefruit-logo_9a11bb63.jpg
@@ -148,3 +161,47 @@ Endpoint: GET https://maps.bexar.org/arcgis/rest/services/Parcels/MapServer/0/qu
 - No API key, no auth, free public county service. Data updated annually (Sept/Oct) — fine for sqft (rarely changes).
 - PropUse=1 seems residential single family.
 - Fallback chain in server/property.ts: (1) Bexar GIS by Situs match, (2) RentCast if RENTCAST_API_KEY set, (3) unverified → deterrence mode. Cache lookups in property_lookups table.
+
+## ROUND 5 — multi-county sqft (Comal, Guadalupe, Medina, Kendall) — research in progress
+### Statewide TxGIO StratMap parcels (PROBED)
+- https://feature.geographic.texas.gov/arcgis/rest/services/Parcels/stratmap_land_parcels_48_most_recent/MapServer/0/query
+- All-TX coverage; fields: situs_num/situs_stre/situs_city/situs_zip/county/fips/year_built/imp_value BUT **NO living-area sqft** (only parcel land area). Useful as county-detection fallback only.
+### Comal County
+- cceo.co.comal.tx.us/arcgispor → "Connection denied by Geolocation" from sandbox (geo-blocked). opendata api search returned empty; try https://data-comalcounty.opendata.arcgis.com dataset pages via browser or hub API v3.
+### Candidates to probe next
+- CAD esearch portals (Harris Govern software): esearch.guadalupead.org, Comal esearch.comalad.org?, Medina esearch/medinacad.org (True Automation?), Kendall kendallad.org. These UIs call JSON endpoints (e.g. /Search/SearchResults or /api/...) that include living area sqft in results.
+- Also TNRIS county-specific parcel downloads (static, too heavy).
+### esearch CAD portals (PROBED — NOT viable)
+- esearch.comalad.org / guadalupead / medinacad / kendallad all resolve 200, but search flow is reCAPTCHA-enterprise gated + session/expiry redirects (Search/Result → Search/Expired). No open JSON API. DO NOT scrape.
+### Next: county ArcGIS servers with CAD improvement data
+- Probe: gis.comaltx.gov? mapserv?; Guadalupe open data (ArcGIS Hub) at data-guadalupecounty or gcgis; New Braunfels city GIS (nbgis) covers much of Comal; also check SARA (San Antonio River Authority) regional parcels and AGOL-hosted FeatureServers via arcgis.com search API (services with LIVING_AREA/GBA fields).
+### FOUND — BIS Consulting CAD web services on AGOL (all four counties!)
+- Comal:     https://services7.arcgis.com/Yz6eib2o8WvEgWq8/arcgis/rest/services/ComalCADWebService/FeatureServer/0 (Parcels)
+- Medina:    https://services6.arcgis.com/j94FvPaik4etwHFk/arcgis/rest/services/MedinaCADWebService/FeatureServer/0
+- Kendall:   https://services9.arcgis.com/AugxDVA2CqlsdRYC/arcgis/rest/services/KendallCADWebService/FeatureServer/0
+- Guadalupe: https://services9.arcgis.com/1l4hbpt78hjlsIcl/arcgis/rest/services/GuadalupeCADWebService/FeatureServer/0
+- Parcels layer fields (same schema, PACS-style): situs_num, situs_street_prefx, situs_street, situs_street_sufix, situs_city, situs_zip, imprv_val, owner_tax_yr ... NO obvious living-area field in flagged list — need FULL field list + sample query to check for living_area/la_sqft/etc. If absent, sqft may not be published → deterrence-mode fallback for those counties OR estimate not possible.
+- NEXT: dump full field lists + query a known address (e.g. New Braunfels "265 Landa St") to inspect all attributes.
+- CONFIRMED: full Comal field list has **NO living-area/sqft field** (only legal_acreage, land_val, imprv_val, market). Same PACS schema for Medina/Kendall/Guadalupe → none carry building sqft. Address matching works great though (situs_num + situs_street + situs_zip clean fields).
+- Options: (a) TCEQ/TxGIO footprints? building footprint area ≠ living area; (b) Microsoft building footprints — same issue; (c) use CAD service to VERIFY ADDRESS EXISTS + county, but sqft unverifiable → deterrence mode with "verified address, sqft confirmed at appointment"; (d) RentCast fallback (50 free/mo) for these 4 counties only, conserving quota (Bexar stays free/unlimited).
+- DECISION (pending impl): hybrid — Bexar GIS (free sqft) + 4-county CAD address verification + optional RentCast key for out-of-Bexar sqft when configured. Honest UI: for non-Bexar counties without RentCast, show "address verified — square footage subject to confirmation".
+
+### ROUND 5 FINAL RESEARCH CONCLUSIONS (all probed Jul 16 2026)
+- Guadalupe parcels layer 0 confirmed same PACS schema (imprv_val, situs_num, situs_street, situs_city, situs_zip) — NO living-area field on any of the 4 CAD FeatureServers.
+- esearch portals: reCAPTCHA-gated, no JSON API. New Braunfels open data: no parcel+living-area dataset found. Statewide StratMap: no living-area either.
+- FINAL DESIGN for server/property.ts refactor:
+  1. detectCounty(city, zip) → "bexar" | "comal" | "guadalupe" | "medina" | "kendall" | "outside" | "unknown" (ZIP strongest, then city; need ZIP+city sets per county).
+  2. Providers: bexar → maps.bexar.org GBA lookup (verified sqft, source "bexar_gis").
+     comal/guadalupe/medina/kendall → CAD FeatureServer address match: where=situs_num='<NUM>' AND UPPER(situs_street) LIKE '%<STREET>%'; outFields prop_id,situs_*,imprv_val,legal_acreage,file_as_name. Result = addressVerified:true but sqft NOT available → new result kind "address_verified" (source e.g. "comal_cad"); UI copy: address confirmed in county records, sqft confirmed at appointment; booking stores sqftSource + no auto-correction (no verified sqft) unless RentCast key present (future).
+  3. Endpoint URLs (query with f=json, returnGeometry=false, resultRecordCount=5):
+     - Comal:     https://services7.arcgis.com/Yz6eib2o8WvEgWq8/arcgis/rest/services/ComalCADWebService/FeatureServer/0/query
+     - Guadalupe: https://services9.arcgis.com/1l4hbpt78hjlsIcl/arcgis/rest/services/GuadalupeCADWebService/FeatureServer/0/query
+     - Medina:    https://services6.arcgis.com/j94FvPaik4etwHFk/arcgis/rest/services/MedinaCADWebService/FeatureServer/0/query
+     - Kendall:   https://services9.arcgis.com/AugxDVA2CqlsdRYC/arcgis/rest/services/KendallCADWebService/FeatureServer/0/query
+     - Sample verified query (Comal): situs_num = '265' AND situs_street LIKE '%LANDA%' → returns prop_id 71385, situs "265 LANDA ST NEW BRAUNFELS 78163". situs_street has NO suffix (suffix in situs_street_sufix). situs_num is a STRING.
+  4. County ZIPs (to compile): Comal (New Braunfels 78130/78131/78132/78133/78135, Canyon Lake 78133, Spring Branch 78070, Bulverde 78163, Fischer 78623, Sattler, Startzville, Garden Ridge 78266*); Guadalupe (Seguin 78155/78156, Schertz 78154, Cibolo 78108, Marion 78124, Santa Clara, New Berlin, McQueeney 78123, Geronimo, Kingsbury 78638, Staples); Medina (Hondo 78861, Castroville 78009, Devine 78016, Natalia 78059*, LaCoste 78039*, D'Hanis 78850, Yancey 78886, Mico 78056*, Rio Medina 78066); Kendall (Boerne 78006/78015*, Comfort 78013, Kendalia 78027, Waring 78074, Sisterdale, Bergheim 78004).
+     *CAUTION: some ZIPs straddle counties (78163 Bulverde is in BOTH Bexar+Comal lists; 78015/78056/78039/78059 currently in BEXAR_ZIPS!). Resolution: ZIP→candidate counties list; try providers in order (bexar first if candidate), fall through to next county's provider when not found.
+  5. Keep 24h cache; result reason values extend with "address_verified".
+  6. UI: Booking/Quote copy — green check "verified in county records: X sqft" (Bexar) vs blue check "address verified in <County> County records; square footage confirmed at appointment" (others). Admin badge same distinction.
+### Current property.ts structure (single-county):
+- detectBexarCoverage(city,zip) → in/outside/unknown; BEXAR_ZIPS + BEXAR_CITIES sets; parseStreetAddress(); lookupBexarProperty(); lookupPropertySqft(address,city,zip) w/ 24h in-memory cache. source: "bexar_gis". Refactor to providers[] keyed by county w/ detectCounty(city,zip) → county name.
