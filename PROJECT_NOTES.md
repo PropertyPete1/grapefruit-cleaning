@@ -62,3 +62,42 @@
 - Visual QA: EN home/about/pricing/gallery/testimonials/faq/contact/blog/service/quote/book + ES home/cotizacion/precios + mobile 375px home/book — all render correctly.
 - Testimonials on public pages are illustrative copy; must tell user to replace with real reviews (never seed as DB review rows).
 - Customer emails logged server-side (no email provider key); owner gets built-in notification. Mention Resend/SMTP swap for production.
+
+## ROUND 2 UPDATES (user request, in progress)
+User asked: (1) fixed tier pricing, (2) staff dashboard to see bookings, (3) real customer email confirmation after deposit — user HAS a real email, wants me to say when ready for it (will use webdev_request_secrets for RESEND_API_KEY + owner/business email; ask user then).
+Site is PUBLISHED at grapeclean-skvabkkr.manus.space.
+
+### Fixed pricing (EXACT, never change) — implemented in shared/pricing.ts PRICING_TIERS + getTier():
+- residential: <1000=$99.99, 1000-1500=$129.99, 1500-2000=$159.99, 2000-2500=$199.99, 2500-3500=$249.99 startingAt, 3500+=customQuote
+- deep: <1000=$179.99, 1000-1500=$229.99, 1500-2500=$299.99, 2500+=$399.99 startingAt
+- moveinout: <1000=$169.99, 1000-1500=$199.99, 1500-2000=$249.99, 2000-2500=$299.99, 2500+=$349.99 startingAt
+- airbnb uses residential table; commercial/office = custom baseline BASE_PRICES 179.99 startingAt.
+- calculateQuote now returns {startingAt, customQuote} flags; rooms/sqftCharge=0 (bedrooms/bathrooms no longer priced); extras & freq discounts (20/15/10) unchanged; DEPOSIT_RATE 0.2; prices use cents (round2).
+
+### Files still to update for pricing switch:
+- client/src/pages/Pricing.tsx: remove PER_BEDROOM/PER_BATHROOM imports (lines 13-14, 133-137); replace plan cards w/ tier tables per service (residential/deep/moveinout tiers + airbnb/office cards).
+- client/src/pages/admin/AdminServices.tsx line 1 + rows 39-47: remove PER_* imports, show tier tables.
+- server/pricing.test.ts: rewrite for tier engine.
+- client/src/pages/Quote.tsx: keep bedroom/bathroom steps for info but price by sqft tier; show "Custom Quote" state when quote.customQuote (residential 3500+) → CTA to contact page instead of booking; show "starting at" label when quote.startingAt.
+- client/src/pages/Booking.tsx: same handling; block online booking for customQuote sizes (redirect to contact).
+- i18n: add keys pricing.tiers* / quote.customQuote message / startingAt labels in en.ts + es.ts (t.pricing.startingAt exists).
+
+### Staff dashboard plan:
+- users.role enum currently ["user","admin"]; ALTER to ["user","staff","admin"] via webdev_execute_sql + schema.ts update.
+- staffProcedure in server/_core/trpc.ts or routers.ts (role staff OR admin).
+- server/routers/staff.ts: myAppointments (upcoming bookings), allBookings ro, calendar data.
+- client/src/pages/staff/StaffRoutes.tsx at /staff route (App.tsx): Today's jobs, Upcoming, Calendar, booking detail (customer contact, address, extras, notes). Read-only + status update (completed).
+- Admin Employees module: add "link user as staff" (set role by email) via admin.setUserRole.
+
+### Email delivery plan:
+- Use Resend HTTP API (no SDK needed, fetch POST https://api.resend.com/emails, Authorization: Bearer RESEND_API_KEY).
+- server/emails.ts sendBookingEmails: after webhook payment confirm → send customer email (bilingual, existing builders) + owner email; fallback to console.log if no key.
+- Secrets to request when ready: RESEND_API_KEY, EMAIL_FROM (e.g. bookings@domain or onboarding@resend.dev for testing), OWNER_EMAIL.
+- Stripe webhook (server/stripeWebhook.ts) already calls sendBookingEmails on checkout.session.completed — verify.
+
+### ROUND 2 progress (as of phase 12 start):
+- DONE pricing: shared/pricing.ts tiers, Pricing.tsx, Quote.tsx (customQuote/startingAt), AdminServices, tests updated (all pass).
+- DONE staff dashboard: users.role enum now user/staff/admin (migrated); employees.userId column added; server/routers/staff.ts (staffProcedure: overview/bookings/updateJobStatus/schedule); db helpers getEmployeeByUserId, listBookingsForStaff, listBookingsForMonth, listAllUsers, setUserRole; admin.listUsers + admin.linkEmployeeUser endpoints; client/src/pages/staff/StaffRoutes.tsx (My Day/Jobs/Calendar, role-gated) registered at /staff in App.tsx; AdminEmployees has "Staff dashboard access" link dialog. Screenshots verified.
+- REMAINING: (a) real email delivery — request secrets RESEND_API_KEY, EMAIL_FROM, OWNER_EMAIL via webdev_request_secrets (user said "let me know when ready for email"); update server/emails.ts to send via Resend fetch API w/ console fallback; write vitest for email sending logic; (b) verify stripeWebhook calls sendBookingEmails; (c) run all tests, checkpoint (auto-publishes), deliver.
+- User note: user was told sandbox claim link earlier; auto-publish ENABLED (checkpoint = live).
+- Stale vite error about AdminSettings/AdminCoupons imports in logs is old (files exist, tsc 0 errors, /admin 200).

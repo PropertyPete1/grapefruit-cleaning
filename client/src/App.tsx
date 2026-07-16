@@ -24,6 +24,7 @@ import Privacy from "./pages/Privacy";
 import Terms from "./pages/Terms";
 import NotFound from "./pages/NotFound";
 import AdminRoutes from "./pages/admin/AdminRoutes";
+import StaffRoutes from "./pages/staff/StaffRoutes";
 
 /** Redirects "/" (and unknown bare paths) to the preferred locale home. */
 function RootRedirect() {
@@ -73,6 +74,7 @@ function Router() {
     <Switch>
       <Route path="/" component={RootRedirect} />
       <Route path="/admin/*?" component={AdminRoutes} />
+      <Route path="/staff/*?" component={StaffRoutes} />
       <Route path="/en/*?">
         <LocalizedRoutes locale="en" />
       </Route>

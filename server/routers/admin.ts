@@ -104,6 +104,29 @@ export const adminRouter = router({
     await db.deleteEmployee(input.id);
     return { success: true } as const;
   }),
+  /** Auth users list for the staff-access linking UI. */
+  listUsers: adminProcedure.query(() => db.listAllUsers()),
+  /**
+   * Grant staff access: links an employee record to a signed-in user account
+   * and promotes that user to the "staff" role (or revokes it when unlinking).
+   */
+  linkEmployeeUser: adminProcedure
+    .input(z.object({ employeeId: z.number().int(), userId: z.number().int().nullable() }))
+    .mutation(async ({ input }) => {
+      const existing = (await db.listEmployees()).find((e) => e.id === input.employeeId);
+      if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Employee not found" });
+      // If unlinking or relinking, demote the previously linked user back to "user" (unless admin).
+      if (existing.userId && existing.userId !== input.userId) {
+        const prev = (await db.listAllUsers()).find((u) => u.id === existing.userId);
+        if (prev && prev.role === "staff") await db.setUserRole(prev.id, "user");
+      }
+      await db.updateEmployee(input.employeeId, { userId: input.userId });
+      if (input.userId) {
+        const target = (await db.listAllUsers()).find((u) => u.id === input.userId);
+        if (target && target.role !== "admin") await db.setUserRole(target.id, "staff");
+      }
+      return { success: true } as const;
+    }),
 
   // ---------- Invoices ----------
   invoices: adminProcedure.query(() => db.listInvoices()),

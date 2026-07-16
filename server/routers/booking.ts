@@ -17,7 +17,7 @@ const quoteInputSchema = z.object({
   frequency: z.enum(["onetime", "weekly", "biweekly", "monthly"]),
 });
 
-const SERVICE_NAMES: Record<string, { en: string; es: string }> = {
+export const SERVICE_NAMES: Record<string, { en: string; es: string }> = {
   residential: { en: "Residential Cleaning", es: "Limpieza Residencial" },
   commercial: { en: "Commercial Cleaning", es: "Limpieza Comercial" },
   airbnb: { en: "Airbnb Cleaning", es: "Limpieza Airbnb" },
@@ -26,14 +26,14 @@ const SERVICE_NAMES: Record<string, { en: string; es: string }> = {
   office: { en: "Office Cleaning", es: "Limpieza de Oficinas" },
 };
 
-const FREQUENCY_NAMES: Record<string, { en: string; es: string }> = {
+export const FREQUENCY_NAMES: Record<string, { en: string; es: string }> = {
   onetime: { en: "One-time", es: "Una sola vez" },
   weekly: { en: "Weekly", es: "Semanal" },
   biweekly: { en: "Every two weeks", es: "Quincenal" },
   monthly: { en: "Monthly", es: "Mensual" },
 };
 
-const EXTRA_NAMES: Record<string, { en: string; es: string }> = {
+export const EXTRA_NAMES: Record<string, { en: string; es: string }> = {
   pets: { en: "Home with pets", es: "Hogar con mascotas" },
   deepClean: { en: "Deep cleaning", es: "Limpieza profunda" },
   moveOut: { en: "Move out condition", es: "Condición de mudanza" },

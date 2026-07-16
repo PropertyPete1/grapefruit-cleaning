@@ -15,6 +15,20 @@
       "when": 1784075532122,
       "tag": "0001_unknown_wallflower",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1784165036942,
+      "tag": "0002_natural_leper_queen",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1784169227730,
+      "tag": "0003_lovely_metal_master",
+      "breakpoints": true
     }
   ]
 }

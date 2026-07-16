@@ -8,6 +8,7 @@ import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
 import { registerStripeWebhook } from "../stripeWebhook";
 import { registerSeoRoutes } from "../seoRoutes";
+import { registerScheduledRoutes } from "../scheduledRoutes";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 
@@ -40,6 +41,8 @@ async function startServer() {
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+  // Heartbeat cron callbacks (reminder emails)
+  registerScheduledRoutes(app);
   registerStorageProxy(app);
   registerOAuthRoutes(app);
   // tRPC API

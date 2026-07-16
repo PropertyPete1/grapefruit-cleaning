@@ -326,6 +326,17 @@ export const en = {
     perBedroom: "per bedroom",
     perBathroom: "per bathroom",
     startingAt: "starting at",
+    customQuote: "Custom Quote",
+    customQuoteDesc: "Homes over 3,500 sq ft receive a personalized walkthrough quote.",
+    tierTablesTitle: "Fixed rates by home size",
+    tierTablesSubtitle: "Exact prices — what you see is what you pay. Pick your service and find your square footage.",
+    sqftRange: "Home size",
+    price: "Price",
+    under: "Under",
+    over: "Over",
+    sqft: "sq ft",
+    tierNote: "Recurring plans apply your frequency discount to these rates. Add-ons are priced separately below.",
+    commercialNote: "Commercial and office spaces are quoted individually based on square footage, layout, and schedule.",
     plans: {
       residential: { name: "Residential", desc: "Recurring or one-time home cleaning" },
       deep: { name: "Deep Clean", desc: "Top-to-bottom seasonal reset" },
@@ -375,6 +386,8 @@ export const en = {
     adjustCta: "Adjust Details",
     savings: "You save",
     disclaimer: "Estimates are indicative and may vary based on your home's condition.",
+    customQuoteText:
+      "Homes over 3,500 sq ft receive a personalized walkthrough quote so we can price your space fairly. Contact us and we'll get back to you within one business day.",
   },
   booking: {
     title: "Book your cleaning",

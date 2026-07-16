@@ -1,4 +1,4 @@
-import { BASE_PRICES, EXTRA_PRICES, FREQUENCY_DISCOUNTS, PER_BATHROOM, PER_BEDROOM, PER_500_SQFT } from "@shared/pricing";
+import { BASE_PRICES, EXTRA_PRICES, FREQUENCY_DISCOUNTS, PRICING_TIERS, type CleaningType, type PricingTier } from "@shared/pricing";
 import { PageHeader, SERVICE_LABELS } from "./adminShared";
 
 const EXTRA_LABELS: Record<string, string> = {
@@ -13,6 +13,14 @@ const EXTRA_LABELS: Record<string, string> = {
   organization: "Home organization",
 };
 
+const TIERED: CleaningType[] = ["residential", "deep", "moveinout"];
+
+function tierRange(tier: PricingTier, prev?: PricingTier): string {
+  if (!prev) return "Under 1,000 sq ft";
+  if (tier.maxSqft === Infinity) return `Over ${prev.maxSqft.toLocaleString("en-US")} sq ft`;
+  return `${prev.maxSqft.toLocaleString("en-US")}–${tier.maxSqft.toLocaleString("en-US")} sq ft`;
+}
+
 export default function AdminServices() {
   return (
     <div>
@@ -22,32 +30,47 @@ export default function AdminServices() {
       />
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <div className="rounded-2xl bg-card shadow-sm ring-1 ring-border">
-          <div className="border-b border-border px-6 py-4">
-            <h2 className="font-semibold text-foreground">Base prices by service</h2>
-          </div>
-          <table className="w-full text-sm">
-            <tbody>
-              {Object.entries(BASE_PRICES).map(([svc, price]) => (
-                <tr key={svc} className="border-b border-border/60 last:border-0">
-                  <td className="px-6 py-3 font-medium text-foreground">{SERVICE_LABELS[svc] ?? svc}</td>
-                  <td className="px-6 py-3 text-right font-semibold text-foreground">${price}</td>
+        <div className="space-y-6">
+          {TIERED.map((svc) => (
+            <div key={svc} className="rounded-2xl bg-card shadow-sm ring-1 ring-border">
+              <div className="border-b border-border px-6 py-4">
+                <h2 className="font-semibold text-foreground">{SERVICE_LABELS[svc] ?? svc} — fixed rates by size</h2>
+              </div>
+              <table className="w-full text-sm">
+                <tbody>
+                  {(PRICING_TIERS[svc] ?? []).map((tier, idx, arr) => (
+                    <tr key={idx} className="border-b border-border/60 last:border-0">
+                      <td className="px-6 py-3 font-medium text-foreground">{tierRange(tier, idx > 0 ? arr[idx - 1] : undefined)}</td>
+                      <td className="px-6 py-3 text-right font-semibold text-foreground">
+                        {tier.customQuote ? "Custom Quote" : `${tier.startingAt ? "Starting at " : ""}$${tier.price.toFixed(2)}`}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
+          <div className="rounded-2xl bg-card shadow-sm ring-1 ring-border">
+            <div className="border-b border-border px-6 py-4">
+              <h2 className="font-semibold text-foreground">Other services</h2>
+            </div>
+            <table className="w-full text-sm">
+              <tbody>
+                <tr className="border-b border-border/60">
+                  <td className="px-6 py-3 font-medium text-foreground">Airbnb Cleaning</td>
+                  <td className="px-6 py-3 text-right text-muted-foreground">Uses residential tier table</td>
                 </tr>
-              ))}
-              <tr className="border-b border-border/60">
-                <td className="px-6 py-3 text-muted-foreground">Per bedroom</td>
-                <td className="px-6 py-3 text-right font-semibold">${PER_BEDROOM}</td>
-              </tr>
-              <tr className="border-b border-border/60">
-                <td className="px-6 py-3 text-muted-foreground">Per bathroom</td>
-                <td className="px-6 py-3 text-right font-semibold">${PER_BATHROOM}</td>
-              </tr>
-              <tr>
-                <td className="px-6 py-3 text-muted-foreground">Per 500 ft² above 1,000</td>
-                <td className="px-6 py-3 text-right font-semibold">${PER_500_SQFT}</td>
-              </tr>
-            </tbody>
-          </table>
+                <tr className="border-b border-border/60">
+                  <td className="px-6 py-3 font-medium text-foreground">Commercial Cleaning</td>
+                  <td className="px-6 py-3 text-right font-semibold">Starting at ${BASE_PRICES.commercial.toFixed(2)} (custom quote)</td>
+                </tr>
+                <tr>
+                  <td className="px-6 py-3 font-medium text-foreground">Office Cleaning</td>
+                  <td className="px-6 py-3 text-right font-semibold">Starting at ${BASE_PRICES.office.toFixed(2)} (custom quote)</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
 
         <div className="space-y-6">

@@ -334,6 +334,17 @@ export const es: Dictionary = {
     perBedroom: "por habitación",
     perBathroom: "por baño",
     startingAt: "desde",
+    customQuote: "Cotización Personalizada",
+    customQuoteDesc: "Los hogares de más de 3,500 pies cuadrados reciben una cotización personalizada con visita previa.",
+    tierTablesTitle: "Tarifas fijas según el tamaño del hogar",
+    tierTablesSubtitle: "Precios exactos: lo que ve es lo que paga. Elija su servicio y encuentre su metraje.",
+    sqftRange: "Tamaño del hogar",
+    price: "Precio",
+    under: "Menos de",
+    over: "Más de",
+    sqft: "pies²",
+    tierNote: "Los planes recurrentes aplican su descuento por frecuencia a estas tarifas. Los extras se cotizan por separado más abajo.",
+    commercialNote: "Los espacios comerciales y de oficina se cotizan individualmente según el metraje, la distribución y el horario.",
     plans: {
       residential: { name: "Residencial", desc: "Limpieza del hogar recurrente o única" },
       deep: { name: "Limpieza Profunda", desc: "Renovación completa de temporada" },
@@ -383,6 +394,8 @@ export const es: Dictionary = {
     adjustCta: "Ajustar Detalles",
     savings: "Usted ahorra",
     disclaimer: "Los estimados son orientativos y pueden variar según el estado de su hogar.",
+    customQuoteText:
+      "Los hogares de más de 3,500 pies cuadrados reciben una cotización personalizada con visita previa para ofrecerle un precio justo. Contáctenos y le responderemos en un día hábil.",
   },
   booking: {
     title: "Reserve su limpieza",

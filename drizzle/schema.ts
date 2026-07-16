@@ -16,7 +16,7 @@ export const users = mysqlTable("users", {
   name: text("name"),
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
-  role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
+  role: mysqlEnum("role", ["user", "staff", "admin"]).default("user").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
@@ -69,6 +69,10 @@ export const bookings = mysqlTable("bookings", {
   discountApplied: int("discountApplied").default(0).notNull(),
   stripeSessionId: varchar("stripeSessionId", { length: 255 }),
   stripePaymentIntentId: varchar("stripePaymentIntentId", { length: 255 }),
+  /** Timestamp when the 7-days-before reminder email was sent (null = not sent yet). */
+  weekReminderSentAt: timestamp("weekReminderSentAt"),
+  /** Timestamp when the 1-day-before reminder email was sent (null = not sent yet). */
+  dayReminderSentAt: timestamp("dayReminderSentAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -89,6 +93,8 @@ export type ContactMessage = typeof contactMessages.$inferSelect;
 
 export const employees = mysqlTable("employees", {
   id: int("id").autoincrement().primaryKey(),
+  /** Optional link to users.id so this employee can sign in and access the staff dashboard. */
+  userId: int("userId"),
   firstName: varchar("firstName", { length: 100 }).notNull(),
   lastName: varchar("lastName", { length: 100 }).notNull(),
   email: varchar("email", { length: 320 }),

@@ -226,6 +226,31 @@ export async function getBookedSlots(date: string) {
   return rows.map(r => r.time);
 }
 
+/** Confirmed/in-progress bookings scheduled within the next 8 days (reminder scan window). */
+export async function listUpcomingConfirmedBookings(today: string) {
+  const db = requireDb(await getDb());
+  const windowEnd = new Date(`${today}T00:00:00Z`);
+  windowEnd.setUTCDate(windowEnd.getUTCDate() + 8);
+  const endStr = windowEnd.toISOString().slice(0, 10);
+  return db
+    .select()
+    .from(bookings)
+    .where(
+      and(
+        or(eq(bookings.status, "confirmed"), eq(bookings.status, "in_progress")),
+        gte(bookings.scheduledDate, today),
+        lte(bookings.scheduledDate, endStr)
+      )
+    );
+}
+
+/** Records that a reminder email was sent so the cron never double-sends. */
+export async function markReminderSent(bookingId: number, kind: "week" | "day") {
+  const db = requireDb(await getDb());
+  const patch = kind === "week" ? { weekReminderSentAt: new Date() } : { dayReminderSentAt: new Date() };
+  await db.update(bookings).set(patch).where(eq(bookings.id, bookingId));
+}
+
 // ---------- Contact messages ----------
 export async function createContactMessage(data: typeof contactMessages.$inferInsert) {
   const db = requireDb(await getDb());
@@ -247,6 +272,50 @@ export async function updateContactMessage(id: number, status: "new" | "replied"
 export async function listEmployees() {
   const db = requireDb(await getDb());
   return db.select().from(employees).orderBy(desc(employees.createdAt));
+}
+
+export async function getEmployeeByUserId(userId: number) {
+  const db = requireDb(await getDb());
+  const rows = await db.select().from(employees).where(eq(employees.userId, userId)).limit(1);
+  return rows[0] ?? null;
+}
+
+/** All auth users (for the admin staff-linking UI). */
+export async function listAllUsers() {
+  const db = requireDb(await getDb());
+  return db.select().from(users).orderBy(desc(users.lastSignedIn)).limit(200);
+}
+
+export async function setUserRole(userId: number, role: "user" | "staff" | "admin") {
+  const db = requireDb(await getDb());
+  await db.update(users).set({ role }).where(eq(users.id, userId));
+}
+
+/** Bookings joined with customer info for the staff dashboard (read-focused view). */
+export async function listBookingsForStaff(filter: { status?: string; date?: string }) {
+  const db = requireDb(await getDb());
+  const conditions = [];
+  if (filter.status) conditions.push(eq(bookings.status, filter.status as never));
+  if (filter.date) conditions.push(eq(bookings.scheduledDate, filter.date));
+  const base = db
+    .select({ booking: bookings, customer: customers })
+    .from(bookings)
+    .leftJoin(customers, eq(bookings.customerId, customers.id));
+  if (conditions.length > 0) {
+    return base.where(and(...conditions)).orderBy(desc(bookings.scheduledDate)).limit(500);
+  }
+  return base.orderBy(desc(bookings.scheduledDate)).limit(500);
+}
+
+/** All non-cancelled bookings within a YYYY-MM month for the staff calendar. */
+export async function listBookingsForMonth(month: string) {
+  const db = requireDb(await getDb());
+  return db
+    .select({ booking: bookings, customer: customers })
+    .from(bookings)
+    .leftJoin(customers, eq(bookings.customerId, customers.id))
+    .where(and(like(bookings.scheduledDate, `${month}%`), sql`${bookings.status} != 'cancelled'`))
+    .orderBy(bookings.scheduledDate, bookings.scheduledTime);
 }
 
 export async function createEmployee(data: typeof employees.$inferInsert) {

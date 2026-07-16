@@ -10,23 +10,31 @@ import {
   BASE_PRICES,
   EXTRA_PRICES,
   FREQUENCY_DISCOUNTS,
-  PER_BATHROOM,
-  PER_BEDROOM,
+  PRICING_TIERS,
   type CleaningType,
   type ExtraId,
   type Frequency,
+  type PricingTier,
 } from "@shared/pricing";
 import { cn } from "@/lib/utils";
 
-const PLAN_ORDER: { id: CleaningType; planKey: "residential" | "deep" | "moveinout" | "airbnb" | "office" }[] = [
+const TIER_SERVICES: { id: CleaningType; planKey: "residential" | "deep" | "moveinout" }[] = [
   { id: "residential", planKey: "residential" },
   { id: "deep", planKey: "deep" },
   { id: "moveinout", planKey: "moveinout" },
-  { id: "airbnb", planKey: "airbnb" },
-  { id: "office", planKey: "office" },
 ];
 
 const EXTRA_IDS: ExtraId[] = ["pets", "deepClean", "moveOut", "oven", "refrigerator", "windows", "laundry", "garage", "organization"];
+
+function formatTierRange(
+  tier: PricingTier,
+  prev: PricingTier | undefined,
+  t: { under: string; over: string; sqft: string },
+): string {
+  if (!prev) return `${t.under} 1,000 ${t.sqft}`;
+  if (tier.maxSqft === Infinity) return `${t.over} ${prev.maxSqft.toLocaleString("en-US")} ${t.sqft}`;
+  return `${prev.maxSqft.toLocaleString("en-US")}–${tier.maxSqft.toLocaleString("en-US")} ${t.sqft}`;
+}
 
 export default function Pricing() {
   const { t, locale, path } = useLocale();
@@ -90,60 +98,119 @@ export default function Pricing() {
           {t.pricing.frequencyTitle}
         </p>
 
-        {/* Plans */}
-        <div className="mt-12 grid gap-6 sm:grid-cols-2 lg:grid-cols-5">
-          {PLAN_ORDER.map((plan, i) => {
-            const planCopy = t.pricing.plans[plan.planKey];
-            const base = BASE_PRICES[plan.id];
-            const discounted = Math.round(base * (1 - discountRate));
-            const popular = plan.id === "residential";
+        {/* Fixed tier tables */}
+        <div className="mx-auto mt-12 max-w-2xl text-center">
+          <h2 className="reveal font-display text-2xl font-extrabold tracking-tight text-foreground md:text-3xl">
+            {t.pricing.tierTablesTitle}
+          </h2>
+          <p className="reveal mt-3 text-sm text-muted-foreground" style={{ transitionDelay: "60ms" }}>
+            {t.pricing.tierTablesSubtitle}
+          </p>
+        </div>
+        <div className="mt-10 grid gap-6 lg:grid-cols-3">
+          {TIER_SERVICES.map((svc, i) => {
+            const planCopy = t.pricing.plans[svc.planKey];
+            const tiers = PRICING_TIERS[svc.id] ?? [];
+            const popular = svc.id === "residential";
             return (
               <div
-                key={plan.id}
+                key={svc.id}
                 className={cn(
-                  "reveal hover-lift relative flex flex-col rounded-3xl border bg-card p-6 shadow-soft",
+                  "reveal hover-lift relative flex flex-col overflow-hidden rounded-3xl border bg-card shadow-soft",
                   popular ? "border-primary/40 ring-2 ring-primary/20" : "border-border",
                 )}
-                style={{ transitionDelay: `${i * 60}ms` }}
+                style={{ transitionDelay: `${i * 70}ms` }}
               >
                 {popular && (
-                  <span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-primary px-3 py-1 text-[10px] font-bold uppercase tracking-wide text-primary-foreground shadow-soft">
+                  <span className="absolute right-4 top-4 rounded-full bg-primary px-3 py-1 text-[10px] font-bold uppercase tracking-wide text-primary-foreground shadow-soft">
                     {t.common.mostPopular}
                   </span>
                 )}
-                <h2 className="font-display text-base font-bold text-foreground">{planCopy.name}</h2>
-                <p className="mt-1 min-h-[2.5rem] text-xs leading-relaxed text-muted-foreground">{planCopy.desc}</p>
-                <div className="mt-4">
-                  <p className="text-xs font-medium text-muted-foreground">{t.pricing.startingAt}</p>
-                  <p className="font-display text-3xl font-extrabold text-foreground">
-                    <AnimatedPrice value={discounted} />
-                  </p>
-                  {discountRate > 0 && (
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      <s>${base}</s>{" "}
-                      <span className="font-semibold text-secondary">
-                        −{Math.round(discountRate * 100)}%
-                      </span>
-                    </p>
+                <div className="p-6 pb-4">
+                  <h3 className="font-display text-lg font-bold text-foreground">{planCopy.name}</h3>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{planCopy.desc}</p>
+                </div>
+                <div className="flex-1 px-6 pb-6">
+                  <div className="overflow-hidden rounded-2xl border border-border">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-muted/60 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          <th className="px-4 py-2.5">{t.pricing.sqftRange}</th>
+                          <th className="px-4 py-2.5 text-right">{t.pricing.price}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {tiers.map((tier, idx) => {
+                          const prev = idx > 0 ? tiers[idx - 1] : undefined;
+                          const range = formatTierRange(tier, prev, {
+                            under: t.pricing.under,
+                            over: t.pricing.over,
+                            sqft: t.pricing.sqft,
+                          });
+                          const effective = tier.customQuote ? null : round2(tier.price * (1 - discountRate));
+                          return (
+                            <tr key={idx} className="border-t border-border/70">
+                              <td className="px-4 py-2.5 text-xs font-medium text-foreground">{range}</td>
+                              <td className="px-4 py-2.5 text-right">
+                                {tier.customQuote ? (
+                                  <span className="text-xs font-bold text-primary">{t.pricing.customQuote}</span>
+                                ) : (
+                                  <span className="font-display text-sm font-extrabold text-foreground">
+                                    {tier.startingAt && (
+                                      <span className="mr-1 text-[10px] font-medium text-muted-foreground">{t.pricing.startingAt}</span>
+                                    )}
+                                    ${effective!.toFixed(2)}
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  {svc.id === "residential" && (
+                    <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">{t.pricing.customQuoteDesc}</p>
                   )}
                 </div>
-                <ul className="mt-4 space-y-2 text-xs text-muted-foreground">
-                  <li className="flex items-center gap-2">
-                    <Check className="h-3.5 w-3.5 shrink-0 text-secondary" />
-                    +${PER_BEDROOM} {t.pricing.perBedroom}
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-3.5 w-3.5 shrink-0 text-secondary" />
-                    +${PER_BATHROOM} {t.pricing.perBathroom}
-                  </li>
-                </ul>
-                <Button asChild size="sm" variant={popular ? "default" : "outline"} className="press mt-5 w-full rounded-full">
-                  <Link href={path("quote")}>{t.nav.getQuote}</Link>
-                </Button>
+                <div className="px-6 pb-6">
+                  <Button asChild size="sm" variant={popular ? "default" : "outline"} className="press w-full rounded-full">
+                    <Link href={path("quote")}>{t.nav.getQuote}</Link>
+                  </Button>
+                </div>
               </div>
             );
           })}
         </div>
+
+        {/* Airbnb + commercial note cards */}
+        <div className="mt-6 grid gap-6 md:grid-cols-2">
+          <div className="reveal hover-lift flex flex-col rounded-3xl border border-border bg-card p-6 shadow-soft">
+            <h3 className="font-display text-base font-bold text-foreground">{t.pricing.plans.airbnb.name}</h3>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{t.pricing.plans.airbnb.desc}</p>
+            <p className="mt-3 flex-1 text-xs leading-relaxed text-muted-foreground">
+              <Check className="mr-1 inline h-3.5 w-3.5 text-secondary" />
+              {t.pricing.startingAt}{" "}
+              <span className="font-display text-base font-extrabold text-foreground">
+                ${round2(BASE_PRICES.airbnb * (1 - discountRate)).toFixed(2)}
+              </span>
+            </p>
+            <Button asChild size="sm" variant="outline" className="press mt-4 w-fit rounded-full px-5">
+              <Link href={path("quote")}>{t.nav.getQuote}</Link>
+            </Button>
+          </div>
+          <div className="reveal hover-lift flex flex-col rounded-3xl border border-border bg-card p-6 shadow-soft" style={{ transitionDelay: "70ms" }}>
+            <h3 className="font-display text-base font-bold text-foreground">
+              {t.pricing.plans.office.name} · {t.services.commercial.name}
+            </h3>
+            <p className="mt-1 flex-1 text-xs leading-relaxed text-muted-foreground">{t.pricing.commercialNote}</p>
+            <Button asChild size="sm" variant="outline" className="press mt-4 w-fit rounded-full px-5">
+              <Link href={path("contact")}>{t.common.contactUs}</Link>
+            </Button>
+          </div>
+        </div>
+
+        <p className="reveal mx-auto mt-8 max-w-xl text-center text-xs leading-relaxed text-muted-foreground">{t.pricing.tierNote}</p>
 
         <p className="reveal mx-auto mt-8 max-w-xl text-center text-xs leading-relaxed text-muted-foreground">{t.pricing.note}</p>
       </section>
@@ -183,4 +250,8 @@ export default function Pricing() {
       </section>
     </>
   );
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }

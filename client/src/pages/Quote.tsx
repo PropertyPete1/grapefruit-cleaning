@@ -421,27 +421,51 @@ export default function Quote() {
                   <h2 className="font-display text-2xl font-bold text-foreground">{t.quote.resultTitle}</h2>
                   <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">{t.quote.resultSubtitle}</p>
                   <div className="mx-auto mt-8 max-w-sm rounded-3xl bg-gradient-to-br from-primary/10 via-card to-secondary/10 p-8 shadow-xl shadow-primary/5 ring-1 ring-border">
-                    <p className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-                      {t.quote.estimateLabel}
-                    </p>
-                    <div className="mt-2 font-display text-6xl font-extrabold tracking-tight text-foreground">
-                      <AnimatedPrice value={breakdown.total} />
-                    </div>
-                    <p className="mt-1 text-sm text-muted-foreground">{t.quote.perCleaning}</p>
-                    {breakdown.discount > 0 && (
-                      <p className="mt-3 inline-block rounded-full bg-secondary/10 px-4 py-1.5 text-sm font-bold text-secondary">
-                        {t.quote.savings} ${breakdown.discount}
-                      </p>
+                    {breakdown.customQuote ? (
+                      <>
+                        <p className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+                          {t.pricing.customQuote}
+                        </p>
+                        <p className="mt-4 text-sm leading-relaxed text-muted-foreground">{t.quote.customQuoteText}</p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+                          {t.quote.estimateLabel}
+                        </p>
+                        {breakdown.startingAt && (
+                          <p className="mt-1 text-xs font-semibold text-primary">{t.pricing.startingAt}</p>
+                        )}
+                        <div className="mt-2 font-display text-6xl font-extrabold tracking-tight text-foreground">
+                          <AnimatedPrice value={breakdown.total} />
+                        </div>
+                        <p className="mt-1 text-sm text-muted-foreground">{t.quote.perCleaning}</p>
+                        {breakdown.discount > 0 && (
+                          <p className="mt-3 inline-block rounded-full bg-secondary/10 px-4 py-1.5 text-sm font-bold text-secondary">
+                            {t.quote.savings} ${breakdown.discount}
+                          </p>
+                        )}
+                      </>
                     )}
                   </div>
                   <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
-                    <Button
-                      size="lg"
-                      onClick={goToBooking}
-                      className="btn-press h-13 rounded-full px-8 text-base font-semibold shadow-lg shadow-primary/25"
-                    >
-                      {t.quote.bookCta} <ChevronRight className="ml-1 h-4 w-4" />
-                    </Button>
+                    {breakdown.customQuote ? (
+                      <Button
+                        size="lg"
+                        onClick={() => navigate(path("contact"))}
+                        className="btn-press h-13 rounded-full px-8 text-base font-semibold shadow-lg shadow-primary/25"
+                      >
+                        {t.common.contactUs} <ChevronRight className="ml-1 h-4 w-4" />
+                      </Button>
+                    ) : (
+                      <Button
+                        size="lg"
+                        onClick={goToBooking}
+                        className="btn-press h-13 rounded-full px-8 text-base font-semibold shadow-lg shadow-primary/25"
+                      >
+                        {t.quote.bookCta} <ChevronRight className="ml-1 h-4 w-4" />
+                      </Button>
+                    )}
                     <Button
                       size="lg"
                       variant="outline"
@@ -481,10 +505,19 @@ export default function Quote() {
           <aside className="lg:sticky lg:top-28 lg:self-start">
             <div className="rounded-3xl bg-foreground p-7 text-background shadow-2xl">
               <p className="text-xs font-semibold uppercase tracking-widest text-background/60">{t.quote.estimateLabel}</p>
-              <div className="mt-3 font-display text-5xl font-extrabold tracking-tight">
-                <AnimatedPrice value={breakdown.total} />
-              </div>
-              <p className="mt-1 text-sm text-background/60">{t.quote.perCleaning}</p>
+              {breakdown.customQuote ? (
+                <div className="mt-3 font-display text-3xl font-extrabold tracking-tight">{t.pricing.customQuote}</div>
+              ) : (
+                <>
+                  {breakdown.startingAt && (
+                    <p className="mt-2 text-xs font-semibold text-background/70">{t.pricing.startingAt}</p>
+                  )}
+                  <div className="mt-1 font-display text-5xl font-extrabold tracking-tight">
+                    <AnimatedPrice value={breakdown.total} />
+                  </div>
+                  <p className="mt-1 text-sm text-background/60">{t.quote.perCleaning}</p>
+                </>
+              )}
               <div className="mt-6 space-y-2.5 border-t border-background/15 pt-5 text-sm">
                 <div className="flex justify-between">
                   <span className="text-background/60">{t.quote.steps.type}</span>
@@ -492,9 +525,9 @@ export default function Quote() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-background/60">
-                    {bedrooms} {t.quote.bedrooms.toLowerCase()} · {bathrooms} {t.quote.bathrooms.toLowerCase()}
+                    {bedrooms} {t.quote.bedrooms.toLowerCase()} · {bathrooms} {t.quote.bathrooms.toLowerCase()} · {sqft.toLocaleString()} ft²
                   </span>
-                  <span className="font-medium">${breakdown.rooms}</span>
+                  <span className="font-medium text-background/60">✓</span>
                 </div>
                 {breakdown.sqftCharge > 0 && (
                   <div className="flex justify-between">
