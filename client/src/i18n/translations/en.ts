@@ -286,14 +286,14 @@ export const en = {
     },
   },
   about: {
-    heroTitle: "Cleaning, the way it should be.",
+    heroTitle: "A clean space has the power to change the way you feel.",
     heroSubtitle:
-      "We started Grapefruit Cleaning Co. with a simple belief: a cleaning service should feel as fresh, honest, and delightful as walking into a spotless home.",
-    storyTitle: "Our story",
+      "At Grapefruit Cleaning Co., we believe that coming home should feel like taking a deep breath.",
+    storyTitle: "One less thing to worry about",
     storyText1:
-      "Grapefruit Cleaning Co. was born from frustration with an industry stuck in the past — unreliable scheduling, opaque pricing, and inconsistent quality. We knew families and businesses deserved better.",
+      "Life gets busy. Between work, family, responsibilities, and everything in between, keeping up with cleaning can become overwhelming. That's where we come in. Our mission goes beyond cleaning homes and businesses — we create fresh, healthy, and welcoming spaces where people can relax, recharge, and spend more time enjoying what truly matters.",
     storyText2:
-      "So we built a different kind of cleaning company: one with transparent instant quotes, professionally trained and background-checked teams, eco-friendly products, and technology that makes booking as easy as ordering coffee. Homes, offices, and vacation rentals across the area trust us week after week.",
+      "Every home we enter is treated with the same care, respect, and attention to detail as if it were our own. We understand that inviting someone into your space requires trust, and earning that trust is something we never take for granted. Whether it's a recurring cleaning, a deep clean before a fresh start, or preparing a home for new memories, our goal is always the same: to give you one less thing to worry about and one more reason to smile when you walk through the door.",
     valuesTitle: "What we stand for",
     value1Title: "Radical transparency",
     value1Text: "Instant quotes, clear checklists, and honest communication — you always know exactly what you're paying for.",
@@ -305,7 +305,7 @@ export const en = {
     value4Text: "Photo-verified checklists and post-visit ratings keep our standard sky high.",
     teamTitle: "A team you can trust",
     teamText:
-      "Every Grapefruit professional passes a rigorous background check, completes our in-house training academy, and is fully bonded and insured. We're proud that most clients request the same cleaner every visit — and get them.",
+      "Welcome to Grapefruit Cleaning Co. — where every home deserves a fresh start. Every Grapefruit professional passes a rigorous background check, completes our in-house training academy, and is fully bonded and insured.",
   },
   pricing: {
     heroTitle: "Simple, transparent pricing",
@@ -405,6 +405,7 @@ export const en = {
     datetimeSubtitle: "We recommend booking at least 48 hours ahead.",
     morningSlots: "Morning",
     afternoonSlots: "Afternoon",
+    closedDay: "We're not scheduling cleanings on this day. Please pick another date.",
     extrasTitle: "Add any extras",
     contactTitle: "Your contact information",
     firstName: "First name",

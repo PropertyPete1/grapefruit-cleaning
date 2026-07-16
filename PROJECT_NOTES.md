@@ -1,5 +1,18 @@
 # Grapefruit Cleaning Co. — Build Notes (internal)
 
+## ROUND 7 (in progress, Jul 16 2026) — About copy + configurable booking hours
+STATUS: COMPLETE (91 tests pass, TS clean, screenshots verified EN/ES about + /en/book + /admin/settings booking hours UI). Remaining: todo.md [x] + checkpoint.
+DONE:
+- About Us copy replaced content-only (EN: heroTitle/heroSubtitle/storyTitle/storyText1/storyText2 + teamText welcome line; ES mirrored) in client/src/i18n/translations/{en,es}.ts.
+- shared/schedule.ts NEW: DaySchedule{open,start,end}, WeeklySchedule keyed 0=Sun..6=Sat, DEFAULT_SCHEDULE (Mon–Fri 8–18, Sat 8–16, Sun closed), SCHEDULE_SETTING_KEY="booking_schedule", parseSchedule (JSON w/ per-day validation, falls back to defaults), slotsForDay (hourly, skips 12:00 lunch), dayOfWeek (tz-safe), slotsForDate.
+- server/routers/booking.ts: availability now schedule-driven (returns [] on closed day); NEW public booking.schedule query; create mutation validates input.time against slotsForDate → bilingual BAD_REQUEST when outside hours.
+REMAINING:
+1. Booking.tsx: trpc.booking.schedule.useQuery → Calendar disabled prop add closed-day matcher [(d)=>!sched[d.getDay()].open, {before:...}]; empty-slot state when availability []; check t.booking keys for a "closed" string (may add booking.closedDay to en/es).
+2. AdminSettings.tsx: NEW "Booking hours" section — per-day open switch + start/end selects (hours 5..22), save JSON via admin.saveSetting(booking_schedule); note Sunday closed unless enabled; invalidate nothing extra (booking.schedule is public query — invalidate utils.booking.schedule).
+3. server/schedule.test.ts: tests for defaults/Sunday/parse fallback/override/lunch skip. Run pnpm test (was 82 pass).
+4. todo.md Round 7 [x]; checkpoint (auto-publish); deliver.
+CONSTRAINT: content-only elsewhere; do NOT touch other components. Footer hours i18n string left alone (admin business_hours setting already drives Contact/footer).
+
 ## ROUND 6 — Production-ready & plug-and-play (in progress, Jul 16 2026)
 DB VERIFIED EMPTY (explicit counts): bookings=0 customers=0 reviews=0 coupons=0 gallery=0 payments=0 invoices=0 employees=0 contact=0 settings=0 users=1 (owner/admin only). Test booking GFC-8LGLJ9 + its customer were purged earlier.
 

@@ -150,3 +150,14 @@
 - [x] Replace placeholder contact info everywhere ((555) 472-3384, hello@grapefruitcleaning.com) with settings values; emails say "reply to this email" when phone unset
 - [x] Verify no seeded/test data in database tables — purged the one Stripe-test booking + its customer; all other tables empty
 - [x] Tests for invite flow + settings endpoints; run full suite (77 tests passing); checkpoint & deliver
+
+## Round 7 — About Us copy + configurable booking hours
+
+- [x] Replace About Us page text with the new provided copy (EN) — content-only, no layout/design changes
+- [x] Matching Spanish translation of the new About Us copy (site is bilingual)
+- [x] Booking hours become settings-driven: default Mon–Fri 8:00–18:00, Sat 8:00–16:00, Sun closed
+- [x] Sunday bookings blocked unless administrator manually enables them in settings
+- [x] Admin Settings panel: per-day open/close times + closed toggle for booking schedule
+- [x] Booking calendar + slot picker read schedule from settings (no other UI changes)
+- [x] Server-side validation rejects bookings outside configured hours
+- [x] Tests for schedule logic; run full suite; checkpoint & deliver (91 tests passing)

@@ -178,6 +178,7 @@ export default function Booking() {
     { date: dateString ?? "" },
     { enabled: Boolean(dateString) }
   );
+  const scheduleQuery = trpc.booking.schedule.useQuery(undefined, { staleTime: 5 * 60 * 1000 });
 
   const createBooking = trpc.booking.create.useMutation();
   const confirmBooking = trpc.booking.confirm.useMutation();
@@ -525,7 +526,13 @@ export default function Booking() {
                           setDate(d);
                           setTime(null);
                         }}
-                        disabled={{ before: new Date(Date.now() + 24 * 3600 * 1000) }}
+                        disabled={[
+                          { before: new Date(Date.now() + 24 * 3600 * 1000) },
+                          (d: Date) => {
+                            const day = scheduleQuery.data?.[d.getDay()];
+                            return day ? !day.open : false;
+                          },
+                        ]}
                       />
                     </div>
                     <div>
@@ -539,7 +546,12 @@ export default function Booking() {
                           <Loader2 className="h-6 w-6 animate-spin text-primary" />
                         </div>
                       )}
-                      {date && availability.data && (
+                      {date && availability.data && availability.data.length === 0 && (
+                        <div className="flex h-full min-h-40 items-center justify-center rounded-2xl bg-muted/40 px-6 text-center text-sm text-muted-foreground">
+                          {t.booking.closedDay}
+                        </div>
+                      )}
+                      {date && availability.data && availability.data.length > 0 && (
                         <div className="space-y-5">
                           <div>
                             <p className="flex items-center gap-2 text-sm font-semibold text-foreground">

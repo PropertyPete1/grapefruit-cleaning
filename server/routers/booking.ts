@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { calculateQuote, DEPOSIT_RATE, generateBookingReference, TIME_SLOTS } from "@shared/pricing";
+import { calculateQuote, DEPOSIT_RATE, generateBookingReference } from "@shared/pricing";
+import { parseSchedule, slotsForDate, SCHEDULE_SETTING_KEY } from "@shared/schedule";
 import * as db from "../db";
 import { sendBookingEmails } from "../emails";
 import { lookupPropertySqft } from "../property";
@@ -69,9 +70,17 @@ export const bookingRouter = router({
   availability: publicProcedure
     .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
     .query(async ({ input }) => {
+      const schedule = parseSchedule(await db.getSetting(SCHEDULE_SETTING_KEY));
+      const slots = slotsForDate(input.date, schedule);
+      if (slots.length === 0) return [];
       const booked = await db.getBookedSlots(input.date);
-      return TIME_SLOTS.map(slot => ({ time: slot, available: !booked.includes(slot) }));
+      return slots.map(slot => ({ time: slot, available: !booked.includes(slot) }));
     }),
+
+  /** Weekly booking schedule (public) so the calendar can disable closed days. */
+  schedule: publicProcedure.query(async () =>
+    parseSchedule(await db.getSetting(SCHEDULE_SETTING_KEY))
+  ),
 
   /** Validate a coupon code and return the discount. */
   validateCoupon: publicProcedure.input(z.object({ code: z.string().min(1).max(40) })).query(async ({ input }) => {
@@ -108,6 +117,19 @@ export const bookingRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // Enforce the configured booking schedule server-side: reject any
+      // date/time outside the admin-defined hours (e.g. Sundays when closed).
+      const schedule = parseSchedule(await db.getSetting(SCHEDULE_SETTING_KEY));
+      const validSlots = slotsForDate(input.date, schedule);
+      if (!validSlots.includes(input.time)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            input.locale === "es"
+              ? "El horario seleccionado no está disponible. Por favor elija otro."
+              : "The selected time is not available for booking. Please choose another.",
+        });
+      }
       // Verify square footage against public property records (best-effort).
       // If the county record prices into a higher tier than the entered sqft,
       // charge from the verified square footage so understated entries can't

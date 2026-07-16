@@ -294,14 +294,14 @@ export const es: Dictionary = {
     },
   },
   about: {
-    heroTitle: "La limpieza, como debe ser.",
+    heroTitle: "Un espacio limpio tiene el poder de cambiar cómo se siente.",
     heroSubtitle:
-      "Fundamos Grapefruit Cleaning Co. con una convicción simple: un servicio de limpieza debe sentirse tan fresco, honesto y agradable como entrar a un hogar impecable.",
-    storyTitle: "Nuestra historia",
+      "En Grapefruit Cleaning Co. creemos que llegar a casa debe sentirse como respirar profundo.",
+    storyTitle: "Una preocupación menos",
     storyText1:
-      "Grapefruit Cleaning Co. nació de la frustración con una industria estancada en el pasado: horarios poco confiables, precios opacos y calidad inconsistente. Sabíamos que las familias y las empresas merecían algo mejor.",
+      "La vida se pone ocupada. Entre el trabajo, la familia, las responsabilidades y todo lo demás, mantener la limpieza al día puede volverse abrumador. Ahí es donde entramos nosotros. Nuestra misión va más allá de limpiar hogares y negocios: creamos espacios frescos, saludables y acogedores donde las personas pueden relajarse, recargar energías y dedicar más tiempo a disfrutar de lo que realmente importa.",
     storyText2:
-      "Así que construimos una empresa de limpieza diferente: con cotizaciones instantáneas y transparentes, equipos capacitados profesionalmente y con antecedentes verificados, productos ecológicos y tecnología que hace que reservar sea tan fácil como pedir un café. Hogares, oficinas y rentas vacacionales de toda el área confían en nosotros semana tras semana.",
+      "Cada hogar al que entramos recibe el mismo cuidado, respeto y atención al detalle que si fuera el nuestro. Entendemos que invitar a alguien a su espacio requiere confianza, y ganarnos esa confianza es algo que nunca damos por sentado. Ya sea una limpieza recurrente, una limpieza profunda antes de un nuevo comienzo o preparar un hogar para nuevos recuerdos, nuestro objetivo siempre es el mismo: darle una preocupación menos y una razón más para sonreír al cruzar la puerta.",
     valuesTitle: "Nuestros valores",
     value1Title: "Transparencia radical",
     value1Text: "Cotizaciones instantáneas, listas de tareas claras y comunicación honesta: siempre sabrá exactamente por qué está pagando.",
@@ -313,7 +313,7 @@ export const es: Dictionary = {
     value4Text: "Listas verificadas con fotografías y calificaciones después de cada visita mantienen nuestro estándar por las nubes.",
     teamTitle: "Un equipo en el que puede confiar",
     teamText:
-      "Cada profesional de Grapefruit pasa una rigurosa verificación de antecedentes, completa nuestra academia de capacitación interna y cuenta con fianza y seguro completos. Nos enorgullece que la mayoría de nuestros clientes soliciten al mismo profesional en cada visita, y lo reciben.",
+      "Bienvenido a Grapefruit Cleaning Co. — donde cada hogar merece un nuevo comienzo. Cada profesional de Grapefruit pasa una rigurosa verificación de antecedentes, completa nuestra academia de capacitación interna y cuenta con fianza y seguro completos.",
   },
   pricing: {
     heroTitle: "Precios simples y transparentes",
@@ -413,6 +413,7 @@ export const es: Dictionary = {
     datetimeSubtitle: "Recomendamos reservar con al menos 48 horas de anticipación.",
     morningSlots: "Mañana",
     afternoonSlots: "Tarde",
+    closedDay: "No agendamos limpiezas este día. Por favor elija otra fecha.",
     extrasTitle: "Agregue extras",
     contactTitle: "Su información de contacto",
     firstName: "Nombre",
