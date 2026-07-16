@@ -18,11 +18,11 @@ const MAX_BUCKETS = 10_000;
 
 export function clientIp(ctx: TrpcContext): string {
   const req = ctx.req;
-  const fwd = req.headers["x-forwarded-for"];
+  const fwd = req?.headers?.["x-forwarded-for"];
   if (typeof fwd === "string" && fwd.length > 0) {
     return fwd.split(",")[0]!.trim();
   }
-  return req.socket?.remoteAddress ?? "unknown";
+  return req?.socket?.remoteAddress ?? "unknown";
 }
 
 /**
