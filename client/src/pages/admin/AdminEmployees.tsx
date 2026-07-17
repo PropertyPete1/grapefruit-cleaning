@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, Copy, KeyRound, Mail, Plus, Send, Trash2, XCircle } from "lucide-react";
+import { Check, Copy, KeyRound, Mail, Plus, Send, ShieldCheck, Trash2, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -28,7 +28,12 @@ export default function AdminEmployees() {
   const employees = trpc.admin.employees.useQuery();
   const authUsers = trpc.admin.listUsers.useQuery();
   const [open, setOpen] = useState(false);
-  const [linkTarget, setLinkTarget] = useState<{ id: number; name: string; userId: number | null } | null>(null);
+  const [linkTarget, setLinkTarget] = useState<{
+    id: number;
+    name: string;
+    userId: number | null;
+    accessLevel: "staff" | "admin";
+  } | null>(null);
   const [inviteResult, setInviteResult] = useState<{ name: string; url: string; emailed: boolean } | null>(null);
   const [copied, setCopied] = useState(false);
   const [form, setForm] = useState({ firstName: "", lastName: "", email: "", phone: "", role: "Cleaner" });
@@ -84,6 +89,16 @@ export default function AdminEmployees() {
   });
 
   const userById = (id: number | null) => (authUsers.data ?? []).find(u => u.id === id);
+
+  const openAccessDialog = (e: { id: number; firstName: string; lastName: string; userId: number | null }) => {
+    const linked = userById(e.userId ?? null);
+    setLinkTarget({
+      id: e.id,
+      name: `${e.firstName} ${e.lastName}`,
+      userId: e.userId ?? null,
+      accessLevel: linked?.role === "admin" ? "admin" : "staff",
+    });
+  };
 
   const copyInviteUrl = async (url: string) => {
     try {
@@ -247,10 +262,10 @@ export default function AdminEmployees() {
               </div>
               <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
                 <div className="min-w-0">
-                  <p className="text-xs font-medium text-muted-foreground">Staff dashboard access</p>
+                  <p className="text-xs font-medium text-muted-foreground">Dashboard access</p>
                   <p className="truncate text-xs font-semibold text-foreground">
                     {e.userId
-                      ? `Connected — ${userById(e.userId)?.name ?? userById(e.userId)?.email ?? `User #${e.userId}`}`
+                      ? `${userById(e.userId)?.role === "admin" ? "Admin" : "Staff"} — ${userById(e.userId)?.name ?? userById(e.userId)?.email ?? `User #${e.userId}`}`
                       : e.inviteToken
                         ? "Invite pending"
                         : "Not connected"}
@@ -260,7 +275,7 @@ export default function AdminEmployees() {
                   variant="outline"
                   size="sm"
                   className="rounded-full bg-card"
-                  onClick={() => setLinkTarget({ id: e.id, name: `${e.firstName} ${e.lastName}`, userId: e.userId ?? null })}
+                  onClick={() => openAccessDialog(e)}
                 >
                   <KeyRound className="mr-1.5 h-3.5 w-3.5" /> {e.userId ? "Manage" : "Grant"}
                 </Button>
@@ -340,37 +355,73 @@ export default function AdminEmployees() {
             <DialogTitle>Staff access — {linkTarget?.name}</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            Link this team member to a signed-in account. They'll get the <strong>staff</strong> role and can
-            view bookings, schedules, and job details at <code className="rounded bg-muted px-1">/staff</code>.
+            Link this team member to a signed-in account and choose their access level.
             The person must sign in to the website at least once to appear in this list.
           </p>
           {authUsers.isLoading ? (
             <Skeleton className="h-10 w-full rounded-xl" />
           ) : (
-            <Select
-              value={linkTarget?.userId ? String(linkTarget.userId) : "none"}
-              onValueChange={v =>
-                setLinkTarget(t => (t ? { ...t, userId: v === "none" ? null : Number(v) } : t))
-              }
-            >
-              <SelectTrigger className="w-full rounded-xl bg-card">
-                <SelectValue placeholder="Choose an account" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">No access (unlink)</SelectItem>
-                {(authUsers.data ?? []).map(u => (
-                  <SelectItem key={u.id} value={String(u.id)}>
-                    {u.name ?? u.email ?? `User #${u.id}`}
-                    {u.role !== "user" ? ` (${u.role})` : ""}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <>
+              <div>
+                <Label className="text-xs text-muted-foreground">Account</Label>
+                <Select
+                  value={linkTarget?.userId ? String(linkTarget.userId) : "none"}
+                  onValueChange={v =>
+                    setLinkTarget(t => (t ? { ...t, userId: v === "none" ? null : Number(v) } : t))
+                  }
+                >
+                  <SelectTrigger className="mt-1.5 w-full rounded-xl bg-card">
+                    <SelectValue placeholder="Choose an account" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No access (unlink)</SelectItem>
+                    {(authUsers.data ?? []).map(u => (
+                      <SelectItem key={u.id} value={String(u.id)}>
+                        {u.name ?? u.email ?? `User #${u.id}`}
+                        {u.role !== "user" ? ` (${u.role})` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {linkTarget?.userId != null && (
+                <div>
+                  <Label className="text-xs text-muted-foreground">Access level</Label>
+                  <Select
+                    value={linkTarget.accessLevel}
+                    onValueChange={v =>
+                      setLinkTarget(t => (t ? { ...t, accessLevel: v as "staff" | "admin" } : t))
+                    }
+                  >
+                    <SelectTrigger className="mt-1.5 w-full rounded-xl bg-card">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="staff">Staff — bookings, schedule, and job details at /staff</SelectItem>
+                      <SelectItem value="admin">Admin — full dashboard, settings, pricing, and team at /admin</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {linkTarget.accessLevel === "admin" && (
+                    <p className="mt-2 flex items-start gap-1.5 rounded-xl bg-primary/5 p-2.5 text-xs text-muted-foreground">
+                      <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+                      Admins can manage everything, including payments, pricing, and other team members' access.
+                    </p>
+                  )}
+                </div>
+              )}
+            </>
           )}
           <Button
             className="mt-2 w-full rounded-xl"
             disabled={link.isPending}
-            onClick={() => linkTarget && link.mutate({ employeeId: linkTarget.id, userId: linkTarget.userId })}
+            onClick={() =>
+              linkTarget &&
+              link.mutate({
+                employeeId: linkTarget.id,
+                userId: linkTarget.userId,
+                accessLevel: linkTarget.accessLevel,
+              })
+            }
           >
             {link.isPending ? "Saving…" : "Save access"}
           </Button>

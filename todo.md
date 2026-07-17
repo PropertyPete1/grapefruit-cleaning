@@ -230,3 +230,12 @@
 
 ## Round 16 — Footer staff login link
 - [x] Add a discreet "Staff login" link to the site footer (bilingual), linking to /staff
+
+## Round 17 — Self-serve role management (Admin / Staff / No access)
+- [x] Backend: admin.linkEmployeeUser extended with accessLevel (admin/staff) or unlink; safety guards: cannot demote yourself, cannot demote the last remaining admin
+- [x] UI: Staff access dialog on Admin → Employees gains an access-level selector (Admin / Staff / No access)
+- [x] Employee card shows access level (Admin vs Staff) when connected
+- [x] Dialog copy updated to explain both roles
+- [x] Promote Karyme (grapefruit@grapefruitclean.com) to Admin — role now 'admin' in users table, card shows "Admin — grapefruit"
+- [x] Tests: vitest coverage for promote/demote/last-admin guard/self-demotion guard (9 new tests, 144 total passing)
+- [x] TS check + full suite green; single checkpoint; GitHub push

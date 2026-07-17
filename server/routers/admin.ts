@@ -137,23 +137,57 @@ export const adminRouter = router({
       return { success: true } as const;
     }),
   /**
-   * Grant staff access: links an employee record to a signed-in user account
-   * and promotes that user to the "staff" role (or revokes it when unlinking).
+   * Grant dashboard access: links an employee record to a signed-in user account
+   * and sets that user's access level ("staff" or "admin"), or revokes access
+   * when unlinking. Safety guards prevent removing the last remaining admin
+   * and prevent an admin from demoting their own account.
    */
   linkEmployeeUser: adminProcedure
-    .input(z.object({ employeeId: z.number().int(), userId: z.number().int().nullable() }))
-    .mutation(async ({ input }) => {
+    .input(
+      z.object({
+        employeeId: z.number().int(),
+        userId: z.number().int().nullable(),
+        accessLevel: z.enum(["staff", "admin"]).default("staff"),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
       const existing = (await db.listEmployees()).find((e) => e.id === input.employeeId);
       if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Employee not found" });
-      // If unlinking or relinking, demote the previously linked user back to "user" (unless admin).
+      const allUsers = await db.listAllUsers();
+      const adminCount = allUsers.filter((u) => u.role === "admin").length;
+
+      /** Throws if demoting this user would leave the site without any admin, or demotes yourself. */
+      const guardDemotion = (userId: number) => {
+        const u = allUsers.find((x) => x.id === userId);
+        if (!u || u.role !== "admin") return;
+        if (u.id === ctx.user.id)
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "You can't remove your own admin access. Ask another admin to change your role.",
+          });
+        if (adminCount <= 1)
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "This is the only admin account. Promote someone else to admin first.",
+          });
+      };
+
+      // If unlinking or relinking, the previously linked user loses their elevated role.
       if (existing.userId && existing.userId !== input.userId) {
-        const prev = (await db.listAllUsers()).find((u) => u.id === existing.userId);
-        if (prev && prev.role === "staff") await db.setUserRole(prev.id, "user");
+        const prev = allUsers.find((u) => u.id === existing.userId);
+        if (prev && prev.role !== "user") {
+          guardDemotion(prev.id);
+          await db.setUserRole(prev.id, "user");
+        }
+      }
+      // If keeping the same linked user but lowering admin → staff, apply the same guards.
+      if (input.userId && existing.userId === input.userId && input.accessLevel === "staff") {
+        guardDemotion(input.userId);
       }
       await db.updateEmployee(input.employeeId, { userId: input.userId });
       if (input.userId) {
-        const target = (await db.listAllUsers()).find((u) => u.id === input.userId);
-        if (target && target.role !== "admin") await db.setUserRole(target.id, "staff");
+        const target = allUsers.find((u) => u.id === input.userId);
+        if (target && target.role !== input.accessLevel) await db.setUserRole(target.id, input.accessLevel);
       }
       return { success: true } as const;
     }),
