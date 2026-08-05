@@ -132,6 +132,35 @@ export const invoices = mysqlTable("invoices", {
   status: mysqlEnum("status", ["draft", "sent", "paid", "overdue", "void"]).default("draft").notNull(),
   dueDate: varchar("dueDate", { length: 10 }),
   paidAt: timestamp("paidAt"),
+  /**
+   * "balance" = auto-generated remaining-balance invoice with a payment link,
+   * created when a booking is marked completed. "manual" = created by hand in
+   * Admin → Invoices (the pre-existing behavior).
+   */
+  kind: mysqlEnum("kind", ["manual", "balance"]).default("manual").notNull(),
+  /**
+   * Secret token behind the emailed payment link (/api/pay/balance/:token).
+   * The route mints a fresh Stripe Checkout Session on each visit, so the
+   * customer-facing link stays valid for the whole linkExpiresAt window even
+   * though a single Stripe session may live at most 24 hours.
+   */
+  payToken: varchar("payToken", { length: 64 }),
+  /** Most recent Stripe Checkout Session minted for this invoice. */
+  stripeSessionId: varchar("stripeSessionId", { length: 255 }),
+  /** Payment intent that settled this invoice (or the one needing a refund). */
+  stripePaymentIntentId: varchar("stripePaymentIntentId", { length: 255 }),
+  /** When the payment link was last emailed to the customer (null = never sent). */
+  linkSentAt: timestamp("linkSentAt"),
+  /** End of the payment link's validity window (7 days from send/resend). */
+  linkExpiresAt: timestamp("linkExpiresAt"),
+  /** How the invoice was settled — null for zero-balance invoices covered by the deposit. */
+  paidVia: mysqlEnum("paidVia", ["stripe", "manual"]),
+  /**
+   * Set when a card payment landed on an invoice that was already settled
+   * (collected in person, or paid twice). Manual payment always wins; this
+   * flags the money that has to be refunded instead of double-marking paid.
+   */
+  refundNeeded: boolean("refundNeeded").default(false).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 export type Invoice = typeof invoices.$inferSelect;

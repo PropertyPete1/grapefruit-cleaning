@@ -379,6 +379,35 @@ export async function updateInvoice(id: number, data: Partial<typeof invoices.$i
   await db.update(invoices).set(data).where(eq(invoices.id, id));
 }
 
+export async function getInvoiceById(id: number) {
+  const db = requireDb(await getDb());
+  const rows = await db.select().from(invoices).where(eq(invoices.id, id)).limit(1);
+  return rows[0];
+}
+
+/** Looks up the invoice behind an emailed balance payment link. */
+export async function getInvoiceByPayToken(token: string) {
+  const db = requireDb(await getDb());
+  const rows = await db.select().from(invoices).where(eq(invoices.payToken, token)).limit(1);
+  return rows[0];
+}
+
+/**
+ * The auto-generated balance invoice for a booking, if one exists. Used to keep
+ * marking a booking completed idempotent — re-completing never issues a second
+ * payment link. Manual invoices attached to the same booking are ignored.
+ */
+export async function getBalanceInvoiceForBooking(bookingId: number) {
+  const db = requireDb(await getDb());
+  const rows = await db
+    .select()
+    .from(invoices)
+    .where(and(eq(invoices.bookingId, bookingId), eq(invoices.kind, "balance")))
+    .orderBy(desc(invoices.id))
+    .limit(1);
+  return rows[0];
+}
+
 // ---------- Payments ----------
 export async function createPayment(data: typeof payments.$inferInsert) {
   const db = requireDb(await getDb());

@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import * as db from "../db";
+import { issueBalanceSafely, originFromRequest } from "../balance";
 import { protectedProcedure, router } from "../_core/trpc";
 
 /**
@@ -79,8 +80,13 @@ export const staffRouter = router({
   /** Staff may progress job status (confirmed → in_progress → completed) but not cancel or delete. */
   updateJobStatus: staffProcedure
     .input(z.object({ bookingId: z.number().int(), status: z.enum(["in_progress", "completed"]) }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       await db.updateBooking(input.bookingId, { status: input.status });
+      // Completing a job issues its remaining-balance invoice and emails the
+      // customer a payment link. Best-effort: never fails the status update.
+      if (input.status === "completed") {
+        await issueBalanceSafely(input.bookingId, originFromRequest(ctx.req));
+      }
       return { success: true } as const;
     }),
 

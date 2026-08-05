@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus } from "lucide-react";
+import { AlertTriangle, Plus, Send } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,14 @@ import { PageHeader, StatusBadge, fmtDate, fmtMoney } from "./adminShared";
 
 const INVOICE_STATUSES = ["draft", "sent", "paid", "overdue", "void"] as const;
 
+/** Payment-link state → an existing StatusBadge colour. */
+const LINK_BADGE_STATUS: Record<string, string> = {
+  sent: "sent",
+  paid: "paid",
+  expired: "expired",
+  none: "draft",
+};
+
 export default function AdminInvoices() {
   const utils = trpc.useUtils();
   const invoices = trpc.admin.invoices.useQuery();
@@ -46,6 +54,17 @@ export default function AdminInvoices() {
       toast.success("Invoice updated");
     },
     onError: () => toast.error("Failed to update invoice"),
+  });
+  const [resendingId, setResendingId] = useState<number | null>(null);
+  const resend = trpc.admin.resendBalanceLink.useMutation({
+    onSuccess: r => {
+      utils.admin.invoices.invalidate();
+      toast.success(
+        r.emailed ? `Payment link re-sent — valid through ${r.expiresOn}` : `Link regenerated (email not configured)`
+      );
+    },
+    onError: e => toast.error(e.message || "Failed to resend payment link"),
+    onSettled: () => setResendingId(null),
   });
 
   const customerName = (id: number) => {
@@ -143,6 +162,7 @@ export default function AdminInvoices() {
                   <th className="px-6 py-3 font-medium">Customer</th>
                   <th className="px-6 py-3 font-medium">Amount</th>
                   <th className="px-6 py-3 font-medium">Due date</th>
+                  <th className="px-6 py-3 font-medium">Payment link</th>
                   <th className="px-6 py-3 font-medium">Status</th>
                 </tr>
               </thead>
@@ -153,6 +173,38 @@ export default function AdminInvoices() {
                     <td className="px-6 py-3.5">{customerName(inv.customerId)}</td>
                     <td className="px-6 py-3.5 font-semibold">{fmtMoney(inv.amount)}</td>
                     <td className="px-6 py-3.5 text-muted-foreground">{inv.dueDate ? fmtDate(inv.dueDate) : "—"}</td>
+                    <td className="px-6 py-3.5">
+                      {inv.linkStatus === "none" ? (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <StatusBadge status={LINK_BADGE_STATUS[inv.linkStatus]} />
+                          {inv.refundNeeded && (
+                            <span
+                              className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700"
+                              title="A card payment arrived after this invoice was already settled — refund it in Stripe."
+                            >
+                              <AlertTriangle className="h-3 w-3" /> Refund needed
+                            </span>
+                          )}
+                          {inv.linkStatus !== "paid" && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 rounded-lg px-2 text-xs"
+                              disabled={resend.isPending && resendingId === inv.id}
+                              onClick={() => {
+                                setResendingId(inv.id);
+                                resend.mutate({ invoiceId: inv.id });
+                              }}
+                            >
+                              <Send className="mr-1 h-3 w-3" />
+                              {resend.isPending && resendingId === inv.id ? "Sending…" : "Resend"}
+                            </Button>
+                          )}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-6 py-3.5">
                       <Select
                         value={inv.status}

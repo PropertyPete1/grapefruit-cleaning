@@ -329,6 +329,196 @@ export async function sendBookingEmails(data: BookingEmailData): Promise<void> {
   }
 }
 
+export interface BalanceEmailData {
+  reference: string;
+  invoiceNumber: string;
+  serviceName: string;
+  /** Date the cleaning was performed (YYYY-MM-DD). */
+  date: string;
+  total: number;
+  deposit: number;
+  /** Remaining balance in whole dollars — computed server-side. */
+  balance: number;
+  customerName: string;
+  customerEmail: string;
+  customerPhone?: string;
+  address?: string;
+  /** Customer-facing payment link (valid for BALANCE_LINK_DAYS). */
+  payUrl: string;
+  /** Last day the link works (YYYY-MM-DD). */
+  expiresOn: string;
+  locale: "en" | "es";
+  bizPhone?: string;
+}
+
+/**
+ * "Your cleaning is complete — pay your remaining balance", in the language
+ * stored on the booking.
+ */
+export function buildBalanceDueEmail(data: BalanceEmailData): { subject: string; body: string } {
+  if (data.locale === "es") {
+    return {
+      subject: `Su limpieza está completa — pague su saldo restante | Grapefruit Cleaning Co.`,
+      body: [
+        `Hola ${data.customerName},`,
+        ``,
+        `¡Su limpieza está completa! Gracias por confiar en Grapefruit Cleaning Co. Solo queda pagar el saldo restante.`,
+        ``,
+        `RESUMEN DEL SERVICIO`,
+        `Referencia: ${data.reference}`,
+        `Factura: ${data.invoiceNumber}`,
+        `Servicio: ${data.serviceName}`,
+        `Fecha del servicio: ${data.date}`,
+        data.address ? `Dirección: ${data.address}` : ``,
+        ``,
+        `RESUMEN DE PAGO`,
+        `Total: ${fmtUsd(data.total)}`,
+        `Depósito ya pagado: ${fmtUsd(data.deposit)}`,
+        `Saldo restante a pagar: ${fmtUsd(data.balance)}`,
+        ``,
+        `PAGUE EN LÍNEA`,
+        `Puede pagar de forma segura con tarjeta desde este enlace:`,
+        `${data.payUrl}`,
+        ``,
+        `El enlace estará disponible hasta el ${data.expiresOn}. Si prefiere pagar en persona, con gusto lo coordinamos — avísenos y ajustaremos su factura.`,
+        ``,
+        data.bizPhone
+          ? `¿Preguntas? Responda a este correo o llámenos al ${data.bizPhone}.`
+          : `¿Preguntas? Simplemente responda a este correo.`,
+        ``,
+        `Con aprecio,`,
+        `El equipo de Grapefruit Cleaning Co.`,
+      ]
+        .filter(line => line !== undefined)
+        .join("\n"),
+    };
+  }
+  return {
+    subject: `Your cleaning is complete — pay your remaining balance | Grapefruit Cleaning Co.`,
+    body: [
+      `Hi ${data.customerName},`,
+      ``,
+      `Your cleaning is complete! Thank you for trusting Grapefruit Cleaning Co. All that's left is your remaining balance.`,
+      ``,
+      `SERVICE SUMMARY`,
+      `Reference: ${data.reference}`,
+      `Invoice: ${data.invoiceNumber}`,
+      `Service: ${data.serviceName}`,
+      `Service date: ${data.date}`,
+      data.address ? `Address: ${data.address}` : ``,
+      ``,
+      `PAYMENT SUMMARY`,
+      `Total: ${fmtUsd(data.total)}`,
+      `Deposit already paid: ${fmtUsd(data.deposit)}`,
+      `Remaining balance due: ${fmtUsd(data.balance)}`,
+      ``,
+      `PAY ONLINE`,
+      `You can pay securely by card using this link:`,
+      `${data.payUrl}`,
+      ``,
+      `The link stays available through ${data.expiresOn}. If you'd rather pay in person, just let us know and we'll settle your invoice that way.`,
+      ``,
+      data.bizPhone
+        ? `Questions? Reply to this email or call us at ${data.bizPhone}.`
+        : `Questions? Just reply to this email.`,
+      ``,
+      `Warmly,`,
+      `The Grapefruit Cleaning Co. Team`,
+    ]
+      .filter(line => line !== undefined)
+      .join("\n"),
+  };
+}
+
+/** Owner notification for a balance paid online. */
+export function buildBalancePaidNotification(data: BalanceEmailData): { title: string; content: string } {
+  return {
+    title: `Balance paid — ${fmtUsd(data.balance)} for booking ${data.reference} (${data.invoiceNumber})`,
+    content: [
+      `A customer paid their remaining balance online.`,
+      ``,
+      `Reference: ${data.reference}`,
+      `Invoice: ${data.invoiceNumber}`,
+      `Service: ${data.serviceName}`,
+      `Service date: ${data.date}`,
+      ``,
+      `Customer: ${data.customerName}`,
+      `Email: ${data.customerEmail}`,
+      data.customerPhone ? `Phone: ${data.customerPhone}` : ``,
+      data.address ? `Address: ${data.address}` : ``,
+      ``,
+      `Total: ${fmtUsd(data.total)} | Deposit: ${fmtUsd(data.deposit)} | Balance paid: ${fmtUsd(data.balance)}`,
+      `This booking is now paid in full.`,
+    ]
+      .filter(line => line !== undefined)
+      .join("\n"),
+  };
+}
+
+/**
+ * Owner alert for the manual-payment race: the invoice was already settled
+ * (collected in person, or paid once already) when a card payment landed.
+ * The invoice is NOT double-marked — this money has to be refunded.
+ */
+export function buildRefundNeededAlert(data: BalanceEmailData): { title: string; content: string } {
+  return {
+    title: `⚠️ REFUND NEEDED — duplicate balance payment on ${data.invoiceNumber} (${data.reference})`,
+    content: [
+      `⚠️ A card payment of ${fmtUsd(data.balance)} arrived for an invoice that was ALREADY settled.`,
+      `The invoice was left as-is (the earlier payment stands) — please refund this card payment in Stripe.`,
+      ``,
+      `Reference: ${data.reference}`,
+      `Invoice: ${data.invoiceNumber}`,
+      `Service: ${data.serviceName}`,
+      `Service date: ${data.date}`,
+      ``,
+      `Customer: ${data.customerName}`,
+      `Email: ${data.customerEmail}`,
+      data.customerPhone ? `Phone: ${data.customerPhone}` : ``,
+      ``,
+      `Amount to refund: ${fmtUsd(data.balance)}`,
+      `The invoice is flagged "refund needed" in Admin → Invoices until you clear it.`,
+    ]
+      .filter(line => line !== undefined)
+      .join("\n"),
+  };
+}
+
+/** Emails the customer their balance payment link. Returns true when delivered. */
+export async function sendBalanceDueEmail(data: BalanceEmailData): Promise<boolean> {
+  const email = buildBalanceDueEmail(data);
+  return deliverEmail(data.customerEmail, email.subject, email.body);
+}
+
+/** Notifies the owner that a balance was paid online (notification + email copy). */
+export async function sendBalancePaidNotification(data: BalanceEmailData): Promise<void> {
+  await notifyOwnerWithEmailCopy(buildBalancePaidNotification(data));
+}
+
+/** Notifies the owner that a duplicate card payment needs refunding. */
+export async function sendRefundNeededAlert(data: BalanceEmailData): Promise<void> {
+  await notifyOwnerWithEmailCopy(buildRefundNeededAlert(data));
+}
+
+/**
+ * Owner notification via the built-in notification API plus an email copy to
+ * OWNER_EMAIL (falling back to the business Gmail inbox), matching how booking
+ * confirmations reach the owner.
+ */
+async function notifyOwnerWithEmailCopy(note: { title: string; content: string }): Promise<void> {
+  try {
+    await notifyOwner({ title: note.title, content: note.content });
+  } catch (error) {
+    console.error("[Email] Failed to notify owner:", error);
+  }
+  const ownerEmail = process.env.OWNER_EMAIL;
+  if (ownerEmail) {
+    await deliverEmail(ownerEmail, note.title, note.content);
+  } else if (process.env.GMAIL_USER) {
+    await deliverEmail(process.env.GMAIL_USER, note.title, note.content);
+  }
+}
+
 export interface ContactEmailData {
   name: string;
   email: string;

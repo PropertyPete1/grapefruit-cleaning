@@ -1,5 +1,6 @@
 import express, { type Express } from "express";
 import Stripe from "stripe";
+import { applyBalancePayment, BALANCE_PAYMENT_TYPE } from "./balance";
 import { finalizeBooking } from "./routers/booking";
 import { getStripe } from "./stripe";
 
@@ -31,6 +32,16 @@ export function registerStripeWebhook(app: Express): void {
       switch (event.type) {
         case "checkout.session.completed": {
           const session = event.data.object as Stripe.Checkout.Session;
+          // Balance payments carry payment_type in their metadata; deposit
+          // sessions (which predate it) fall through to the original path.
+          if (session.metadata?.payment_type === BALANCE_PAYMENT_TYPE) {
+            const invoiceId = Number(session.metadata?.invoice_id);
+            if (invoiceId && session.payment_status === "paid") {
+              const result = await applyBalancePayment(invoiceId, (session.payment_intent as string) ?? null);
+              console.log(`[Stripe Webhook] Invoice ${invoiceId} balance → ${result.outcome} (${event.id})`);
+            }
+            break;
+          }
           const bookingId = Number(session.metadata?.booking_id ?? session.client_reference_id);
           if (bookingId && session.payment_status === "paid") {
             await finalizeBooking(bookingId, (session.payment_intent as string) ?? null);

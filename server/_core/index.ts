@@ -9,6 +9,7 @@ import { appRouter } from "../routers";
 import { registerStripeWebhook } from "../stripeWebhook";
 import { registerSeoRoutes } from "../seoRoutes";
 import { registerScheduledRoutes } from "../scheduledRoutes";
+import { registerBalanceRoutes } from "../balanceRoutes";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 
@@ -43,6 +44,8 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   // Heartbeat cron callbacks (reminder emails)
   registerScheduledRoutes(app);
+  // Customer-facing balance payment links (/api/pay/balance/:token)
+  registerBalanceRoutes(app);
   registerStorageProxy(app);
   registerOAuthRoutes(app);
   // tRPC API

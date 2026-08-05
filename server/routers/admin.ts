@@ -2,8 +2,11 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { randomBytes } from "node:crypto";
 import * as db from "../db";
+import { issueBalanceSafely, originFromRequest, resendBalanceLink } from "../balance";
+import { balanceLinkStatus } from "../balanceRules";
 import { buildStaffInviteEmail, deliverEmail } from "../emails";
 import { storagePut } from "../storage";
+import { getStripe } from "../stripe";
 import { protectedProcedure, router } from "../_core/trpc";
 
 /** Admin-only procedure guard. */
@@ -26,8 +29,13 @@ export const adminRouter = router({
     .query(({ input }) => db.listBookings(input)),
   updateBookingStatus: adminProcedure
     .input(z.object({ id: z.number().int(), status: bookingStatusEnum }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       await db.updateBooking(input.id, { status: input.status });
+      // Completing a job issues its remaining-balance invoice and emails the
+      // customer a payment link. Best-effort: never fails the status update.
+      if (input.status === "completed") {
+        await issueBalanceSafely(input.id, originFromRequest(ctx.req));
+      }
       return { success: true } as const;
     }),
   assignEmployee: adminProcedure
@@ -193,7 +201,15 @@ export const adminRouter = router({
     }),
 
   // ---------- Invoices ----------
-  invoices: adminProcedure.query(() => db.listInvoices()),
+  /** Invoice list with the payment-link state resolved server-side (the secret token is never exposed). */
+  invoices: adminProcedure.query(async () => {
+    const rows = await db.listInvoices();
+    const now = new Date();
+    return rows.map(({ payToken, ...invoice }) => ({
+      ...invoice,
+      linkStatus: balanceLinkStatus({ status: invoice.status, payToken, linkExpiresAt: invoice.linkExpiresAt }, now),
+    }));
+  }),
   createInvoice: adminProcedure
     .input(
       z.object({
@@ -211,11 +227,49 @@ export const adminRouter = router({
   updateInvoiceStatus: adminProcedure
     .input(z.object({ id: z.number().int(), status: z.enum(["draft", "sent", "paid", "overdue", "void"]) }))
     .mutation(async ({ input }) => {
+      const invoice = await db.getInvoiceById(input.id);
       await db.updateInvoice(input.id, {
         status: input.status,
         paidAt: input.status === "paid" ? new Date() : undefined,
+        // Record how it was settled: a card payment landing after an in-person
+        // collection is then treated as a duplicate to refund rather than
+        // double-marking the invoice paid.
+        paidVia: input.status === "paid" && invoice?.paidVia !== "stripe" ? "manual" : undefined,
       });
+      // Best-effort: close the outstanding checkout so the emailed link can't
+      // take a second payment. The refund-needed guard covers it either way.
+      if (input.status === "paid" && invoice?.kind === "balance" && invoice.stripeSessionId) {
+        try {
+          await getStripe().checkout.sessions.expire(invoice.stripeSessionId);
+        } catch (error) {
+          console.warn(`[Balance] Could not expire session for invoice ${input.id}:`, error);
+        }
+      }
       return { success: true } as const;
+    }),
+  /**
+   * Re-sends a balance payment link (expired, or just never acted on),
+   * reopening the 7-day window from now.
+   */
+  resendBalanceLink: adminProcedure
+    .input(z.object({ invoiceId: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const result = await resendBalanceLink(input.invoiceId, originFromRequest(ctx.req));
+      switch (result.outcome) {
+        case "resent":
+          return { emailed: result.emailed, expiresOn: result.expiresOn } as const;
+        case "already_paid":
+          throw new TRPCError({ code: "BAD_REQUEST", message: "This invoice is already paid." });
+        case "voided":
+          throw new TRPCError({ code: "BAD_REQUEST", message: "This invoice was voided." });
+        case "not_a_balance_invoice":
+          throw new TRPCError({ code: "BAD_REQUEST", message: "This invoice has no payment link to resend." });
+        case "customer_not_found":
+        case "booking_not_found":
+          throw new TRPCError({ code: "NOT_FOUND", message: "The booking for this invoice is no longer available." });
+        default:
+          throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
+      }
     }),
 
   // ---------- Payments ----------
