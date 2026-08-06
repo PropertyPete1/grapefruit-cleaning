@@ -5,6 +5,8 @@ import { nanoid } from "nanoid";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import viteConfig from "../../vite.config";
+import { injectWebAppHead } from "@shared/webAppManifest";
+import { cachedTemplateLoader, createIndexHtmlHandler, INDEX_CACHE_CONTROL } from "../webAppHead";
 
 export async function setupVite(app: Express, server: Server) {
   const serverOptions = {
@@ -39,7 +41,11 @@ export async function setupVite(app: Express, server: Server) {
         `src="/src/main.tsx?v=${nanoid()}"`
       );
       const page = await vite.transformIndexHtml(url, template);
-      res.status(200).set({ "Content-Type": "text/html" }).end(page);
+      // Same app-identity splice as production, so dev matches what ships.
+      res
+        .status(200)
+        .set({ "Content-Type": "text/html", "Cache-Control": INDEX_CACHE_CONTROL })
+        .end(injectWebAppHead(page, url));
     } catch (e) {
       vite.ssrFixStacktrace(e as Error);
       next(e);
@@ -58,7 +64,10 @@ export function serveStatic(app: Express) {
     );
   }
 
-  app.use(express.static(distPath));
+  // index: false so "/" falls through to the handler below — every HTML
+  // response must go through one place that splices in the route's app-identity
+  // tags and sets the no-cache headers.
+  app.use(express.static(distPath, { index: false }));
 
   // Hashed build assets that no longer exist (e.g. a browser holding a stale
   // index.html after a redeploy) must 404 — never fall through to index.html.
@@ -69,7 +78,5 @@ export function serveStatic(app: Express) {
   });
 
   // fall through to index.html if the file doesn't exist
-  app.use("*", (_req, res) => {
-    res.sendFile(path.resolve(distPath, "index.html"));
-  });
+  app.use("*", createIndexHtmlHandler(cachedTemplateLoader(path.resolve(distPath, "index.html"))));
 }

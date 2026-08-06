@@ -1,6 +1,5 @@
 import { OAUTH_STATE_COOKIE, encodeOAuthState } from "@shared/const";
-import { safeRedirectPath } from "@shared/access";
-import { appScopeForPath } from "@shared/webAppManifest";
+import { loginDestFor } from "@shared/access";
 
 export { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 
@@ -25,8 +24,7 @@ export const startLogin = (dest?: string) => {
   // Carry the crew destination through the portal so the callback can land the
   // user back on their dashboard. Customer logins send nothing, keeping their
   // flow byte-identical to before (callback → "/" → locale home).
-  const requested = safeRedirectPath(dest ?? `${window.location.pathname}${window.location.search}`);
-  const crewDest = appScopeForPath(requested) === "customer" ? undefined : requested;
+  const crewDest = loginDestFor(dest ?? `${window.location.pathname}${window.location.search}`);
   const state = encodeOAuthState({ redirectUri, nonce, ...(crewDest ? { dest: crewDest } : {}) });
 
   const url = new URL(`${oauthPortalUrl}/app-auth`);

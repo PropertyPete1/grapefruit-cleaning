@@ -77,3 +77,51 @@ export function webAppTargetForPath(pathname: string): WebAppTarget {
   const scope = appScopeForPath(pathname);
   return scope === "customer" ? CUSTOMER_TARGET : SCOPED_TARGETS[scope];
 }
+
+/**
+ * Attribute marking the tags the app-identity machinery owns, on both the
+ * server-rendered and the client-injected copies. The client only ever removes
+ * or restores tags carrying it, so it can't clobber anything else in the head.
+ */
+export const WEBAPP_TAG_ATTR = "data-scoped-webapp";
+
+const escapeAttr = (value: string) =>
+  value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/**
+ * The app-identity tags for a path, as HTML.
+ *
+ * These have to be in the document the server sends: iOS reads the head when
+ * the user taps "Add to Home Screen" and does not pick up a manifest link that
+ * JavaScript added after load — it just saves a plain bookmark, which is why a
+ * client-only swap produced an icon that opened the customer site.
+ *
+ * Returns "" for customer routes, which declare no manifest at all.
+ */
+export function webAppHeadTags(pathname: string): string {
+  const target = webAppTargetForPath(pathname);
+  if (!target.manifestHref) return "";
+  const owned = `${WEBAPP_TAG_ATTR}="true"`;
+  return [
+    `<link rel="manifest" href="${escapeAttr(target.manifestHref)}" ${owned}>`,
+    `<link rel="apple-touch-icon" sizes="180x180" href="${escapeAttr(target.appleTouchIcon!)}" ${owned}>`,
+    `<meta name="apple-mobile-web-app-capable" content="yes" ${owned}>`,
+    `<meta name="mobile-web-app-capable" content="yes" ${owned}>`,
+    `<meta name="apple-mobile-web-app-status-bar-style" content="default" ${owned}>`,
+    `<meta name="apple-mobile-web-app-title" content="${escapeAttr(target.appleTitle!)}" ${owned}>`,
+    `<meta name="theme-color" content="${escapeAttr(target.themeColor!)}" ${owned}>`,
+  ].join("\n    ");
+}
+
+/**
+ * Inserts the app-identity tags for `url` into an index.html string, just
+ * before </head>. Customer routes get the document back untouched, so their
+ * install behavior is unchanged.
+ */
+export function injectWebAppHead(html: string, url: string): string {
+  const tags = webAppHeadTags(url);
+  if (!tags) return html;
+  const closing = html.indexOf("</head>");
+  if (closing === -1) return html;
+  return `${html.slice(0, closing)}    ${tags}\n  ${html.slice(closing)}`;
+}

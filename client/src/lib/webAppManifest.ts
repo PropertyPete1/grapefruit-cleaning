@@ -6,10 +6,10 @@
  * customer homepage. On customer routes the head is restored to exactly what it
  * was, leaving the marketing site's install behavior untouched.
  */
-import { webAppTargetForPath, type WebAppTarget } from "@shared/webAppManifest";
+import { WEBAPP_TAG_ATTR, webAppTargetForPath, type WebAppTarget } from "@shared/webAppManifest";
 
 /** Marks the tags this module owns, so we never remove someone else's. */
-const OWNED = "data-scoped-webapp";
+const OWNED = WEBAPP_TAG_ATTR;
 
 /**
  * Whatever the document declared before we touched it. Captured once, so
@@ -38,7 +38,11 @@ export function applyWebAppTarget(pathname: string, doc: Document = document): W
 
   let manifestLink = doc.querySelector<HTMLLinkElement>('link[rel="manifest"]');
   if (originalManifestHref === undefined) {
-    originalManifestHref = manifestLink?.getAttribute("href") ?? null;
+    // Tags the server spliced in for this route are ours, not the document's
+    // own — treating them as "original" would restore the admin manifest when
+    // navigating back to a customer page.
+    const serverRendered = manifestLink?.getAttribute(OWNED) === "true";
+    originalManifestHref = serverRendered ? null : (manifestLink?.getAttribute("href") ?? null);
   }
 
   if (target.manifestHref) {
