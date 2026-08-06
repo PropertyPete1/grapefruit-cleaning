@@ -7,6 +7,7 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 import { LocaleProvider, detectPreferredLocale } from "./i18n/LocaleContext";
 import { ROUTE_SLUGS, type Locale } from "./i18n/types";
 import { SiteLayout } from "./components/SiteLayout";
+import { applyWebAppTarget } from "./lib/webAppManifest";
 import Home from "./pages/Home";
 import About from "./pages/About";
 import Services from "./pages/Services";
@@ -80,7 +81,19 @@ function LocalizedRoutes({ locale }: { locale: Locale }) {
   );
 }
 
+/**
+ * Keeps the head's web-app manifest in step with the route, so /admin and
+ * /staff install as their own home-screen apps instead of the customer site.
+ */
+function useScopedWebAppManifest() {
+  const [location] = useLocation();
+  useEffect(() => {
+    applyWebAppTarget(location);
+  }, [location]);
+}
+
 function Router() {
+  useScopedWebAppManifest();
   return (
     <Switch>
       <Route path="/" component={RootRedirect} />

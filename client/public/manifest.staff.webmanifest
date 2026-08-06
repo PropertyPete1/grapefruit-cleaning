@@ -1,0 +1,16 @@
+{
+  "name": "Grapefruit Staff",
+  "short_name": "GF Staff",
+  "description": "Grapefruit Cleaning Co. staff dashboard — your jobs, schedule, and job details.",
+  "start_url": "/staff",
+  "scope": "/staff",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FDF8F3",
+  "theme_color": "#2E6E5B",
+  "icons": [
+    { "src": "/icons/staff-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/staff-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/staff-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
