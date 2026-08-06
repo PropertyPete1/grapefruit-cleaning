@@ -17,6 +17,7 @@ import type { Stripe } from "stripe";
 import type { Booking, Customer, Invoice } from "../drizzle/schema";
 import { balanceLinkExpiresAt, computeBalanceDue, stripeSessionExpiresAt } from "./balanceRules";
 import * as db from "./db";
+import { publicOrigin, type OriginRequest } from "./publicOrigin";
 import {
   sendBalanceApprovalNeededAlert,
   sendBalanceDueEmail,
@@ -46,15 +47,11 @@ export function balancePayUrl(origin: string, token: string): string {
 
 /**
  * Origin to build customer-facing links from, taken off the admin/staff request
- * that marked the booking completed (same approach as the deposit checkout).
- * Falls back to PUBLIC_BASE_URL for internal callers without a real request.
+ * that approved the balance (same approach as the deposit checkout). Internal
+ * callers without a real request fall back to PUBLIC_BASE_URL.
  */
-export function originFromRequest(req: { protocol?: string; headers?: Record<string, unknown> } | undefined): string {
-  const origin = req?.headers?.origin;
-  if (typeof origin === "string" && origin.length > 0) return origin;
-  const host = req?.headers?.host;
-  if (typeof host === "string" && host.length > 0) return `${req?.protocol ?? "https"}://${host}`;
-  return process.env.PUBLIC_BASE_URL ?? "";
+export function originFromRequest(req: OriginRequest | undefined): string {
+  return publicOrigin(req);
 }
 
 /**

@@ -14,6 +14,7 @@ import { assertRateLimit } from "./antiSpam";
 import { createBalanceCheckoutSession } from "./balance";
 import { balanceLinkStatus } from "./balanceRules";
 import * as db from "./db";
+import { publicOrigin } from "./publicOrigin";
 
 const BRAND_CORAL = "#F26D5B";
 const BRAND_CREAM = "#FDF8F3";
@@ -96,10 +97,14 @@ function requestIp(req: Request): string {
   return req.socket?.remoteAddress ?? "unknown";
 }
 
+/**
+ * This route is reached by clicking a link in an email, so the browser sends no
+ * Origin header — publicOrigin's forwarded-header and PUBLIC_BASE_URL steps are
+ * what keep the Stripe return URLs on the public domain rather than the
+ * internal one.
+ */
 function requestOrigin(req: Request): string {
-  const origin = req.headers.origin;
-  if (typeof origin === "string" && origin.length > 0) return origin;
-  return `${req.protocol}://${req.headers.host}`;
+  return publicOrigin(req);
 }
 
 async function payBalanceHandler(req: Request, res: Response) {

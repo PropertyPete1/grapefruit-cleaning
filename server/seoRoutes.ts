@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { listBlogPosts } from "./db";
+import { publicOrigin } from "./publicOrigin";
 
 const EN_PATHS = [
   "/en",
@@ -47,12 +48,12 @@ const ES_PATHS = [
 
 export function registerSeoRoutes(app: Express): void {
   app.get("/robots.txt", (req: Request, res: Response) => {
-    const origin = `${req.protocol}://${req.get("host")}`;
+    const origin = publicOrigin(req);
     res.type("text/plain").send(`User-agent: *\nAllow: /\nDisallow: /admin\n\nSitemap: ${origin}/sitemap.xml\n`);
   });
 
   app.get("/sitemap.xml", async (req: Request, res: Response) => {
-    const origin = `${req.protocol}://${req.get("host")}`;
+    const origin = publicOrigin(req);
     const today = new Date().toISOString().slice(0, 10);
     // Published blog posts get locale-prefixed URLs in the sitemap too.
     let blogPaths: { en: string; es: string; lastmod: string }[] = [];

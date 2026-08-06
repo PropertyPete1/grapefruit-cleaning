@@ -13,6 +13,7 @@ import { assertRateLimit, clientIp } from "../antiSpam";
 import { blocksSlot, STALE_DEPOSIT_MINUTES } from "../bookingRules";
 import { sendBookingEmails } from "../emails";
 import { lookupPropertySqft } from "../property";
+import { publicOrigin } from "../publicOrigin";
 import { getStripe } from "../stripe";
 import { publicProcedure, router } from "../_core/trpc";
 
@@ -232,7 +233,7 @@ export const bookingRouter = router({
 
       // Create Stripe Checkout session for the deposit
       const stripe = getStripe();
-      const origin = (ctx.req.headers.origin as string) || `${ctx.req.protocol}://${ctx.req.headers.host}`;
+      const origin = publicOrigin(ctx.req);
       const serviceName = SERVICE_NAMES[input.quote.type][input.locale];
       // Where Stripe sends the customer back. These MUST match the client's
       // booking route for each locale (ROUTE_SLUGS.booking in
