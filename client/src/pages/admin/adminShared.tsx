@@ -1,4 +1,134 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { ChevronDown } from "lucide-react";
+
+/** True while `ref`'s content is wider than the element itself. */
+function useHasOverflow(ref: React.RefObject<HTMLElement | null>): boolean {
+  const [overflowing, setOverflowing] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const measure = () => setOverflowing(el.scrollWidth > el.clientWidth + 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ref]);
+  return overflowing;
+}
+
+/**
+ * A table that stays a table on phones, scrolling inside its own card rather
+ * than pushing the page sideways. The hint only appears when there is actually
+ * more to see.
+ */
+export function ScrollableTable({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const overflowing = useHasOverflow(ref);
+  return (
+    <>
+      <div ref={ref} className="overflow-x-auto">
+        {children}
+      </div>
+      {overflowing && (
+        <p className="border-t border-border px-4 py-2 text-[11px] text-muted-foreground lg:hidden">
+          Swipe the table sideways to see more →
+        </p>
+      )}
+    </>
+  );
+}
+
+/**
+ * Data table on desktop, stacked cards on phones.
+ *
+ * A six-column table can't be read on a 390px screen, and letting it scroll
+ * sideways hides the status and action columns that matter most. Below lg each
+ * row becomes a card instead. The table markup is passed through untouched and
+ * still renders inside its scroll container at lg and up, so desktop layouts
+ * are unchanged.
+ */
+export function TableOrCards({ table, cards }: { table: ReactNode; cards: ReactNode }) {
+  return (
+    <>
+      <div className="hidden overflow-x-auto lg:block">{table}</div>
+      <div className="divide-y divide-border lg:hidden">{cards}</div>
+    </>
+  );
+}
+
+/**
+ * One record as a phone-friendly card: who/when on the left, amount and status
+ * on the right, the long tail of fields behind a "Details" toggle, and any
+ * controls kept at full width where a thumb can reach them.
+ */
+export function RowCard({
+  title,
+  subtitle,
+  badge,
+  amount,
+  details,
+  actions,
+  onClick,
+}: {
+  title: ReactNode;
+  subtitle?: ReactNode;
+  badge?: ReactNode;
+  amount?: ReactNode;
+  /** Secondary fields, revealed on tap. */
+  details?: { label: string; value: ReactNode }[];
+  /** Always-visible controls (selects, buttons). */
+  actions?: ReactNode;
+  onClick?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const hasDetails = Boolean(details && details.length > 0);
+
+  return (
+    <div className="px-4 py-3.5">
+      <div
+        className={onClick ? "-m-1 cursor-pointer rounded-lg p-1 active:bg-muted/60" : undefined}
+        onClick={onClick}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="break-words text-sm font-medium text-foreground">{title}</div>
+            {subtitle && <div className="mt-0.5 break-words text-xs text-muted-foreground">{subtitle}</div>}
+          </div>
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            {amount && <span className="text-sm font-semibold text-foreground">{amount}</span>}
+            {badge}
+          </div>
+        </div>
+      </div>
+
+      {hasDetails && (
+        <>
+          <button
+            type="button"
+            onClick={() => setOpen(o => !o)}
+            aria-expanded={open}
+            className="mt-2 flex items-center gap-1 text-xs font-medium text-muted-foreground"
+          >
+            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
+            {open ? "Hide details" : "Details"}
+          </button>
+          {open && (
+            <dl className="mt-2 space-y-1.5 rounded-xl bg-muted/50 p-3 text-xs">
+              {details!.map(d => (
+                <div key={d.label} className="flex justify-between gap-3">
+                  <dt className="shrink-0 text-muted-foreground">{d.label}</dt>
+                  <dd className="min-w-0 break-words text-right font-medium text-foreground">{d.value}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
+        </>
+      )}
+
+      {actions && <div className="mt-3 flex flex-wrap items-center gap-2">{actions}</div>}
+    </div>
+  );
+}
 
 export function PageHeader({ title, subtitle, action }: { title: string; subtitle?: string; action?: ReactNode }) {
   return (

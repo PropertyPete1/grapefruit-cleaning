@@ -2,7 +2,7 @@ import { Link } from "wouter";
 import { ArrowUpRight, CalendarCheck, DollarSign, Star, Users } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { Skeleton } from "@/components/ui/skeleton";
-import { PageHeader, SERVICE_LABELS, StatusBadge, fmtDate, fmtMoney } from "./adminShared";
+import { PageHeader, SERVICE_LABELS, ScrollableTable, StatusBadge, fmtDate, fmtMoney } from "./adminShared";
 
 export default function AdminDashboard() {
   const stats = trpc.admin.stats.useQuery();
@@ -56,7 +56,7 @@ export default function AdminDashboard() {
             No bookings yet. New reservations will appear here automatically.
           </p>
         ) : (
-          <div className="overflow-x-auto">
+          <ScrollableTable>
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted-foreground">
@@ -81,7 +81,7 @@ export default function AdminDashboard() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </ScrollableTable>
         )}
       </div>
     </div>

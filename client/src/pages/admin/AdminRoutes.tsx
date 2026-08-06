@@ -129,7 +129,7 @@ function AdminShell({ children }: { children: React.ReactNode }) {
       </aside>
 
       {/* Mobile top bar: hamburger + current section */}
-      <div className="fixed inset-x-0 top-0 z-40 flex items-center gap-3 border-b border-border bg-card px-4 py-3 lg:hidden">
+      <div className="fixed inset-x-0 top-0 z-40 flex items-center gap-3 border-b border-border bg-card px-4 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))] lg:hidden">
         <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
           <SheetTrigger asChild>
             <Button variant="outline" size="icon" className="shrink-0 rounded-xl" aria-label="Open navigation menu">
@@ -195,7 +195,9 @@ function AdminShell({ children }: { children: React.ReactNode }) {
         </div>
       </div>
 
-      <main className="flex-1 px-4 pb-16 pt-20 lg:ml-64 lg:px-10 lg:pt-10">{children}</main>
+      <main className="min-w-0 flex-1 px-[calc(1rem+env(safe-area-inset-left))] pb-[calc(4rem+env(safe-area-inset-bottom))] pt-[calc(5rem+env(safe-area-inset-top))] lg:ml-64 lg:px-10 lg:pb-16 lg:pt-10">
+        {children}
+      </main>
     </div>
   );
 }

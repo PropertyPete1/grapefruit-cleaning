@@ -14,7 +14,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { PageHeader } from "./adminShared";
+import { PageHeader, ScrollableTable } from "./adminShared";
 
 export default function AdminCoupons() {
   const utils = trpc.useUtils();
@@ -157,7 +157,7 @@ export default function AdminCoupons() {
             No coupons yet. Create one to offer discounts at checkout.
           </p>
         ) : (
-          <div className="overflow-x-auto">
+          <ScrollableTable>
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted-foreground">
@@ -202,7 +202,7 @@ export default function AdminCoupons() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </ScrollableTable>
         )}
       </div>
     </div>

@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { Loader2, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { trpc } from "@/lib/trpc";
 import {
   DEFAULT_PRICING,
@@ -15,7 +16,7 @@ import {
   type PricingTier,
   type TieredType,
 } from "@shared/pricing";
-import { PageHeader, SERVICE_LABELS } from "./adminShared";
+import { PageHeader, SERVICE_LABELS, TableOrCards } from "./adminShared";
 
 const EXTRA_LABELS: Record<ExtraId, string> = {
   pets: "Home with pets",
@@ -246,7 +247,7 @@ export default function AdminServices() {
             const svcProblems = tierProblems(tiers, svc);
             return (
               <div key={svc} className="rounded-2xl bg-card shadow-sm ring-1 ring-border">
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-6 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-4 lg:px-6">
                   <div>
                     <h2 className="font-semibold text-foreground">{SERVICE_LABELS[svc] ?? svc} — rates by size</h2>
                     <p className="mt-0.5 text-xs text-muted-foreground">
@@ -263,7 +264,9 @@ export default function AdminServices() {
                     <Plus className="mr-1 h-3.5 w-3.5" /> Add tier
                   </Button>
                 </div>
-                <table className="w-full text-sm">
+                <TableOrCards
+                  table={
+                  <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border text-left text-[11px] uppercase tracking-wide text-muted-foreground">
                       <th className="px-6 py-2 font-medium">Range</th>
@@ -345,6 +348,97 @@ export default function AdminServices() {
                     ))}
                   </tbody>
                 </table>
+                  }
+                  cards={tiers.map((tier, idx, arr) => (
+                    <div key={idx} className="space-y-3 px-4 py-3.5">
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-sm font-medium text-foreground">
+                          {tierRange(tier, idx > 0 ? arr[idx - 1] : undefined)}
+                        </p>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          aria-label={`Remove ${SERVICE_LABELS[svc] ?? svc} tier ${idx + 1}`}
+                          className="h-8 w-8 shrink-0 rounded-lg text-muted-foreground hover:text-destructive"
+                          disabled={tiers.length <= 1}
+                          onClick={() => removeTier(svc, idx)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <Label className="text-[11px] text-muted-foreground">Max sq ft</Label>
+                          {tier.maxSqft === Infinity ? (
+                            <p className="mt-1.5 h-9 text-xs leading-9 text-muted-foreground">and up</p>
+                          ) : (
+                            <Input
+                              aria-label={`${SERVICE_LABELS[svc] ?? svc} tier ${idx + 1} max sq ft (mobile)`}
+                              type="number"
+                              inputMode="numeric"
+                              min={1}
+                              step={50}
+                              className="mt-1.5 h-9 w-full text-sm"
+                              value={tier.maxSqft}
+                              onChange={e => {
+                                const n = Number(e.target.value);
+                                if (Number.isFinite(n)) {
+                                  update(cfg => {
+                                    cfg.tiers[svc][idx].maxSqft = Math.round(n);
+                                  });
+                                }
+                              }}
+                            />
+                          )}
+                        </div>
+                        <div>
+                          <Label className="text-[11px] text-muted-foreground">Price</Label>
+                          {tier.customQuote ? (
+                            <p className="mt-1.5 h-9 text-xs leading-9 text-muted-foreground">Custom quote</p>
+                          ) : (
+                            <div className="relative mt-1.5">
+                              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                                $
+                              </span>
+                              <Input
+                                aria-label={`${SERVICE_LABELS[svc] ?? svc} tier ${idx + 1} price (mobile)`}
+                                type="number"
+                                inputMode="decimal"
+                                min={0}
+                                step="0.01"
+                                className="h-9 w-full pl-6 text-right text-sm"
+                                value={tier.price}
+                                onChange={e => {
+                                  const n = parsePrice(e.target.value);
+                                  if (n !== null)
+                                    update(cfg => {
+                                      cfg.tiers[svc][idx].price = n;
+                                    });
+                                }}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      {idx === topPricedIdx && (
+                        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <input
+                            type="checkbox"
+                            className="h-3.5 w-3.5 accent-primary"
+                            checked={Boolean(tier.startingAt)}
+                            onChange={e => {
+                              const on = e.target.checked;
+                              update(cfg => {
+                                cfg.tiers[svc][idx].startingAt = on || undefined;
+                              });
+                            }}
+                          />
+                          show as "starting at"
+                        </label>
+                      )}
+                    </div>
+                  ))}
+                />
                 {svcProblems.length > 0 && (
                   <ul className="space-y-1 border-t border-border bg-destructive/5 px-6 py-3 text-xs text-destructive">
                     {svcProblems.map(problem => (

@@ -55,7 +55,7 @@ export default function AdminMessages() {
               </div>
               {m.subject && <p className="mt-3 text-sm font-medium text-foreground">{m.subject}</p>}
               <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{m.message}</p>
-              <div className="mt-4 flex gap-2 border-t border-border pt-4">
+              <div className="mt-4 flex flex-wrap gap-2 border-t border-border pt-4">
                 <Button
                   variant="outline"
                   size="sm"

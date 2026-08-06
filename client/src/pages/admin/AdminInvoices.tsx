@@ -20,7 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { PageHeader, StatusBadge, fmtDate, fmtMoney } from "./adminShared";
+import { PageHeader, RowCard, StatusBadge, TableOrCards, fmtDate, fmtMoney } from "./adminShared";
 
 const INVOICE_STATUSES = ["draft", "sent", "paid", "overdue", "void"] as const;
 
@@ -331,7 +331,8 @@ export default function AdminInvoices() {
         ) : (invoices.data ?? []).length === 0 ? (
           <p className="p-10 text-center text-sm text-muted-foreground">No invoices yet.</p>
         ) : (
-          <div className="overflow-x-auto">
+          <TableOrCards
+            table={
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted-foreground">
@@ -407,7 +408,62 @@ export default function AdminInvoices() {
                 ))}
               </tbody>
             </table>
-          </div>
+            }
+            cards={(invoices.data ?? []).map(inv => (
+              <RowCard
+                key={inv.id}
+                title={<span className="font-mono text-xs font-semibold text-primary">{inv.number}</span>}
+                subtitle={customerName(inv.customerId)}
+                amount={fmtMoney(inv.amount)}
+                badge={<StatusBadge status={inv.status} />}
+                details={[
+                  { label: "Due date", value: inv.dueDate ? fmtDate(inv.dueDate) : "—" },
+                  {
+                    label: "Payment link",
+                    value:
+                      inv.linkStatus === "none" ? "—" : <StatusBadge status={LINK_BADGE_STATUS[inv.linkStatus]} />,
+                  },
+                  ...(inv.refundNeeded ? [{ label: "Action", value: "Refund needed in Stripe" }] : []),
+                ]}
+                actions={
+                  <>
+                    <Select
+                      value={inv.status}
+                      onValueChange={v =>
+                        updateStatus.mutate({ id: inv.id, status: v as (typeof INVOICE_STATUSES)[number] })
+                      }
+                    >
+                      <SelectTrigger className="h-9 flex-1 rounded-lg text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {INVOICE_STATUSES.map(st => (
+                          <SelectItem key={st} value={st} className="capitalize">
+                            {st}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {inv.linkStatus !== "paid" && inv.linkStatus !== "awaiting_approval" && inv.linkStatus !== "none" && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-9 rounded-lg text-xs"
+                        disabled={resend.isPending && resendingId === inv.id}
+                        onClick={() => {
+                          setResendingId(inv.id);
+                          resend.mutate({ invoiceId: inv.id });
+                        }}
+                      >
+                        <Send className="mr-1 h-3 w-3" />
+                        {resend.isPending && resendingId === inv.id ? "Sending…" : "Resend"}
+                      </Button>
+                    )}
+                  </>
+                }
+              />
+            ))}
+          />
         )}
       </div>
     </div>

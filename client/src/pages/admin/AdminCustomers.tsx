@@ -9,7 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { PageHeader, SERVICE_LABELS, StatusBadge, fmtDate, fmtMoney } from "./adminShared";
+import { PageHeader, RowCard, SERVICE_LABELS, StatusBadge, TableOrCards, fmtDate, fmtMoney } from "./adminShared";
 
 export default function AdminCustomers() {
   const [search, setSearch] = useState("");
@@ -50,7 +50,8 @@ export default function AdminCustomers() {
             No customers yet. They'll appear here when bookings are made.
           </p>
         ) : (
-          <div className="overflow-x-auto">
+          <TableOrCards
+            table={
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted-foreground">
@@ -87,7 +88,29 @@ export default function AdminCustomers() {
                 ))}
               </tbody>
             </table>
-          </div>
+            }
+            cards={(customers.data ?? []).map(c => (
+              <RowCard
+                key={c.id}
+                onClick={() => setSelectedId(c.id)}
+                title={`${c.firstName} ${c.lastName}`}
+                subtitle={c.email}
+                badge={
+                  <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-semibold uppercase">
+                    {c.preferredLocale}
+                  </span>
+                }
+                details={[
+                  { label: "Phone", value: c.phone ?? "—" },
+                  { label: "City", value: c.city ?? "—" },
+                  {
+                    label: "Customer since",
+                    value: new Date(c.createdAt).toLocaleDateString("en-US", { month: "short", year: "numeric" }),
+                  },
+                ]}
+              />
+            ))}
+          />
         )}
       </div>
 

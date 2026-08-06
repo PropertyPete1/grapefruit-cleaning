@@ -10,7 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { PageHeader, SERVICE_LABELS, StatusBadge, fmtDate, fmtMoney } from "./adminShared";
+import { PageHeader, RowCard, SERVICE_LABELS, StatusBadge, TableOrCards, fmtDate, fmtMoney } from "./adminShared";
 
 const STATUSES = ["pending_deposit", "confirmed", "in_progress", "completed", "cancelled", "expired"] as const;
 
@@ -74,7 +74,8 @@ export default function AdminAppointments() {
         ) : (bookings.data ?? []).length === 0 ? (
           <p className="p-10 text-center text-sm text-muted-foreground">No bookings found for this filter.</p>
         ) : (
-          <div className="overflow-x-auto">
+          <TableOrCards
+            table={
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted-foreground">
@@ -181,7 +182,82 @@ export default function AdminAppointments() {
                 ))}
               </tbody>
             </table>
-          </div>
+            }
+            cards={(bookings.data ?? []).map(b => (
+              <RowCard
+                key={b.id}
+                title={
+                  <span className="flex flex-wrap items-center gap-x-2">
+                    <span className="font-mono text-xs font-semibold text-primary">{b.reference}</span>
+                    <span>{SERVICE_LABELS[b.serviceType] ?? b.serviceType}</span>
+                  </span>
+                }
+                subtitle={`${fmtDate(b.scheduledDate)} · ${b.scheduledTime}`}
+                amount={fmtMoney(b.totalAmount)}
+                badge={<StatusBadge status={b.status} />}
+                details={[
+                  { label: "Address", value: `${b.addressLine}, ${b.city}` },
+                  { label: "Deposit", value: fmtMoney(b.depositAmount) },
+                  {
+                    label: "Size",
+                    value: b.verifiedSqft
+                      ? `${b.verifiedSqft.toLocaleString()} ft² verified${b.sqftMismatch ? " (price corrected)" : ""}`
+                      : `${b.sqft.toLocaleString()} ft²`,
+                  },
+                  ...(b.slotConflict ? [{ label: "Warning", value: "Slot conflict" }] : []),
+                  ...(pendingByBooking.get(b.id) !== undefined
+                    ? [
+                        {
+                          label: "Balance",
+                          value: (
+                            <Link href="/admin/invoices" className="text-amber-700 underline">
+                              {fmtMoney(pendingByBooking.get(b.id)!)} awaiting approval
+                            </Link>
+                          ),
+                        },
+                      ]
+                    : []),
+                ]}
+                actions={
+                  <>
+                    <Select
+                      value={b.status}
+                      onValueChange={v => updateStatus.mutate({ id: b.id, status: v as (typeof STATUSES)[number] })}
+                    >
+                      <SelectTrigger className="h-9 flex-1 rounded-lg text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {STATUSES.map(st => (
+                          <SelectItem key={st} value={st} className="capitalize">
+                            {st.replace(/_/g, " ")}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Select
+                      value={b.employeeId ? String(b.employeeId) : "none"}
+                      onValueChange={v =>
+                        assign.mutate({ bookingId: b.id, employeeId: v === "none" ? null : Number(v) })
+                      }
+                    >
+                      <SelectTrigger className="h-9 flex-1 rounded-lg text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Unassigned</SelectItem>
+                        {(employees.data ?? []).map(e => (
+                          <SelectItem key={e.id} value={String(e.id)}>
+                            {e.firstName} {e.lastName}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </>
+                }
+              />
+            ))}
+          />
         )}
       </div>
     </div>

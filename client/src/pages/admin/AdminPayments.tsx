@@ -1,6 +1,6 @@
 import { trpc } from "@/lib/trpc";
 import { Skeleton } from "@/components/ui/skeleton";
-import { PageHeader, StatusBadge, fmtMoney } from "./adminShared";
+import { PageHeader, RowCard, StatusBadge, TableOrCards, fmtMoney } from "./adminShared";
 
 export default function AdminPayments() {
   const payments = trpc.admin.payments.useQuery();
@@ -20,7 +20,8 @@ export default function AdminPayments() {
             No payments yet. Deposits paid through the booking flow will appear here.
           </p>
         ) : (
-          <div className="overflow-x-auto">
+          <TableOrCards
+            table={
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted-foreground">
@@ -53,7 +54,22 @@ export default function AdminPayments() {
                 ))}
               </tbody>
             </table>
-          </div>
+            }
+            cards={(payments.data ?? []).map(p => (
+              <RowCard
+                key={p.id}
+                title={<span className="capitalize">{p.kind} payment</span>}
+                subtitle={`${new Date(p.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}${p.bookingId ? ` · booking #${p.bookingId}` : ""}`}
+                amount={fmtMoney(p.amount)}
+                badge={<StatusBadge status={p.status} />}
+                details={[
+                  { label: "Method", value: <span className="capitalize">{p.method ?? "—"}</span> },
+                  { label: "Booking", value: p.bookingId ? `#${p.bookingId}` : "—" },
+                  { label: "Invoice", value: p.invoiceId ? `#${p.invoiceId}` : "—" },
+                ]}
+              />
+            ))}
+          />
         )}
       </div>
     </div>
