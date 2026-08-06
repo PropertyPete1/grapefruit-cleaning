@@ -129,6 +129,57 @@ describe("finalizeBooking (late-payment recovery)", () => {
     expect(mockGetBookedSlots).not.toHaveBeenCalled();
   });
 
+  it("skips the conflict check while a fresh pending_deposit booking still holds its slot", async () => {
+    mockGetBookingById.mockResolvedValue({
+      ...baseBooking,
+      status: "pending_deposit",
+      createdAt: new Date(Date.now() - 5 * 60_000),
+    });
+    await finalizeBooking(42, "pi_fresh");
+    expect(mockGetBookedSlots).not.toHaveBeenCalled();
+    expect(mockUpdateBooking).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ status: "confirmed", slotConflict: false })
+    );
+  });
+
+  /**
+   * The window between the two halves of slot expiry: blocksSlot releases the
+   * slot on the clock at STALE_DEPOSIT_MINUTES, but the row only flips to
+   * "expired" when the daily cron runs. A payment recovered in between (a
+   * retried webhook, or a late return-page confirm) used to skip the conflict
+   * check entirely because it keyed off the status string.
+   */
+  it("flags slotConflict for a STALE pending_deposit booking whose slot was retaken", async () => {
+    mockGetBookingById.mockResolvedValue({
+      ...baseBooking,
+      status: "pending_deposit",
+      createdAt: new Date(Date.now() - (STALE_DEPOSIT_MINUTES + 5) * 60_000),
+    });
+    mockGetBookedSlots.mockResolvedValue(["10:00"]);
+    await finalizeBooking(42, "pi_stale_retaken");
+    expect(mockGetBookedSlots).toHaveBeenCalledWith("2026-07-20");
+    expect(mockUpdateBooking).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ status: "confirmed", slotConflict: true })
+    );
+    expect(mockCreatePayment).toHaveBeenCalled();
+  });
+
+  it("does not flag a stale pending_deposit booking when its slot is still free", async () => {
+    mockGetBookingById.mockResolvedValue({
+      ...baseBooking,
+      status: "pending_deposit",
+      createdAt: new Date(Date.now() - (STALE_DEPOSIT_MINUTES + 5) * 60_000),
+    });
+    mockGetBookedSlots.mockResolvedValue(["09:00"]);
+    await finalizeBooking(42, "pi_stale_free");
+    expect(mockUpdateBooking).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ status: "confirmed", slotConflict: false })
+    );
+  });
+
   it("is idempotent: already-confirmed and cancelled bookings are untouched", async () => {
     for (const status of ["confirmed", "cancelled", "completed", "in_progress"]) {
       mockGetBookingById.mockResolvedValue({ ...baseBooking, status });

@@ -15,12 +15,7 @@
 import { randomBytes } from "node:crypto";
 import type { Stripe } from "stripe";
 import type { Booking, Customer, Invoice } from "../drizzle/schema";
-import {
-  balanceLinkExpiresAt,
-  computeBalanceDue,
-  isBalanceLinkPayable,
-  stripeSessionExpiresAt,
-} from "./balanceRules";
+import { balanceLinkExpiresAt, computeBalanceDue, stripeSessionExpiresAt } from "./balanceRules";
 import * as db from "./db";
 import {
   sendBalanceApprovalNeededAlert,

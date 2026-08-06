@@ -10,7 +10,7 @@ import {
 import { parseSchedule, slotsForDate, SCHEDULE_SETTING_KEY } from "@shared/schedule";
 import * as db from "../db";
 import { assertRateLimit, clientIp } from "../antiSpam";
-import { STALE_DEPOSIT_MINUTES } from "../bookingRules";
+import { blocksSlot, STALE_DEPOSIT_MINUTES } from "../bookingRules";
 import { sendBookingEmails } from "../emails";
 import { lookupPropertySqft } from "../property";
 import { getStripe } from "../stripe";
@@ -234,7 +234,12 @@ export const bookingRouter = router({
       const stripe = getStripe();
       const origin = (ctx.req.headers.origin as string) || `${ctx.req.protocol}://${ctx.req.headers.host}`;
       const serviceName = SERVICE_NAMES[input.quote.type][input.locale];
-      const bookingPath = input.locale === "es" ? "/es/reservar" : "/booking";
+      // Where Stripe sends the customer back. These MUST match the client's
+      // booking route for each locale (ROUTE_SLUGS.booking in
+      // client/src/i18n/types.ts): an unrouted path falls through to the
+      // catch-all redirect, which drops the query string, so the return-page
+      // confirmation fallback never runs. Pinned by stripeReturn.test.ts.
+      const bookingPath = input.locale === "es" ? "/es/reservar" : "/en/book";
 
       const session = await stripe.checkout.sessions.create({
         mode: "payment",
@@ -341,13 +346,17 @@ export async function finalizeBooking(bookingId: number, paymentIntentId: string
   if (!booking || (booking.status !== "pending_deposit" && booking.status !== "expired")) return;
 
   // Defense in depth for late (expired-recovery) payments: the slot may have
-  // been retaken while this checkout sat expired. Still confirm — a paid
+  // been retaken while this checkout sat unpaid. Still confirm — a paid
   // deposit is never dropped silently — but flag the conflict so the owner
   // notification asks them to reschedule one of the two bookings.
-  // (Safe to check only for expired bookings: an expired row never blocks the
-  // slot itself, whereas a fresh pending_deposit row would match its own slot.)
+  //
+  // Gated on whether this booking still holds its own slot, NOT on its status.
+  // A pending_deposit row releases its slot on the clock, at
+  // STALE_DEPOSIT_MINUTES, but only flips to "expired" when the daily cron
+  // runs — so a status check misses every conflict in that window. While the
+  // booking does still hold its slot, getBookedSlots would match itself.
   const slotConflict =
-    booking.status === "expired" &&
+    !blocksSlot({ status: booking.status, createdAt: booking.createdAt ?? null }) &&
     (await db.getBookedSlots(booking.scheduledDate)).includes(booking.scheduledTime);
 
   await db.updateBooking(bookingId, {

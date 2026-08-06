@@ -9,11 +9,20 @@ import { sdk } from "./_core/sdk";
 import { sendDueReminders } from "./reminders";
 
 async function sendRemindersHandler(req: Request, res: Response) {
+  // Authenticate first, and on its own: a bad/absent session makes
+  // authenticateRequest throw, which is a 403 for this endpoint — not a server
+  // error, and not something to report back in detail to an anonymous caller.
+  let isCron = false;
   try {
-    const user = await sdk.authenticateRequest(req);
-    if (!user.isCron) {
-      return res.status(403).json({ error: "cron-only endpoint" });
-    }
+    isCron = (await sdk.authenticateRequest(req)).isCron === true;
+  } catch {
+    isCron = false;
+  }
+  if (!isCron) {
+    return res.status(403).json({ error: "cron-only endpoint" });
+  }
+
+  try {
     const summary = await sendDueReminders();
     console.log(
       `[Reminders] Scanned ${summary.scanned} upcoming bookings, sent ${summary.sent} reminder(s).`,
@@ -21,11 +30,11 @@ async function sendRemindersHandler(req: Request, res: Response) {
     );
     return res.json({ ok: true, ...summary });
   } catch (error) {
+    // Stack traces stay in the server log; the response carries only the
+    // message, so the endpoint can't be used to map the filesystem.
     console.error("[Reminders] Handler error:", error);
     return res.status(500).json({
       error: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
-      context: { url: req.originalUrl },
       timestamp: new Date().toISOString(),
     });
   }

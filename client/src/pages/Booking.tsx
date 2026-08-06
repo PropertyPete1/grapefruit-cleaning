@@ -847,7 +847,10 @@ export default function Booking() {
                         <span className="font-display text-xl font-bold text-foreground">${breakdown.total}</span>
                       </div>
                       <div className="mt-2 flex items-center justify-between">
-                        <span className="font-semibold text-foreground">{t.booking.depositDue} (20%)</span>
+                        {/* Rate comes from the live pricing config — the admin can change it. */}
+                        <span className="font-semibold text-foreground">
+                          {t.booking.depositDue} ({Math.round(pricing.depositRate * 100)}%)
+                        </span>
                         <span className="font-display text-2xl font-extrabold text-primary">${deposit}</span>
                       </div>
                       <p className="mt-4 flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
