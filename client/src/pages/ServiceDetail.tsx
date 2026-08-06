@@ -5,7 +5,7 @@ import { useLocale } from "@/i18n/LocaleContext";
 import { useSeo, localBusinessJsonLd } from "@/hooks/useSeo";
 import { useReveal } from "@/hooks/useReveal";
 import { ASSETS } from "@/lib/assets";
-import { type CleaningType, type ExtraId } from "@shared/pricing";
+import { startingPriceFor, type CleaningType, type ExtraId } from "@shared/pricing";
 import { usePricing } from "@/hooks/usePricing";
 
 const IMAGES: Record<CleaningType, { hero: string; secondary: string }> = {
@@ -42,7 +42,7 @@ export default function ServiceDetail({ serviceId }: { serviceId: CleaningType }
         name: copy.name,
         provider: { "@type": "CleaningService", name: "Grapefruit Cleaning Co." },
         description: copy.short,
-        offers: { "@type": "Offer", price: pricing.basePrices[serviceId], priceCurrency: "USD" },
+        offers: { "@type": "Offer", price: startingPriceFor(serviceId, pricing), priceCurrency: "USD" },
       },
     ],
   });
@@ -62,7 +62,7 @@ export default function ServiceDetail({ serviceId }: { serviceId: CleaningType }
           <div>
             <span className="reveal inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/5 px-4 py-1.5 text-xs font-semibold text-primary">
               <Sparkles className="h-3.5 w-3.5" />
-              {t.common.from} ${pricing.basePrices[serviceId]} {t.common.perVisit}
+              {t.common.from} ${startingPriceFor(serviceId, pricing)} {t.common.perVisit}
             </span>
             <h1
               className="reveal mt-5 font-display text-4xl font-extrabold tracking-tight text-foreground md:text-5xl"

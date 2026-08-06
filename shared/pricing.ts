@@ -80,29 +80,64 @@ export interface PricingConfig {
 /** Setting key under which the pricing override JSON is stored. */
 export const PRICING_SETTING_KEY = "pricing_config";
 
-/** Owner-specified default pricing (fallback when no valid override stored). */
+/**
+ * Owner-specified default pricing (fallback when no valid override stored).
+ *
+ * Tiers step roughly every 200 sq ft so the county-verified square footage the
+ * booking flow looks up lands on a price that actually fits the home, instead
+ * of rounding into a 500 sq ft band. Residential is the anchor ladder, starting
+ * at $79.99 for a 1 bed / 1 bath apartment; deep cleans run ~1.8x residential
+ * and move in/out ~1.6x, matching the ratios those services have always had.
+ */
 export const DEFAULT_PRICING: PricingConfig = {
   tiers: {
     residential: [
-      { maxSqft: 1000, price: 99.99 },
-      { maxSqft: 1500, price: 129.99 },
-      { maxSqft: 2000, price: 159.99 },
-      { maxSqft: 2500, price: 199.99 },
+      { maxSqft: 700, price: 79.99 },
+      { maxSqft: 900, price: 89.99 },
+      { maxSqft: 1100, price: 99.99 },
+      { maxSqft: 1300, price: 112.99 },
+      { maxSqft: 1500, price: 124.99 },
+      { maxSqft: 1700, price: 136.99 },
+      { maxSqft: 1900, price: 149.99 },
+      { maxSqft: 2100, price: 162.99 },
+      { maxSqft: 2300, price: 176.99 },
+      { maxSqft: 2500, price: 189.99 },
+      { maxSqft: 2800, price: 209.99 },
+      { maxSqft: 3100, price: 229.99 },
       { maxSqft: 3500, price: 249.99, startingAt: true },
       { maxSqft: Infinity, price: 0, customQuote: true },
     ],
     deep: [
-      { maxSqft: 1000, price: 179.99 },
-      { maxSqft: 1500, price: 229.99 },
-      { maxSqft: 2500, price: 299.99 },
-      { maxSqft: Infinity, price: 399.99, startingAt: true },
+      { maxSqft: 700, price: 143.99 },
+      { maxSqft: 900, price: 161.99 },
+      { maxSqft: 1100, price: 179.99 },
+      { maxSqft: 1300, price: 202.99 },
+      { maxSqft: 1500, price: 224.99 },
+      { maxSqft: 1700, price: 246.99 },
+      { maxSqft: 1900, price: 269.99 },
+      { maxSqft: 2100, price: 292.99 },
+      { maxSqft: 2300, price: 318.99 },
+      { maxSqft: 2500, price: 341.99 },
+      { maxSqft: 2800, price: 377.99 },
+      { maxSqft: 3100, price: 413.99 },
+      { maxSqft: 3500, price: 449.99 },
+      { maxSqft: Infinity, price: 485.99, startingAt: true },
     ],
     moveinout: [
-      { maxSqft: 1000, price: 169.99 },
+      { maxSqft: 700, price: 127.99 },
+      { maxSqft: 900, price: 143.99 },
+      { maxSqft: 1100, price: 159.99 },
+      { maxSqft: 1300, price: 180.99 },
       { maxSqft: 1500, price: 199.99 },
-      { maxSqft: 2000, price: 249.99 },
-      { maxSqft: 2500, price: 299.99 },
-      { maxSqft: Infinity, price: 349.99, startingAt: true },
+      { maxSqft: 1700, price: 218.99 },
+      { maxSqft: 1900, price: 239.99 },
+      { maxSqft: 2100, price: 260.99 },
+      { maxSqft: 2300, price: 282.99 },
+      { maxSqft: 2500, price: 303.99 },
+      { maxSqft: 2800, price: 335.99 },
+      { maxSqft: 3100, price: 367.99 },
+      { maxSqft: 3500, price: 399.99 },
+      { maxSqft: Infinity, price: 431.99, startingAt: true },
     ],
   },
   basePrices: {
@@ -191,6 +226,159 @@ const pricingConfigSchema = z.object({
   }),
   depositRate: z.number().min(0.01).max(1),
 });
+
+// ---------------------------------------------------------------------------
+// Strict validation (write path)
+// ---------------------------------------------------------------------------
+
+/**
+ * Hard cap on tiers per service. Generous enough for 100 sq ft steps across the
+ * whole range, low enough that a runaway config can't wedge the pricing table.
+ */
+export const MAX_TIERS_PER_SERVICE = 25;
+
+/** A tier as stored in JSON, before null → Infinity conversion. */
+const storedTierSchema = z.object({
+  maxSqft: z.union([z.number(), z.null()]),
+  price: z.number().min(0).max(100000),
+  startingAt: z.boolean().optional(),
+  customQuote: z.boolean().optional(),
+});
+
+type StoredTier = z.infer<typeof storedTierSchema>;
+
+/**
+ * Enforces the tier-ladder invariants the quote engine relies on: boundaries
+ * strictly increasing positive whole numbers, and exactly one unbounded tier
+ * sitting at the end so every home size resolves to a price.
+ *
+ * The read path (parsePricingConfig) deliberately stays lenient — this runs on
+ * writes, where a bad config must be rejected rather than silently ignored.
+ */
+function validateTierLadder(table: StoredTier[], ctx: z.RefinementCtx): void {
+  const unboundedAt = table.flatMap((tier, index) => (tier.maxSqft === null ? [index] : []));
+  if (unboundedAt.length === 0) {
+    ctx.addIssue({
+      code: "custom",
+      message: "the last tier must be unbounded (no max sq ft) so every home size has a price",
+    });
+  } else if (unboundedAt.length > 1) {
+    ctx.addIssue({ code: "custom", message: "only one unbounded tier is allowed" });
+  } else if (unboundedAt[0] !== table.length - 1) {
+    ctx.addIssue({ code: "custom", message: "the unbounded tier must be the last one in the table" });
+  }
+
+  let previous = 0;
+  table.forEach((tier, index) => {
+    if (tier.customQuote && index !== table.length - 1) {
+      ctx.addIssue({
+        code: "custom",
+        path: [index, "customQuote"],
+        message: `tier ${index + 1}: only the last tier may be a custom quote`,
+      });
+    }
+    if (tier.maxSqft === null) return;
+    if (!Number.isInteger(tier.maxSqft) || tier.maxSqft <= 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: [index, "maxSqft"],
+        message: `tier ${index + 1}: max sq ft must be a positive whole number`,
+      });
+      return;
+    }
+    if (tier.maxSqft <= previous) {
+      ctx.addIssue({
+        code: "custom",
+        path: [index, "maxSqft"],
+        message: `tier ${index + 1}: max sq ft (${tier.maxSqft}) must be greater than the previous tier's ${previous}`,
+      });
+      return;
+    }
+    previous = tier.maxSqft;
+  });
+}
+
+const strictTierTableSchema = z
+  .array(storedTierSchema)
+  .min(1, "at least one tier is required")
+  .max(MAX_TIERS_PER_SERVICE, `at most ${MAX_TIERS_PER_SERVICE} tiers are allowed`)
+  .superRefine(validateTierLadder)
+  .transform(table => table.map(t => ({ ...t, maxSqft: t.maxSqft === null ? Infinity : t.maxSqft })));
+
+const strictPricingConfigSchema = pricingConfigSchema.extend({
+  tiers: z.object({
+    residential: strictTierTableSchema,
+    deep: strictTierTableSchema,
+    moveinout: strictTierTableSchema,
+  }),
+});
+
+export type PricingValidation =
+  | { ok: true; config: PricingConfig }
+  | { ok: false; errors: string[] };
+
+/**
+ * Validates a pricing config on the way IN (admin save). Accepts either a JSON
+ * string or a plain object and returns readable errors instead of silently
+ * falling back to defaults, so an admin never saves a config the site would
+ * then ignore.
+ */
+export function validatePricingConfig(raw: unknown): PricingValidation {
+  let candidate = raw;
+  if (typeof raw === "string") {
+    try {
+      candidate = JSON.parse(raw);
+    } catch {
+      return { ok: false, errors: ["pricing config is not valid JSON"] };
+    }
+  }
+  const parsed = strictPricingConfigSchema.safeParse(candidate);
+  if (!parsed.success) {
+    const errors = parsed.error.issues.map(issue => {
+      const path = issue.path.join(".");
+      return path ? `${path}: ${issue.message}` : issue.message;
+    });
+    return { ok: false, errors };
+  }
+  return { ok: true, config: parsed.data };
+}
+
+// ---------------------------------------------------------------------------
+// Display helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Entry price to advertise for a service ("from $X per visit").
+ *
+ * Tiered services (and Airbnb, which follows the residential table) start at
+ * their cheapest tier — derived from the ladder rather than basePrices, which
+ * is only a custom-quote baseline for commercial and office work.
+ */
+export function startingPriceFor(type: CleaningType, config: PricingConfig = DEFAULT_PRICING): number {
+  const key = type === "airbnb" ? "residential" : type;
+  const table = key === "residential" || key === "deep" || key === "moveinout" ? config.tiers[key] : null;
+  const priced = table?.filter(tier => !tier.customQuote) ?? [];
+  if (priced.length === 0) return config.basePrices[type] ?? config.basePrices.residential;
+  return Math.min(...priced.map(tier => tier.price));
+}
+
+/**
+ * Human label for a tier's square-footage band, derived from the tier itself
+ * and the one below it — never from hard-coded boundaries, so it stays correct
+ * however the admin reshapes the ladder.
+ */
+export function tierRangeLabel(
+  tier: PricingTier,
+  previous: PricingTier | undefined,
+  labels: { under: string; over: string; sqft: string; anySize: string }
+): string {
+  const fmt = (n: number) => n.toLocaleString("en-US");
+  if (!previous) {
+    return tier.maxSqft === Infinity ? labels.anySize : `${labels.under} ${fmt(tier.maxSqft)} ${labels.sqft}`;
+  }
+  if (tier.maxSqft === Infinity) return `${labels.over} ${fmt(previous.maxSqft)} ${labels.sqft}`;
+  return `${fmt(previous.maxSqft)}–${fmt(tier.maxSqft)} ${labels.sqft}`;
+}
 
 /**
  * Parse a stored pricing_config JSON string. Any missing/invalid payload

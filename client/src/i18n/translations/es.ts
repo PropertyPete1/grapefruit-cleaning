@@ -343,6 +343,7 @@ export const es: Dictionary = {
     price: "Precio",
     under: "Menos de",
     over: "Más de",
+    anySize: "Cualquier tamaño",
     sqft: "pies²",
     tierNote: "Los planes recurrentes aplican su descuento por frecuencia a estas tarifas. Los extras se cotizan por separado más abajo.",
     commercialNote: "Los espacios comerciales y de oficina se cotizan individualmente según el metraje, la distribución y el horario.",

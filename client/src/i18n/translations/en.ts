@@ -335,6 +335,7 @@ export const en = {
     price: "Price",
     under: "Under",
     over: "Over",
+    anySize: "Any size",
     sqft: "sq ft",
     tierNote: "Recurring plans apply your frequency discount to these rates. Add-ons are priced separately below.",
     commercialNote: "Commercial and office spaces are quoted individually based on square footage, layout, and schedule.",

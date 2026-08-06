@@ -1,6 +1,12 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { randomBytes } from "node:crypto";
+import {
+  PRICING_SETTING_KEY,
+  serializePricingConfig,
+  validatePricingConfig,
+  type PricingConfig,
+} from "@shared/pricing";
 import * as db from "../db";
 import { issueBalanceSafely, originFromRequest, resendBalanceLink } from "../balance";
 import { balanceLinkStatus } from "../balanceRules";
@@ -14,6 +20,15 @@ const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Admin access required" });
   return next({ ctx });
 });
+
+/** Validates a pricing config payload, throwing a readable BAD_REQUEST if it breaks the tier rules. */
+function assertValidPricingConfig(raw: string): PricingConfig {
+  const result = validatePricingConfig(raw);
+  if (!result.ok) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: `Invalid pricing configuration — ${result.errors.join("; ")}` });
+  }
+  return result.config;
+}
 
 const bookingStatusEnum = z.enum(["pending_deposit", "confirmed", "in_progress", "completed", "cancelled", "expired"]);
 
@@ -363,7 +378,27 @@ export const adminRouter = router({
   saveSetting: adminProcedure
     .input(z.object({ key: z.string().min(1).max(100), value: z.string().max(10000) }))
     .mutation(async ({ input }) => {
+      // Pricing has structural rules the quote engine depends on. Validate here
+      // too so the generic settings endpoint can't be used to store a config
+      // that would silently fall back to defaults on read.
+      if (input.key === PRICING_SETTING_KEY) {
+        assertValidPricingConfig(input.value);
+      }
       await db.setSetting(input.key, input.value);
+      return { success: true } as const;
+    }),
+  /**
+   * Saves the pricing configuration (tier ladders, extras, discounts, deposit).
+   * Server-authoritative: the tier rules are re-checked here, never trusted
+   * from the client, and an invalid ladder is rejected with the exact problems.
+   */
+  savePricingConfig: adminProcedure
+    .input(z.object({ config: z.string().min(2).max(10000) }))
+    .mutation(async ({ input }) => {
+      const config = assertValidPricingConfig(input.config);
+      // Re-serialize from the validated result so only clean, normalized JSON
+      // ever reaches the database.
+      await db.setSetting(PRICING_SETTING_KEY, serializePricingConfig(config));
       return { success: true } as const;
     }),
 

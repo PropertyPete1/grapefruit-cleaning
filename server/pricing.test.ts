@@ -12,52 +12,60 @@ import {
 
 describe("fixed tier pricing", () => {
   it("residential tiers match the owner's exact price list", () => {
-    expect(getTier("residential", 800)?.price).toBe(99.99);
-    expect(getTier("residential", 1200)?.price).toBe(129.99);
-    expect(getTier("residential", 1750)?.price).toBe(159.99);
-    expect(getTier("residential", 2200)?.price).toBe(199.99);
-    const large = getTier("residential", 3000);
+    expect(getTier("residential", 650)?.price).toBe(79.99);
+    expect(getTier("residential", 800)?.price).toBe(89.99);
+    expect(getTier("residential", 1200)?.price).toBe(112.99);
+    expect(getTier("residential", 1750)?.price).toBe(149.99);
+    expect(getTier("residential", 2200)?.price).toBe(176.99);
+    expect(getTier("residential", 3000)?.price).toBe(229.99);
+    const large = getTier("residential", 3200);
     expect(large?.price).toBe(249.99);
     expect(large?.startingAt).toBe(true);
     expect(getTier("residential", 4000)?.customQuote).toBe(true);
   });
 
   it("deep cleaning tiers match the owner's exact price list", () => {
+    expect(getTier("deep", 650)?.price).toBe(143.99);
     expect(getTier("deep", 900)?.price).toBe(179.99);
-    expect(getTier("deep", 1400)?.price).toBe(229.99);
-    expect(getTier("deep", 2000)?.price).toBe(299.99);
-    const top = getTier("deep", 3000);
-    expect(top?.price).toBe(399.99);
+    expect(getTier("deep", 1400)?.price).toBe(224.99);
+    expect(getTier("deep", 2000)?.price).toBe(292.99);
+    expect(getTier("deep", 3000)?.price).toBe(413.99);
+    const top = getTier("deep", 4000);
+    expect(top?.price).toBe(485.99);
     expect(top?.startingAt).toBe(true);
   });
 
   it("move in/out tiers match the owner's exact price list", () => {
-    expect(getTier("moveinout", 900)?.price).toBe(169.99);
-    expect(getTier("moveinout", 1200)?.price).toBe(199.99);
-    expect(getTier("moveinout", 1800)?.price).toBe(249.99);
-    expect(getTier("moveinout", 2300)?.price).toBe(299.99);
-    const top = getTier("moveinout", 2600);
-    expect(top?.price).toBe(349.99);
+    expect(getTier("moveinout", 650)?.price).toBe(127.99);
+    expect(getTier("moveinout", 900)?.price).toBe(159.99);
+    expect(getTier("moveinout", 1200)?.price).toBe(180.99);
+    expect(getTier("moveinout", 1800)?.price).toBe(239.99);
+    expect(getTier("moveinout", 2300)?.price).toBe(303.99);
+    expect(getTier("moveinout", 2600)?.price).toBe(335.99);
+    const top = getTier("moveinout", 4000);
+    expect(top?.price).toBe(431.99);
     expect(top?.startingAt).toBe(true);
   });
 
   it("tier boundaries are exclusive of the upper bound", () => {
-    expect(getTier("residential", 1000)?.price).toBe(129.99);
-    expect(getTier("residential", 1500)?.price).toBe(159.99);
-    expect(getTier("deep", 1500)?.price).toBe(299.99);
-    expect(getTier("moveinout", 2500)?.price).toBe(349.99);
+    expect(getTier("residential", 899)?.price).toBe(89.99);
+    expect(getTier("residential", 900)?.price).toBe(99.99);
+    expect(getTier("residential", 901)?.price).toBe(99.99);
+    expect(getTier("residential", 1500)?.price).toBe(136.99);
+    expect(getTier("deep", 1500)?.price).toBe(246.99);
+    expect(getTier("moveinout", 2500)?.price).toBe(335.99);
   });
 
   it("airbnb uses the residential tier table", () => {
-    expect(getTier("airbnb", 800)?.price).toBe(99.99);
-    expect(getTier("airbnb", 2200)?.price).toBe(199.99);
+    expect(getTier("airbnb", 800)?.price).toBe(89.99);
+    expect(getTier("airbnb", 2200)?.price).toBe(176.99);
   });
 
   it("bedrooms and bathrooms do not change the fixed base price", () => {
     const small = calculateQuote({ type: "residential", bedrooms: 1, bathrooms: 1, sqft: 1200, extras: [], frequency: "onetime" });
     const big = calculateQuote({ type: "residential", bedrooms: 5, bathrooms: 4, sqft: 1200, extras: [], frequency: "onetime" });
-    expect(small.total).toBe(129.99);
-    expect(big.total).toBe(129.99);
+    expect(small.total).toBe(112.99);
+    expect(big.total).toBe(112.99);
   });
 
   it("adds extras on top of the fixed base", () => {
@@ -67,7 +75,7 @@ describe("fixed tier pricing", () => {
 
   it("applies frequency discounts to the subtotal", () => {
     const q = calculateQuote({ type: "residential", bedrooms: 2, bathrooms: 1, sqft: 800, extras: [], frequency: "weekly" });
-    const expected = Math.round(99.99 * (1 - FREQUENCY_DISCOUNTS.weekly) * 100) / 100;
+    const expected = Math.round(89.99 * (1 - FREQUENCY_DISCOUNTS.weekly) * 100) / 100;
     expect(q.total).toBe(expected);
   });
 

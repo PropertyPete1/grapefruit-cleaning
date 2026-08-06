@@ -31,9 +31,9 @@ describe("booking router (public procedures)", () => {
       extras: ["oven"],
       frequency: "onetime",
     });
-    // Fixed tier: residential 1,000–1,500 sq ft = $129.99, + oven $35 = $164.99
-    expect(result.total).toBe(164.99);
-    expect(result.deposit).toBe(Math.round(164.99 * 0.2 * 100) / 100);
+    // Fixed tier: residential 1,100–1,300 sq ft = $112.99, + oven $35 = $147.99
+    expect(result.total).toBe(147.99);
+    expect(result.deposit).toBe(Math.round(147.99 * 0.2 * 100) / 100);
   });
 
   it("applies weekly discount in server-side calculation", async () => {

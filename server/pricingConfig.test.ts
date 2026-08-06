@@ -54,7 +54,7 @@ describe("parsePricingConfig", () => {
     const cfg = JSON.parse(serializePricingConfig(DEFAULT_PRICING));
     cfg.tiers.deep.reverse();
     const parsed = parsePricingConfig(JSON.stringify(cfg));
-    expect(parsed.tiers.deep[0].maxSqft).toBe(1000);
+    expect(parsed.tiers.deep[0].maxSqft).toBe(700);
     expect(parsed.tiers.deep[parsed.tiers.deep.length - 1].maxSqft).toBe(Infinity);
   });
 });
@@ -102,7 +102,7 @@ describe("calculateQuote with custom config", () => {
 
   it("defaults still price the canonical example correctly", () => {
     const q = calculateQuote(baseInput);
-    expect(q.base).toBe(129.99);
-    expect(q.deposit).toBe(26); // 20% of 129.99 = 25.998 → 26.00 rounded
+    expect(q.base).toBe(112.99); // 1,200 sq ft → 1,100–1,300 tier
+    expect(q.deposit).toBe(22.6); // 20% of 112.99 = 22.598 → 22.60 rounded
   });
 });

@@ -8,10 +8,11 @@ import { useReveal } from "@/hooks/useReveal";
 import { usePricing } from "@/hooks/usePricing";
 import { AnimatedPrice } from "@/components/AnimatedPrice";
 import {
+  startingPriceFor,
+  tierRangeLabel,
   type CleaningType,
   type ExtraId,
   type Frequency,
-  type PricingTier,
   type TieredType,
 } from "@shared/pricing";
 import { cn } from "@/lib/utils";
@@ -24,15 +25,6 @@ const TIER_SERVICES: { id: CleaningType & TieredType; planKey: "residential" | "
 
 const EXTRA_IDS: ExtraId[] = ["pets", "deepClean", "moveOut", "oven", "refrigerator", "windows", "laundry", "garage", "organization"];
 
-function formatTierRange(
-  tier: PricingTier,
-  prev: PricingTier | undefined,
-  t: { under: string; over: string; sqft: string },
-): string {
-  if (!prev) return `${t.under} 1,000 ${t.sqft}`;
-  if (tier.maxSqft === Infinity) return `${t.over} ${prev.maxSqft.toLocaleString("en-US")} ${t.sqft}`;
-  return `${prev.maxSqft.toLocaleString("en-US")}–${tier.maxSqft.toLocaleString("en-US")} ${t.sqft}`;
-}
 
 export default function Pricing() {
   const { t, locale, path } = useLocale();
@@ -131,32 +123,39 @@ export default function Pricing() {
                 </div>
                 <div className="flex-1 px-6 pb-6">
                   <div className="overflow-hidden rounded-2xl border border-border">
-                    <table className="w-full text-sm">
+                    <table className="w-full table-fixed text-sm">
                       <thead>
-                        <tr className="bg-muted/60 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                          <th className="px-4 py-2.5">{t.pricing.sqftRange}</th>
-                          <th className="px-4 py-2.5 text-right">{t.pricing.price}</th>
+                        <tr className="bg-muted/60 text-left text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          <th className="px-3 py-2 sm:px-4">{t.pricing.sqftRange}</th>
+                          <th className="w-[38%] px-3 py-2 text-right sm:px-4">{t.pricing.price}</th>
                         </tr>
                       </thead>
                       <tbody>
                         {tiers.map((tier, idx) => {
                           const prev = idx > 0 ? tiers[idx - 1] : undefined;
-                          const range = formatTierRange(tier, prev, {
+                          const range = tierRangeLabel(tier, prev, {
                             under: t.pricing.under,
                             over: t.pricing.over,
                             sqft: t.pricing.sqft,
+                            anySize: t.pricing.anySize,
                           });
                           const effective = tier.customQuote ? null : round2(tier.price * (1 - discountRate));
                           return (
                             <tr key={idx} className="border-t border-border/70">
-                              <td className="px-4 py-2.5 text-xs font-medium text-foreground">{range}</td>
-                              <td className="px-4 py-2.5 text-right">
+                              {/* Tabular numerals + tight padding keep 14 rows legible at 375px. */}
+                              <td className="px-3 py-2 text-[11px] font-medium tabular-nums text-foreground sm:px-4 sm:text-xs">
+                                {range}
+                              </td>
+                              <td className="px-3 py-2 text-right sm:px-4">
                                 {tier.customQuote ? (
-                                  <span className="text-xs font-bold text-primary">{t.pricing.customQuote}</span>
+                                  <span className="text-[11px] font-bold text-primary sm:text-xs">{t.pricing.customQuote}</span>
                                 ) : (
-                                  <span className="font-display text-sm font-extrabold text-foreground">
+                                  <span className="font-display text-xs font-extrabold tabular-nums text-foreground sm:text-sm">
+                                    {/* Own line on narrow screens so the qualifier is never dropped from the price. */}
                                     {tier.startingAt && (
-                                      <span className="mr-1 text-[10px] font-medium text-muted-foreground">{t.pricing.startingAt}</span>
+                                      <span className="block text-[10px] font-medium leading-tight text-muted-foreground sm:mr-1 sm:inline">
+                                        {t.pricing.startingAt}
+                                      </span>
                                     )}
                                     ${effective!.toFixed(2)}
                                   </span>
@@ -191,7 +190,7 @@ export default function Pricing() {
               <Check className="mr-1 inline h-3.5 w-3.5 text-secondary" />
               {t.pricing.startingAt}{" "}
               <span className="font-display text-base font-extrabold text-foreground">
-                ${round2(pricing.basePrices.airbnb * (1 - discountRate)).toFixed(2)}
+                ${round2(startingPriceFor("airbnb", pricing) * (1 - discountRate)).toFixed(2)}
               </span>
             </p>
             <Button asChild size="sm" variant="outline" className="press mt-4 w-fit rounded-full px-5">
