@@ -15,5 +15,8 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["server/**/*.test.ts", "server/**/*.spec.ts"],
+    // Clears deployment-supplied env vars before every test file, so the suite
+    // behaves the same in a bare shell and in the deploy environment.
+    setupFiles: ["server/vitest.setup.ts"],
   },
 });

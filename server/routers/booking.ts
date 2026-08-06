@@ -144,14 +144,17 @@ export const bookingRouter = router({
       const schedule = parseSchedule(await db.getSetting(SCHEDULE_SETTING_KEY));
       const validSlots = slotsForDate(input.date, schedule);
       const takenSlots = await db.getBookedSlots(input.date);
-      if (!validSlots.includes(input.time) || takenSlots.includes(input.time)) {
-        throw new TRPCError({
+      /** The one message a customer ever sees for an unavailable slot. */
+      const slotUnavailable = () =>
+        new TRPCError({
           code: "BAD_REQUEST",
           message:
             input.locale === "es"
               ? "El horario seleccionado no está disponible. Por favor elija otro."
               : "The selected time is not available for booking. Please choose another.",
         });
+      if (!validSlots.includes(input.time) || takenSlots.includes(input.time)) {
+        throw slotUnavailable();
       }
       // Verify square footage against public property records (best-effort).
       // If the county record prices into a higher tier than the entered sqft,
@@ -205,31 +208,47 @@ export const bookingRouter = router({
         preferredLocale: input.locale,
       });
 
-      const bookingId = await db.createBooking({
-        reference,
-        customerId,
-        serviceType: input.quote.type,
-        frequency: input.quote.frequency,
-        scheduledDate: input.date,
-        scheduledTime: input.time,
-        bedrooms: input.quote.bedrooms,
-        bathrooms: input.quote.bathrooms,
-        sqft: Math.round(effectiveSqft),
-        extras: JSON.stringify(input.quote.extras),
-        addressLine: input.address,
-        city: input.city,
-        zip: input.zip,
-        notes: input.notes,
-        locale: input.locale,
-        totalAmount: total,
-        depositAmount: deposit,
-        status: "pending_deposit",
-        couponCode,
-        discountApplied,
-        verifiedSqft: property.verified ? property.sqft : undefined,
-        sqftSource: property.verified || property.addressVerified ? property.source : undefined,
-        sqftMismatch,
-      });
+      // The availability check above reads the calendar; the unique index on
+      // slotKey is what actually decides. Between the two, hand back any hold
+      // left by an abandoned checkout on this slot — getBookedSlots already
+      // counts those as free, but the row keeps the slot until its status
+      // changes, and the index goes by the row.
+      await db.expireStaleBookingsForSlot(input.date, input.time);
+
+      let bookingId: number;
+      try {
+        bookingId = await db.createBooking({
+          reference,
+          customerId,
+          serviceType: input.quote.type,
+          frequency: input.quote.frequency,
+          scheduledDate: input.date,
+          scheduledTime: input.time,
+          bedrooms: input.quote.bedrooms,
+          bathrooms: input.quote.bathrooms,
+          sqft: Math.round(effectiveSqft),
+          extras: JSON.stringify(input.quote.extras),
+          addressLine: input.address,
+          city: input.city,
+          zip: input.zip,
+          notes: input.notes,
+          locale: input.locale,
+          totalAmount: total,
+          depositAmount: deposit,
+          status: "pending_deposit",
+          couponCode,
+          discountApplied,
+          verifiedSqft: property.verified ? property.sqft : undefined,
+          sqftSource: property.verified || property.addressVerified ? property.source : undefined,
+          sqftMismatch,
+        });
+      } catch (error) {
+        // Someone else took this slot between the check and the insert. That is
+        // the race the index exists to stop; the customer just needs the normal
+        // "pick another time" message, not a server error.
+        if (db.isSlotTakenError(error)) throw slotUnavailable();
+        throw error;
+      }
 
       // Create Stripe Checkout session for the deposit
       const stripe = getStripe();
@@ -360,11 +379,17 @@ export async function finalizeBooking(bookingId: number, paymentIntentId: string
     !blocksSlot({ status: booking.status, createdAt: booking.createdAt ?? null }) &&
     (await db.getBookedSlots(booking.scheduledDate)).includes(booking.scheduledTime);
 
-  await db.updateBooking(bookingId, {
-    status: "confirmed",
+  // Claim the booking before doing anything with side effects. The status check
+  // above is only a fast path — the webhook and the return-page confirmation
+  // routinely arrive together, and both would pass it. This UPDATE is what
+  // actually decides: it matches only while the booking is still unpaid, so
+  // exactly one caller gets through to record the payment, redeem the coupon,
+  // and send the confirmation emails.
+  const claimed = await db.confirmUnpaidBooking(bookingId, {
     stripePaymentIntentId: paymentIntentId ?? undefined,
     slotConflict,
   });
+  if (!claimed) return;
 
   await db.createPayment({
     bookingId,

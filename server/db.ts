@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, like, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, like, lte, notInArray, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
@@ -109,6 +109,16 @@ function requireDb<T>(db: T | null): T {
   return db;
 }
 
+/**
+ * Rows an UPDATE actually changed. This is how the conditional-claim helpers
+ * below tell the winner of a race from the loser, so it has to come from the
+ * driver's result header rather than from anything read beforehand.
+ */
+function affectedRows(result: unknown): number {
+  const header = Array.isArray(result) ? result[0] : result;
+  return (header as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
+}
+
 // ---------- Customers ----------
 export async function findOrCreateCustomer(data: {
   firstName: string;
@@ -196,6 +206,81 @@ export async function updateBooking(id: number, data: Partial<typeof bookings.$i
   await db.update(bookings).set(data).where(eq(bookings.id, id));
 }
 
+/**
+ * Claims an unpaid booking for confirmation, atomically.
+ *
+ * The status is part of the WHERE rather than something the caller checked
+ * beforehand, so a webhook and a return-page confirmation arriving together
+ * cannot both proceed: whichever UPDATE lands first flips the row out of the
+ * matching set and the other affects zero rows. Returns true only for the
+ * caller that actually made the change — the one that should then record the
+ * payment, redeem the coupon, and send the emails.
+ */
+export async function confirmUnpaidBooking(
+  id: number,
+  data: { stripePaymentIntentId?: string; slotConflict: boolean }
+): Promise<boolean> {
+  const db = requireDb(await getDb());
+  const result = await db
+    .update(bookings)
+    .set({ status: "confirmed", ...data })
+    .where(and(eq(bookings.id, id), inArray(bookings.status, ["pending_deposit", "expired"])));
+  return affectedRows(result) > 0;
+}
+
+/**
+ * Expires unpaid bookings that are still holding one specific slot past the
+ * stale cutoff.
+ *
+ * getBookedSlots already treats those as free (see blocksSlot), but the row
+ * keeps its slotKey until something actually changes its status — and the
+ * unique index goes by the row, not by the clock. Releasing the slot for real
+ * right before booking it keeps the database's view and the application's view
+ * of "free" in agreement, instead of depending on when the daily cron last ran.
+ */
+export async function expireStaleBookingsForSlot(
+  date: string,
+  time: string,
+  now: Date = new Date()
+): Promise<number> {
+  const db = requireDb(await getDb());
+  const cutoff = new Date(now.getTime() - STALE_DEPOSIT_MINUTES * 60_000);
+  const result = await db
+    .update(bookings)
+    .set({ status: "expired" })
+    .where(
+      and(
+        eq(bookings.scheduledDate, date),
+        eq(bookings.scheduledTime, time),
+        eq(bookings.status, "pending_deposit"),
+        lte(bookings.createdAt, cutoff)
+      )
+    );
+  return affectedRows(result);
+}
+
+/**
+ * True when a write failed because another booking already holds the slot.
+ *
+ * Matches on the slot index by name so a `reference` collision — the table's
+ * other unique column — is never mistaken for a taken slot and reported to the
+ * customer as one.
+ */
+export function isSlotTakenError(error: unknown): boolean {
+  const seen = new Set<object>();
+  let current: unknown = error;
+  while (current !== null && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const candidate = current as { code?: unknown; errno?: unknown; message?: unknown; cause?: unknown };
+    const isDuplicate = candidate.code === "ER_DUP_ENTRY" || candidate.errno === 1062;
+    if (isDuplicate && typeof candidate.message === "string" && candidate.message.includes("slotKey")) {
+      return true;
+    }
+    current = candidate.cause;
+  }
+  return false;
+}
+
 export async function listBookings(filter?: { status?: string; from?: string; to?: string }) {
   const db = requireDb(await getDb());
   const conditions = [];
@@ -243,8 +328,7 @@ export async function expireStaleDepositBookings(now: Date = new Date()): Promis
     .update(bookings)
     .set({ status: "expired" })
     .where(and(eq(bookings.status, "pending_deposit"), lte(bookings.createdAt, cutoff)));
-  const header = Array.isArray(result) ? result[0] : result;
-  return (header as { affectedRows?: number })?.affectedRows ?? 0;
+  return affectedRows(result);
 }
 
 /** Confirmed/in-progress bookings scheduled within the next 8 days (reminder scan window). */
@@ -377,6 +461,39 @@ export async function createInvoice(data: typeof invoices.$inferInsert) {
 export async function updateInvoice(id: number, data: Partial<typeof invoices.$inferInsert>) {
   const db = requireDb(await getDb());
   await db.update(invoices).set(data).where(eq(invoices.id, id));
+}
+
+/**
+ * Marks an invoice paid, but only if it has not been settled already.
+ *
+ * Same shape as confirmUnpaidBooking: the status test lives in the WHERE, so
+ * two deliveries of the same checkout.session.completed event cannot both
+ * record a payment and both notify the owner. Returns true for the caller that
+ * made the change.
+ */
+export async function settleUnpaidInvoice(
+  id: number,
+  data: { paidAt: Date; paidVia: "stripe"; stripePaymentIntentId?: string }
+): Promise<boolean> {
+  const db = requireDb(await getDb());
+  const result = await db
+    .update(invoices)
+    .set({ status: "paid", ...data })
+    .where(and(eq(invoices.id, id), notInArray(invoices.status, ["paid", "void"])));
+  return affectedRows(result) > 0;
+}
+
+/**
+ * Flags an already-settled invoice as needing a refund, at most once, so a
+ * redelivered duplicate payment doesn't raise a second owner alert.
+ */
+export async function flagInvoiceRefundNeeded(id: number, stripePaymentIntentId?: string): Promise<boolean> {
+  const db = requireDb(await getDb());
+  const result = await db
+    .update(invoices)
+    .set({ refundNeeded: true, stripePaymentIntentId })
+    .where(and(eq(invoices.id, id), eq(invoices.refundNeeded, false)));
+  return affectedRows(result) > 0;
 }
 
 export async function getInvoiceById(id: number) {

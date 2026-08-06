@@ -20,6 +20,8 @@ vi.mock("./db", () => ({
   getCouponByCode: vi.fn().mockResolvedValue(undefined),
   updateBooking: vi.fn(),
   listSettings: vi.fn().mockResolvedValue([]),
+  expireStaleBookingsForSlot: vi.fn().mockResolvedValue(0),
+  isSlotTakenError: () => false,
 }));
 
 vi.mock("./property", () => ({

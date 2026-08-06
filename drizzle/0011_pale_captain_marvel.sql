@@ -1,0 +1,2 @@
+ALTER TABLE `bookings` ADD `slotKey` varchar(16) GENERATED ALWAYS AS ((case when `status` in ('cancelled','expired') then null else concat(`scheduledDate`, 'T', `scheduledTime`) end)) VIRTUAL;--> statement-breakpoint
+ALTER TABLE `bookings` ADD CONSTRAINT `bookings_slotKey_unique` UNIQUE(`slotKey`);

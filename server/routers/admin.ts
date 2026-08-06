@@ -45,7 +45,20 @@ export const adminRouter = router({
   updateBookingStatus: adminProcedure
     .input(z.object({ id: z.number().int(), status: bookingStatusEnum }))
     .mutation(async ({ ctx, input }) => {
-      await db.updateBooking(input.id, { status: input.status });
+      try {
+        await db.updateBooking(input.id, { status: input.status });
+      } catch (error) {
+        // Reviving a cancelled or expired booking makes it hold its slot again,
+        // which the unique index refuses if someone else has since taken it.
+        // Say so plainly rather than surfacing a database error.
+        if (db.isSlotTakenError(error)) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "Another booking already holds that date and time. Reschedule one of them first.",
+          });
+        }
+        throw error;
+      }
       // Completing a job files its remaining balance for admin approval —
       // nothing reaches the customer until it is reviewed. Best-effort: never
       // fails the status update.

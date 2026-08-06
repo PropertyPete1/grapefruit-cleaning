@@ -8,9 +8,18 @@
  * the Stripe return URLs on emailed balance links, where the browser sends no
  * Origin header either.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { publicOrigin } from "./publicOrigin";
+
+// Most cases below assert what happens with PUBLIC_BASE_URL *unset*, so it has
+// to be unset no matter what the surrounding shell exports — the deploy
+// environment sets it, which is how these first went red. vitest.setup.ts
+// already clears it suite-wide; stubbing here as well keeps each case
+// self-contained and undoes cleanly if one of them stubs a value.
+beforeEach(() => {
+  vi.stubEnv("PUBLIC_BASE_URL", undefined);
+});
 
 afterEach(() => {
   vi.unstubAllEnvs();

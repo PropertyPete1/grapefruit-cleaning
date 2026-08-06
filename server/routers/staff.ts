@@ -81,7 +81,19 @@ export const staffRouter = router({
   updateJobStatus: staffProcedure
     .input(z.object({ bookingId: z.number().int(), status: z.enum(["in_progress", "completed"]) }))
     .mutation(async ({ ctx, input }) => {
-      await db.updateBooking(input.bookingId, { status: input.status });
+      try {
+        await db.updateBooking(input.bookingId, { status: input.status });
+      } catch (error) {
+        // Same guard as the admin status change: moving a released booking back
+        // into a slot someone else now holds is refused by the unique index.
+        if (db.isSlotTakenError(error)) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "Another booking already holds that date and time. Ask an admin to reschedule one of them.",
+          });
+        }
+        throw error;
+      }
       // Completing a job files its remaining balance for admin approval —
       // nothing reaches the customer until it is reviewed. Best-effort: never
       // fails the status update.

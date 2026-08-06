@@ -12,6 +12,8 @@ const mockGetInvoiceById = vi.fn();
 const mockGetBalanceInvoiceForBooking = vi.fn();
 const mockCreateInvoice = vi.fn();
 const mockUpdateInvoice = vi.fn();
+const mockSettleUnpaidInvoice = vi.fn();
+const mockFlagRefundNeeded = vi.fn();
 const mockCreatePayment = vi.fn();
 const mockUpdateBooking = vi.fn();
 const mockSessionCreate = vi.fn();
@@ -27,6 +29,8 @@ vi.mock("./db", () => ({
   getBalanceInvoiceForBooking: (...args: unknown[]) => mockGetBalanceInvoiceForBooking(...args),
   createInvoice: (...args: unknown[]) => mockCreateInvoice(...args),
   updateInvoice: (...args: unknown[]) => mockUpdateInvoice(...args),
+  settleUnpaidInvoice: (...args: unknown[]) => mockSettleUnpaidInvoice(...args),
+  flagInvoiceRefundNeeded: (...args: unknown[]) => mockFlagRefundNeeded(...args),
   createPayment: (...args: unknown[]) => mockCreatePayment(...args),
   updateBooking: (...args: unknown[]) => mockUpdateBooking(...args),
   listInvoices: vi.fn().mockResolvedValue([]),
@@ -125,6 +129,10 @@ beforeEach(() => {
   vi.stubEnv("GMAIL_USER", "biz@grapefruitclean.com");
   vi.stubEnv("GMAIL_APP_PASSWORD", "app-password");
   vi.stubEnv("OWNER_EMAIL", "");
+  // originFromRequest resolves PUBLIC_BASE_URL ahead of the request, and the
+  // deploy environment exports it — the link-helper cases below want the
+  // request-derived origin. (Also cleared suite-wide by vitest.setup.ts.)
+  vi.stubEnv("PUBLIC_BASE_URL", undefined);
   __resetTransporter();
   mockGetBookingById.mockResolvedValue(BOOKING);
   mockGetCustomerById.mockResolvedValue(CUSTOMER);
@@ -132,6 +140,9 @@ beforeEach(() => {
   mockCreateInvoice.mockResolvedValue(501);
   mockSessionCreate.mockResolvedValue({ id: "cs_balance_1", url: "https://stripe.test/balance" });
   mockSendMail.mockResolvedValue({});
+  // Default: this caller wins the conditional claim. Race cases override.
+  mockSettleUnpaidInvoice.mockResolvedValue(true);
+  mockFlagRefundNeeded.mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -349,9 +360,9 @@ describe("applyBalancePayment (webhook)", () => {
     const result = await applyBalancePayment(501, "pi_balance_1");
 
     expect(result.outcome).toBe("paid");
-    expect(mockUpdateInvoice).toHaveBeenCalledWith(
+    expect(mockSettleUnpaidInvoice).toHaveBeenCalledWith(
       501,
-      expect.objectContaining({ status: "paid", paidVia: "stripe", stripePaymentIntentId: "pi_balance_1" })
+      expect.objectContaining({ paidVia: "stripe", stripePaymentIntentId: "pi_balance_1" })
     );
     expect(mockCreatePayment).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -380,7 +391,8 @@ describe("applyBalancePayment (webhook)", () => {
     const result = await applyBalancePayment(501, "pi_balance_1");
 
     expect(result.outcome).toBe("duplicate");
-    expect(mockUpdateInvoice).not.toHaveBeenCalled();
+    expect(mockSettleUnpaidInvoice).not.toHaveBeenCalled();
+    expect(mockFlagRefundNeeded).not.toHaveBeenCalled();
     expect(mockCreatePayment).not.toHaveBeenCalled();
     expect(mockNotifyOwner).not.toHaveBeenCalled();
   });
@@ -390,11 +402,11 @@ describe("applyBalancePayment (webhook)", () => {
     const result = await applyBalancePayment(501, "pi_late_card");
 
     expect(result.outcome).toBe("refund_needed");
-    // Manual payment wins: status and paidAt are left exactly as they were.
-    const patch = mockUpdateInvoice.mock.calls[0]![1] as Record<string, unknown>;
-    expect(patch).toEqual({ refundNeeded: true, stripePaymentIntentId: "pi_late_card" });
-    expect(patch.status).toBeUndefined();
-    expect(patch.paidAt).toBeUndefined();
+    // Manual payment wins: the invoice is only flagged, never re-settled, so
+    // status and paidAt keep the in-person values.
+    expect(mockFlagRefundNeeded).toHaveBeenCalledWith(501, "pi_late_card");
+    expect(mockSettleUnpaidInvoice).not.toHaveBeenCalled();
+    expect(mockUpdateInvoice).not.toHaveBeenCalled();
     // The money did arrive, so it is still recorded — against the refund.
     expect(mockCreatePayment).toHaveBeenCalledWith(
       expect.objectContaining({ invoiceId: 501, amount: 200, kind: "balance", status: "succeeded" })
@@ -415,7 +427,7 @@ describe("applyBalancePayment (webhook)", () => {
     const result = await applyBalancePayment(501, "pi_late_card");
 
     expect(result.outcome).toBe("duplicate");
-    expect(mockUpdateInvoice).not.toHaveBeenCalled();
+    expect(mockFlagRefundNeeded).not.toHaveBeenCalled();
     expect(mockNotifyOwner).not.toHaveBeenCalled();
   });
 

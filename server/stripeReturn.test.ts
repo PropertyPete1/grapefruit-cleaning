@@ -12,7 +12,7 @@
  * These tests pin both locales against the client's own route table so the two
  * can never drift apart again.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockSessionCreate = vi.fn();
 
@@ -23,6 +23,8 @@ vi.mock("./db", () => ({
   findOrCreateCustomer: vi.fn().mockResolvedValue(7),
   createBooking: vi.fn().mockResolvedValue(99),
   updateBooking: vi.fn(),
+  expireStaleBookingsForSlot: vi.fn().mockResolvedValue(0),
+  isSlotTakenError: () => false,
 }));
 
 vi.mock("./property", () => ({
@@ -76,10 +78,19 @@ const clientBookingPath = (locale: "en" | "es") => {
 };
 
 beforeEach(() => {
+  // These assert the return URL built from the request's own Origin header, so
+  // PUBLIC_BASE_URL must be unset — it takes priority inside publicOrigin, and
+  // the deploy environment exports it. (vitest.setup.ts clears it suite-wide;
+  // this keeps the file self-contained.)
+  vi.stubEnv("PUBLIC_BASE_URL", undefined);
   // booking.create is rate limited to 5/min per IP, and every case here shares
   // the same synthetic client.
   _resetRateLimits();
   mockSessionCreate.mockReset().mockResolvedValue({ id: "cs_test_1", url: "https://stripe.test/pay" });
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("Stripe deposit return URLs", () => {

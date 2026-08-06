@@ -415,39 +415,66 @@ export async function applyBalancePayment(
   if (!invoice) return { outcome: "not_found" };
 
   const alreadySettled = invoice.status === "paid" || invoice.status === "void";
-  if (alreadySettled) {
-    const samePayment = paymentIntentId != null && invoice.stripePaymentIntentId === paymentIntentId;
-    const untrackedStripePayment = paymentIntentId == null && invoice.paidVia === "stripe";
-    if (samePayment || untrackedStripePayment || invoice.refundNeeded) return { outcome: "duplicate" };
-
-    await db.updateInvoice(invoiceId, {
-      refundNeeded: true,
+  if (!alreadySettled) {
+    // Claim the invoice before recording anything. The status read above is a
+    // fast path only — Stripe redelivers events, so two callers can both see it
+    // unsettled. This UPDATE matches only while it still is, which is what
+    // stops a second payment row and a second owner notification.
+    const claimed = await db.settleUnpaidInvoice(invoiceId, {
+      paidAt: new Date(),
+      paidVia: "stripe",
       stripePaymentIntentId: paymentIntentId ?? undefined,
     });
-    // The money did arrive — record it so the books balance against the refund.
-    await db.createPayment({
-      bookingId: invoice.bookingId,
-      invoiceId,
-      customerId: invoice.customerId,
-      amount: invoice.amount,
-      kind: "balance",
-      method: "card",
-      stripePaymentIntentId: paymentIntentId ?? undefined,
-      status: "succeeded",
-    });
-    await notifyOwnerOfBalance(invoice, sendRefundNeededAlert);
-    return { outcome: "refund_needed" };
+    if (claimed) {
+      await db.createPayment({
+        bookingId: invoice.bookingId,
+        invoiceId,
+        customerId: invoice.customerId,
+        amount: invoice.amount,
+        kind: "balance",
+        method: "card",
+        stripePaymentIntentId: paymentIntentId ?? undefined,
+        status: "succeeded",
+      });
+      await notifyOwnerOfBalance(invoice, sendBalancePaidNotification);
+      return { outcome: "paid" };
+    }
+    // Lost the race. Re-read and fall through on what the winner actually left
+    // behind, so an identical redelivery still reports "duplicate" and a
+    // genuinely different second payment still raises the refund alert.
+    const settled = await db.getInvoiceById(invoiceId);
+    if (!settled) return { outcome: "not_found" };
+    return settleAgainstPaidInvoice(settled, paymentIntentId);
   }
 
-  await db.updateInvoice(invoiceId, {
-    status: "paid",
-    paidAt: new Date(),
-    paidVia: "stripe",
-    stripePaymentIntentId: paymentIntentId ?? undefined,
-  });
+  return settleAgainstPaidInvoice(invoice, paymentIntentId);
+}
+
+/**
+ * A payment landing on an invoice that is already settled — collected in
+ * person, voided, or paid by an earlier delivery of this same event.
+ *
+ * A redelivery of the payment already on file is a no-op. Anything else is real
+ * money arriving twice: it is recorded so the books balance, and the invoice is
+ * flagged for refund with an owner alert.
+ */
+async function settleAgainstPaidInvoice(
+  invoice: Invoice,
+  paymentIntentId: string | null
+): Promise<BalancePaymentOutcome> {
+  const samePayment = paymentIntentId != null && invoice.stripePaymentIntentId === paymentIntentId;
+  const untrackedStripePayment = paymentIntentId == null && invoice.paidVia === "stripe";
+  if (samePayment || untrackedStripePayment || invoice.refundNeeded) return { outcome: "duplicate" };
+
+  // Conditional for the same reason as the settle above: two duplicate
+  // deliveries must not raise two refund alerts.
+  const flagged = await db.flagInvoiceRefundNeeded(invoice.id, paymentIntentId ?? undefined);
+  if (!flagged) return { outcome: "duplicate" };
+
+  // The money did arrive — record it so the books balance against the refund.
   await db.createPayment({
     bookingId: invoice.bookingId,
-    invoiceId,
+    invoiceId: invoice.id,
     customerId: invoice.customerId,
     amount: invoice.amount,
     kind: "balance",
@@ -455,8 +482,8 @@ export async function applyBalancePayment(
     stripePaymentIntentId: paymentIntentId ?? undefined,
     status: "succeeded",
   });
-  await notifyOwnerOfBalance(invoice, sendBalancePaidNotification);
-  return { outcome: "paid" };
+  await notifyOwnerOfBalance(invoice, sendRefundNeededAlert);
+  return { outcome: "refund_needed" };
 }
 
 /**
