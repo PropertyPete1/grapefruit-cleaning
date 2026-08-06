@@ -31,9 +31,13 @@ export type SiteInfo = Record<PublicSettingKey, string>;
 // victim's browser.
 export const OAUTH_STATE_COOKIE = "__Host-oauth_state";
 
-// `state` carries the callback redirect URI (used at token exchange) plus the
-// CSRF nonce. Defined here so the client encoder and server decoder never drift.
-export type OAuthState = { redirectUri: string; nonce?: string };
+// `state` carries the callback redirect URI (used at token exchange), the CSRF
+// nonce, and the in-app path the login started from. `dest` round-trips through
+// the OAuth portal, so it survives a login that gets handed off to another
+// browser — which is exactly what happens when an installed home-screen app
+// sends the user out to sign in. Defined here so the client encoder and server
+// decoder never drift.
+export type OAuthState = { redirectUri: string; nonce?: string; dest?: string };
 
 export const encodeOAuthState = (state: OAuthState): string =>
   btoa(JSON.stringify(state));

@@ -62,7 +62,7 @@ describe("webAppTargetForPath", () => {
       scope: "admin",
       manifestHref: "/manifest.admin.webmanifest",
       appleTouchIcon: "/icons/admin-180.png",
-      appleTitle: "GF Admin",
+      appleTitle: "Grapefruit",
       themeColor: "#F26D5B",
     });
   });
@@ -100,18 +100,20 @@ describe("the shipped manifests", () => {
   const load = (name: string) =>
     JSON.parse(readFileSync(new URL(`../client/public/${name}`, import.meta.url), "utf-8"));
 
-  it("launches the admin app standalone at /admin and keeps it in scope", () => {
+  it("is the one crew app: standalone, started and scoped at /admin", () => {
     const manifest = load("manifest.admin.webmanifest");
     expect(manifest).toMatchObject({
-      name: "Grapefruit Admin",
-      short_name: "GF Admin",
+      name: "Grapefruit Team",
+      short_name: "Grapefruit",
       start_url: "/admin",
       scope: "/admin",
       display: "standalone",
     });
   });
 
-  it("launches the staff app standalone at /staff and keeps it in scope", () => {
+  // Kept working for anyone who already installed it; staff opening the crew
+  // app are redirected to /staff anyway, so the two behave identically.
+  it("still launches the staff app standalone at /staff and keeps it in scope", () => {
     const manifest = load("manifest.staff.webmanifest");
     expect(manifest).toMatchObject({
       name: "Grapefruit Staff",

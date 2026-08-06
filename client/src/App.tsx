@@ -24,6 +24,7 @@ import BlogPost from "./pages/BlogPost";
 import Privacy from "./pages/Privacy";
 import Terms from "./pages/Terms";
 import NotFound from "./pages/NotFound";
+import NoAccess from "./pages/NoAccess";
 import AdminRoutes from "./pages/admin/AdminRoutes";
 import StaffRoutes from "./pages/staff/StaffRoutes";
 
@@ -97,6 +98,9 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={RootRedirect} />
+      {/* Must precede /admin/*? — this page is what the admin guard sends
+          role-less accounts to, so it can never require the admin role. */}
+      <Route path="/admin/no-access" component={NoAccess} />
       <Route path="/admin/*?" component={AdminRoutes} />
       <Route path="/staff/*?" component={StaffRoutes} />
       <Route path="/en/*?">

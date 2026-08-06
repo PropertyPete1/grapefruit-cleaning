@@ -42,7 +42,7 @@ const SCOPED_TARGETS: Record<Exclude<AppScope, "customer">, WebAppTarget> = {
     scope: "admin",
     manifestHref: "/manifest.admin.webmanifest",
     appleTouchIcon: "/icons/admin-180.png",
-    appleTitle: "GF Admin",
+    appleTitle: "Grapefruit",
     themeColor: "#F26D5B",
   },
   staff: {

@@ -1,6 +1,6 @@
 import { lazy, Suspense } from "react";
 import { useState } from "react";
-import { Link, Route, Switch, useLocation } from "wouter";
+import { Link, Redirect, Route, Switch, useLocation } from "wouter";
 import {
   BarChart3,
   CalendarDays,
@@ -14,7 +14,6 @@ import {
   MessageSquare,
   Newspaper,
   Settings as SettingsIcon,
-  Sparkles,
   Star,
   Tag,
   Ticket,
@@ -27,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { ASSETS } from "@/lib/assets";
 import { trpc } from "@/lib/trpc";
+import { NO_ACCESS_PATH } from "@shared/access";
 
 const AdminDashboard = lazy(() => import("./AdminDashboard"));
 const AdminAppointments = lazy(() => import("./AdminAppointments"));
@@ -213,23 +213,11 @@ export default function AdminRoutes() {
 
   if (!isAuthenticated) return null; // useAuth redirects to login
 
-  if (user?.role !== "admin") {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-muted/30 px-4">
-        <div className="max-w-md rounded-3xl bg-card p-10 text-center shadow-lg">
-          <Sparkles className="mx-auto h-10 w-10 text-primary" />
-          <h1 className="mt-4 font-display text-2xl font-bold text-foreground">Admin access required</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            This area is reserved for Grapefruit Cleaning Co. administrators. If you believe you should have
-            access, please contact the site owner.
-          </p>
-          <Button asChild className="mt-6 rounded-full px-6">
-            <Link href="/en">Back to website</Link>
-          </Button>
-        </div>
-      </div>
-    );
-  }
+  // The whole crew installs one app pointed at /admin, so send each role on to
+  // where they belong instead of dead-ending them. The API enforces the same
+  // rules independently — this is routing, not the security boundary.
+  if (user?.role === "staff") return <Redirect to="/staff" replace />;
+  if (user?.role !== "admin") return <Redirect to={NO_ACCESS_PATH} replace />;
 
   return (
     <AdminShell>

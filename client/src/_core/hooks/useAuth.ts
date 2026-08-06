@@ -76,20 +76,21 @@ export function useAuth(options?: UseAuthOptions) {
     if (typeof window === "undefined") return;
     if (redirectPath && window.location.pathname === redirectPath) return;
 
-    // Remember where the user was headed so we can restore it after the
-    // OAuth callback lands back at "/". Consumed by RootRedirect in App.tsx.
+    const destination = window.location.pathname + window.location.search;
+
+    // Belt-and-braces breadcrumb. The destination now round-trips through the
+    // OAuth state parameter (which survives the login being handed to another
+    // browser), but this keeps logins started by an older build working, and
+    // covers the callback landing on "/" for any other reason.
     try {
-      localStorage.setItem(
-        "gfc-post-login-redirect",
-        window.location.pathname + window.location.search
-      );
+      localStorage.setItem("gfc-post-login-redirect", destination);
     } catch {}
 
     // Navigate at this moment only. startLogin() mints the nonce + cookie itself.
     if (redirectPath) {
       window.location.href = redirectPath;
     } else {
-      startLogin();
+      startLogin(destination);
     }
   }, [
     redirectOnUnauthenticated,

@@ -1,7 +1,7 @@
 {
-  "name": "Grapefruit Admin",
-  "short_name": "GF Admin",
-  "description": "Grapefruit Cleaning Co. admin dashboard — bookings, invoices, customers, and pricing.",
+  "name": "Grapefruit Team",
+  "short_name": "Grapefruit",
+  "description": "Grapefruit Cleaning Co. team app \u2014 admins get the admin dashboard, cleaners get their jobs and schedule.",
   "start_url": "/admin",
   "scope": "/admin",
   "display": "standalone",
@@ -9,8 +9,23 @@
   "background_color": "#FDF8F3",
   "theme_color": "#F26D5B",
   "icons": [
-    { "src": "/icons/admin-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "/icons/admin-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "/icons/admin-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    {
+      "src": "/icons/admin-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/admin-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/admin-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
   ]
 }
