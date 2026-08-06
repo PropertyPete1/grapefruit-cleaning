@@ -82,8 +82,9 @@ export const staffRouter = router({
     .input(z.object({ bookingId: z.number().int(), status: z.enum(["in_progress", "completed"]) }))
     .mutation(async ({ ctx, input }) => {
       await db.updateBooking(input.bookingId, { status: input.status });
-      // Completing a job issues its remaining-balance invoice and emails the
-      // customer a payment link. Best-effort: never fails the status update.
+      // Completing a job files its remaining balance for admin approval —
+      // nothing reaches the customer until it is reviewed. Best-effort: never
+      // fails the status update.
       if (input.status === "completed") {
         await issueBalanceSafely(input.bookingId, originFromRequest(ctx.req));
       }

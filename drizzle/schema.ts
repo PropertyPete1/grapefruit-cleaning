@@ -128,10 +128,24 @@ export const invoices = mysqlTable("invoices", {
   number: varchar("number", { length: 20 }).notNull().unique(),
   bookingId: int("bookingId"),
   customerId: int("customerId").notNull(),
+  /** Amount actually billed — the computed balance unless an admin adjusted it at approval. */
   amount: int("amount").notNull(),
-  status: mysqlEnum("status", ["draft", "sent", "paid", "overdue", "void"]).default("draft").notNull(),
+  /**
+   * "awaiting_approval" = balance computed on job completion, waiting for an
+   * admin to review (and possibly adjust) before anything is sent. Nothing is
+   * emailed and no Stripe session exists until it leaves this state.
+   */
+  status: mysqlEnum("status", ["draft", "sent", "paid", "overdue", "void", "awaiting_approval"])
+    .default("draft")
+    .notNull(),
   dueDate: varchar("dueDate", { length: 10 }),
   paidAt: timestamp("paidAt"),
+  /** Server-computed balance at completion, kept for audit when an admin adjusts the total. */
+  computedAmount: int("computedAmount"),
+  /** When an admin approved the balance for sending. */
+  approvedAt: timestamp("approvedAt"),
+  /** users.id of the admin who approved it. */
+  approvedByUserId: int("approvedByUserId"),
   /**
    * "balance" = auto-generated remaining-balance invoice with a payment link,
    * created when a booking is marked completed. "manual" = created by hand in

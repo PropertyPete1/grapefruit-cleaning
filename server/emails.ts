@@ -484,6 +484,43 @@ export function buildRefundNeededAlert(data: BalanceEmailData): { title: string;
   };
 }
 
+/**
+ * Owner alert that a completed job's balance is waiting for review. Sent
+ * instead of billing the customer, so nothing goes out unchecked — and nothing
+ * sits forgotten either.
+ */
+export function buildBalanceApprovalNeededAlert(data: BalanceEmailData): { title: string; content: string } {
+  return {
+    title: `Approve balance — ${fmtUsd(data.balance)} for ${data.customerName} (booking ${data.reference})`,
+    content: [
+      `A cleaning was marked complete. Its remaining balance is ready for your review — nothing has been sent to the customer yet.`,
+      ``,
+      `Reference: ${data.reference}`,
+      `Invoice: ${data.invoiceNumber}`,
+      `Service: ${data.serviceName}`,
+      `Service date: ${data.date}`,
+      data.address ? `Address: ${data.address}` : ``,
+      ``,
+      `Customer: ${data.customerName}`,
+      `Email: ${data.customerEmail}`,
+      data.customerPhone ? `Phone: ${data.customerPhone}` : ``,
+      ``,
+      `Booking total: ${fmtUsd(data.total)}`,
+      `Deposit credited: ${fmtUsd(data.deposit)}`,
+      `Balance to collect: ${fmtUsd(data.balance)}`,
+      ``,
+      `Open Admin → Invoices to review and send the payment link. You can adjust the total first if the job turned out bigger or smaller than booked.`,
+    ]
+      .filter(line => line !== undefined)
+      .join("\n"),
+  };
+}
+
+/** Notifies the owner that a balance needs approving before it can be sent. */
+export async function sendBalanceApprovalNeededAlert(data: BalanceEmailData): Promise<void> {
+  await notifyOwnerWithEmailCopy(buildBalanceApprovalNeededAlert(data));
+}
+
 /** Emails the customer their balance payment link. Returns true when delivered. */
 export async function sendBalanceDueEmail(data: BalanceEmailData): Promise<boolean> {
   const email = buildBalanceDueEmail(data);

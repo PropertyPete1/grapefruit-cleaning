@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "wouter";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -20,6 +21,11 @@ export default function AdminAppointments() {
     statusFilter === "all" ? {} : { status: statusFilter as (typeof STATUSES)[number] }
   );
   const employees = trpc.admin.employees.useQuery();
+  // Completed jobs whose balance still needs an admin's sign-off.
+  const pendingApproval = trpc.admin.awaitingApprovalInvoices.useQuery();
+  const pendingByBooking = new Map<number, number>(
+    (pendingApproval.data ?? []).flatMap(inv => (inv.bookingId ? [[inv.bookingId, inv.amount] as const] : []))
+  );
   const updateStatus = trpc.admin.updateBookingStatus.useMutation({
     onSuccess: () => {
       utils.admin.bookings.invalidate();
@@ -122,6 +128,15 @@ export default function AdminAppointments() {
                     <td className="px-5 py-3.5">
                       <span className="font-semibold">{fmtMoney(b.totalAmount)}</span>
                       <span className="block text-xs text-muted-foreground">dep. {fmtMoney(b.depositAmount)}</span>
+                      {pendingByBooking.get(b.id) !== undefined && (
+                        <Link
+                          href="/admin/invoices"
+                          className="mt-1 block w-fit rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800 hover:bg-amber-200"
+                          title="The remaining balance is waiting for your approval — nothing has been sent to the customer yet."
+                        >
+                          Balance {fmtMoney(pendingByBooking.get(b.id)!)} awaiting approval
+                        </Link>
+                      )}
                     </td>
                     <td className="px-5 py-3.5">
                       <Select

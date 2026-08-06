@@ -39,10 +39,11 @@ export function stripeSessionExpiresAt(now: Date = new Date()): number {
   return Math.floor(now.getTime() / 1000) + STRIPE_SESSION_MAX_SECONDS;
 }
 
-export type BalanceLinkStatus = "none" | "sent" | "paid" | "expired";
+export type BalanceLinkStatus = "none" | "awaiting_approval" | "sent" | "paid" | "expired";
 
 /**
  * Payment-link state shown in Admin → Invoices.
+ * - "awaiting_approval": balance computed, waiting on an admin — nothing sent.
  * - "none": no link was ever generated (manual invoices, zero-balance invoices).
  * - "paid": settled, by card or in person — a paid invoice is never "expired".
  * - "expired": the 7-day window closed with the balance still outstanding.
@@ -52,6 +53,9 @@ export function balanceLinkStatus(
   invoice: { status: string; payToken?: string | null; linkExpiresAt?: Date | string | null },
   now: Date = new Date()
 ): BalanceLinkStatus {
+  // Checked first: an invoice pending review has no link yet, but "awaiting
+  // approval" is what the owner needs to see, not "none".
+  if (invoice.status === "awaiting_approval") return "awaiting_approval";
   // Checked before status so a zero-balance invoice — auto-marked paid without
   // ever issuing a link — doesn't claim a link was paid.
   if (!invoice.payToken) return "none";

@@ -8,7 +8,7 @@ import {
   type PricingConfig,
 } from "@shared/pricing";
 import * as db from "../db";
-import { issueBalanceSafely, originFromRequest, resendBalanceLink } from "../balance";
+import { approveBalanceInvoice, issueBalanceSafely, originFromRequest, resendBalanceLink } from "../balance";
 import { balanceLinkStatus } from "../balanceRules";
 import { buildStaffInviteEmail, deliverEmail } from "../emails";
 import { storagePut } from "../storage";
@@ -46,8 +46,9 @@ export const adminRouter = router({
     .input(z.object({ id: z.number().int(), status: bookingStatusEnum }))
     .mutation(async ({ ctx, input }) => {
       await db.updateBooking(input.id, { status: input.status });
-      // Completing a job issues its remaining-balance invoice and emails the
-      // customer a payment link. Best-effort: never fails the status update.
+      // Completing a job files its remaining balance for admin approval —
+      // nothing reaches the customer until it is reviewed. Best-effort: never
+      // fails the status update.
       if (input.status === "completed") {
         await issueBalanceSafely(input.id, originFromRequest(ctx.req));
       }
@@ -263,6 +264,69 @@ export const adminRouter = router({
       return { success: true } as const;
     }),
   /**
+   * Balance invoices waiting on review, with the booking/customer context the
+   * approval dialog and the nav badge need.
+   */
+  awaitingApprovalInvoices: adminProcedure.query(async () => {
+    const pending = await db.listInvoicesAwaitingApproval();
+    return Promise.all(
+      pending.map(async ({ payToken: _payToken, ...invoice }) => {
+        const booking = invoice.bookingId ? await db.getBookingById(invoice.bookingId) : undefined;
+        const customer = await db.getCustomerById(invoice.customerId);
+        return {
+          ...invoice,
+          bookingReference: booking?.reference ?? null,
+          serviceType: booking?.serviceType ?? null,
+          serviceDate: booking?.scheduledDate ?? null,
+          bookingTotal: booking?.totalAmount ?? null,
+          // Only a captured deposit is credited against the balance.
+          depositCredited: booking?.stripePaymentIntentId ? (booking?.depositAmount ?? 0) : 0,
+          customerName: customer ? `${customer.firstName} ${customer.lastName}` : null,
+          customerEmail: customer?.email ?? null,
+        };
+      })
+    );
+  }),
+  /**
+   * Approves a pending balance and bills the customer. Admin-only (staff may
+   * complete jobs but never approve), and the amount is re-derived server-side
+   * from this input rather than trusted from the invoice the client rendered.
+   */
+  approveBalanceInvoice: adminProcedure
+    .input(
+      z.object({
+        invoiceId: z.number().int(),
+        /** Optional corrected total; omitted means bill the computed balance. */
+        adjustedAmount: z.number().int().min(0).max(100000).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const result = await approveBalanceInvoice({
+        invoiceId: input.invoiceId,
+        adjustedAmount: input.adjustedAmount,
+        approvedByUserId: ctx.user.id,
+        origin: originFromRequest(ctx.req),
+      });
+      switch (result.outcome) {
+        case "approved":
+          return { sent: true as const, amount: result.amount, emailed: result.emailed, expiresOn: result.expiresOn };
+        case "settled_without_link":
+          return { sent: false as const, amount: 0, emailed: false, expiresOn: null };
+        case "not_awaiting_approval":
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `This invoice is no longer awaiting approval (it is ${result.status.replace(/_/g, " ")}).`,
+          });
+        case "not_a_balance_invoice":
+          throw new TRPCError({ code: "BAD_REQUEST", message: "This invoice has no balance to approve." });
+        case "booking_not_found":
+        case "customer_not_found":
+          throw new TRPCError({ code: "NOT_FOUND", message: "The booking for this invoice is no longer available." });
+        default:
+          throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
+      }
+    }),
+  /**
    * Re-sends a balance payment link (expired, or just never acted on),
    * reopening the 7-day window from now.
    */
@@ -277,6 +341,11 @@ export const adminRouter = router({
           throw new TRPCError({ code: "BAD_REQUEST", message: "This invoice is already paid." });
         case "voided":
           throw new TRPCError({ code: "BAD_REQUEST", message: "This invoice was voided." });
+        case "awaiting_approval":
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Approve this balance first — nothing has been sent to the customer yet.",
+          });
         case "not_a_balance_invoice":
           throw new TRPCError({ code: "BAD_REQUEST", message: "This invoice has no payment link to resend." });
         case "customer_not_found":

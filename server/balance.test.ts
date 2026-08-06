@@ -54,6 +54,7 @@ vi.mock("nodemailer", () => ({
 
 import {
   applyBalancePayment,
+  approveBalanceInvoice,
   balanceDueForBooking,
   balancePayUrl,
   createBalanceCheckoutSession,
@@ -261,33 +262,38 @@ describe("createBalanceCheckoutSession", () => {
 // ---------------------------------------------------------------------------
 
 describe("issueBalanceForCompletedBooking", () => {
-  it("creates the invoice, mints the link, and emails the customer", async () => {
+  it("files the balance for approval without billing the customer", async () => {
+    mockGetInvoiceById.mockResolvedValue({ ...INVOICE, status: "awaiting_approval" });
     const result = await issueBalanceForCompletedBooking(42, ORIGIN);
 
-    expect(result).toMatchObject({ outcome: "link_sent", invoiceId: 501, amount: 200 });
+    expect(result).toMatchObject({ outcome: "awaiting_approval", invoiceId: 501, amount: 200 });
     const invoiceArgs = mockCreateInvoice.mock.calls[0]![0] as Record<string, unknown>;
-    expect(invoiceArgs).toMatchObject({ bookingId: 42, customerId: 7, amount: 200, kind: "balance", status: "sent" });
-    expect(String(invoiceArgs.payToken)).toHaveLength(48);
-    // 7-day customer-facing window, independent of Stripe's 24h session cap.
-    const expiresAt = invoiceArgs.linkExpiresAt as Date;
-    const days = (expiresAt.getTime() - (invoiceArgs.linkSentAt as Date).getTime()) / 86_400_000;
-    expect(days).toBeCloseTo(BALANCE_LINK_DAYS, 5);
-    expect(mockUpdateInvoice).toHaveBeenCalledWith(501, { stripeSessionId: "cs_balance_1" });
-
-    const email = sentEmails()[0]!;
-    expect(email.to).toBe("ana@example.com");
-    expect(email.subject).toContain("Your cleaning is complete");
-    expect(email.text).toContain("$200 USD");
-    expect(email.text).toContain(`${ORIGIN}/api/pay/balance/`);
+    expect(invoiceArgs).toMatchObject({
+      bookingId: 42,
+      customerId: 7,
+      amount: 200,
+      computedAmount: 200,
+      kind: "balance",
+      status: "awaiting_approval",
+    });
+    // Nothing customer-facing exists yet.
+    expect(invoiceArgs.payToken).toBeUndefined();
+    expect(invoiceArgs.linkExpiresAt).toBeUndefined();
+    expect(mockSessionCreate).not.toHaveBeenCalled();
   });
 
-  it("emails a Spanish customer in Spanish", async () => {
-    mockGetBookingById.mockResolvedValue({ ...BOOKING, locale: "es" });
+  it("sends the customer nothing on completion, only the owner an approval alert", async () => {
+    mockGetInvoiceById.mockResolvedValue({ ...INVOICE, status: "awaiting_approval" });
     await issueBalanceForCompletedBooking(42, ORIGIN);
-    const email = sentEmails()[0]!;
-    expect(email.subject).toContain("Su limpieza está completa");
-    expect(email.text).toContain("Saldo restante a pagar");
-    expect(email.text).not.toContain("Remaining balance due");
+
+    // The only mail is the owner's — the customer is not contacted.
+    expect(sentEmails().every(e => e.to !== "ana@example.com")).toBe(true);
+    expect(mockNotifyOwner).toHaveBeenCalledWith(
+      expect.objectContaining({ title: expect.stringContaining("Approve balance") })
+    );
+    const alert = mockNotifyOwner.mock.calls[0]![0] as { content: string };
+    expect(alert.content).toContain("nothing has been sent to the customer yet");
+    expect(alert.content).toContain("$200 USD");
   });
 
   it("skips the link and marks the invoice paid when nothing is owed", async () => {
@@ -326,10 +332,10 @@ describe("issueBalanceForCompletedBooking", () => {
     expect(mockCreateInvoice).not.toHaveBeenCalled();
   });
 
-  it("bills the full total when the deposit was never captured", async () => {
+  it("queues the full total when the deposit was never captured", async () => {
     mockGetBookingById.mockResolvedValue({ ...BOOKING, stripePaymentIntentId: null });
     const result = await issueBalanceForCompletedBooking(42, ORIGIN);
-    expect(result).toMatchObject({ outcome: "link_sent", amount: 250 });
+    expect(result).toMatchObject({ outcome: "awaiting_approval", amount: 250 });
   });
 });
 

@@ -393,6 +393,20 @@ export async function getInvoiceByPayToken(token: string) {
 }
 
 /**
+ * Balance invoices waiting on an admin's review, oldest first — the approval
+ * queue behind the Invoices badge.
+ */
+export async function listInvoicesAwaitingApproval() {
+  const db = requireDb(await getDb());
+  return db
+    .select()
+    .from(invoices)
+    .where(and(eq(invoices.kind, "balance"), eq(invoices.status, "awaiting_approval")))
+    .orderBy(invoices.createdAt)
+    .limit(200);
+}
+
+/**
  * The auto-generated balance invoice for a booking, if one exists. Used to keep
  * marking a booking completed idempotent — re-completing never issues a second
  * payment link. Manual invoices attached to the same booking are ignored.

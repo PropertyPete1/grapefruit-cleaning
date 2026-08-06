@@ -23,6 +23,7 @@ import {
 } from "./balanceRules";
 import * as db from "./db";
 import {
+  sendBalanceApprovalNeededAlert,
   sendBalanceDueEmail,
   sendBalancePaidNotification,
   sendRefundNeededAlert,
@@ -156,17 +157,20 @@ export type CompletionOutcome =
   | { outcome: "booking_not_found" }
   | { outcome: "not_completed" }
   | { outcome: "already_issued"; invoiceId: number }
-  | { outcome: "customer_not_found" }
   | { outcome: "zero_balance"; invoiceId: number }
-  | { outcome: "link_sent"; invoiceId: number; amount: number; emailed: boolean };
+  | { outcome: "awaiting_approval"; invoiceId: number; amount: number };
 
 /**
- * Issues the remaining-balance invoice for a completed booking and emails the
- * customer their payment link. Idempotent: a booking that already has a balance
- * invoice is left alone, so re-marking it completed never bills twice.
+ * Computes the remaining balance for a completed booking and files it for
+ * approval. Nothing reaches the customer here: no Stripe session and no email
+ * until an admin reviews the amount, because the crew regularly finds on site
+ * that the home is bigger (or the job smaller) than what was booked.
  *
- * A zero balance (100% coupon, or a deposit that covered the total) skips the
- * link entirely and records the invoice as already paid.
+ * Idempotent: a booking that already has a balance invoice is left alone, so
+ * re-marking it completed never bills twice.
+ *
+ * A zero balance (100% coupon, or a deposit that covered the total) still
+ * auto-settles — there is nothing to review or collect.
  */
 export async function issueBalanceForCompletedBooking(bookingId: number, origin: string): Promise<CompletionOutcome> {
   const booking = await db.getBookingById(bookingId);
@@ -187,6 +191,7 @@ export async function issueBalanceForCompletedBooking(bookingId: number, origin:
       bookingId,
       customerId: booking.customerId,
       amount: 0,
+      computedAmount: 0,
       kind: "balance",
       status: "paid",
       paidAt: now,
@@ -194,40 +199,34 @@ export async function issueBalanceForCompletedBooking(bookingId: number, origin:
     return { outcome: "zero_balance", invoiceId };
   }
 
-  const customer = await db.getCustomerById(booking.customerId);
-  if (!customer) return { outcome: "customer_not_found" };
-
-  const expiresAt = balanceLinkExpiresAt(now);
-  const number = generateInvoiceNumber();
-  const payToken = randomBytes(24).toString("hex");
   const invoiceId = await db.createInvoice({
-    number,
+    number: generateInvoiceNumber(),
     bookingId,
     customerId: booking.customerId,
     amount,
+    computedAmount: amount,
     kind: "balance",
-    status: "sent",
-    dueDate: expiresAt.toISOString().slice(0, 10),
-    payToken,
-    linkSentAt: now,
-    linkExpiresAt: expiresAt,
+    status: "awaiting_approval",
   });
 
-  const session = await createBalanceCheckoutSession({
-    invoice: { id: invoiceId, number, amount, payToken },
-    booking,
-    customerEmail: customer.email,
-    origin,
-    now,
-  });
-  await db.updateInvoice(invoiceId, { stripeSessionId: session.id });
+  // Tell the owner there is money waiting on them, so it can't sit forgotten.
+  await notifyApprovalNeeded(invoiceId, booking, amount);
 
-  const bizPhone = (await db.getSetting("business_phone"))?.trim() || undefined;
-  const emailed = await sendBalanceDueEmail(
-    toBalanceEmailData(booking, customer, { number, amount }, balancePayUrl(origin, payToken), expiresAt, bizPhone)
-  );
+  return { outcome: "awaiting_approval", invoiceId, amount };
+}
 
-  return { outcome: "link_sent", invoiceId, amount, emailed };
+/** Owner alert that a completed job is waiting for balance approval. */
+async function notifyApprovalNeeded(invoiceId: number, booking: Booking, amount: number): Promise<void> {
+  try {
+    const customer = await db.getCustomerById(booking.customerId);
+    const invoice = await db.getInvoiceById(invoiceId);
+    if (!customer || !invoice) return;
+    await sendBalanceApprovalNeededAlert(
+      toBalanceEmailData(booking, customer, { number: invoice.number, amount }, "", new Date())
+    );
+  } catch (error) {
+    console.error(`[Balance] Failed to send approval alert for invoice ${invoiceId}:`, error);
+  }
 }
 
 /**
@@ -243,9 +242,101 @@ export async function issueBalanceSafely(bookingId: number, origin: string): Pro
   }
 }
 
+export type ApprovalOutcome =
+  | { outcome: "not_found" }
+  | { outcome: "not_a_balance_invoice" }
+  | { outcome: "not_awaiting_approval"; status: string }
+  | { outcome: "booking_not_found" }
+  | { outcome: "customer_not_found" }
+  | { outcome: "settled_without_link"; invoiceId: number }
+  | { outcome: "approved"; invoiceId: number; amount: number; emailed: boolean; expiresOn: string };
+
+/**
+ * Approves a pending balance — the point where the customer is finally billed.
+ * Mints the Stripe session and sends the payment email exactly as the
+ * pre-approval flow did.
+ *
+ * `adjustedAmount` lets an admin correct the total (bigger home than booked,
+ * say). It is applied server-side and drives the Stripe amount; the originally
+ * computed figure is kept on the invoice for the audit trail.
+ */
+export async function approveBalanceInvoice(args: {
+  invoiceId: number;
+  approvedByUserId: number;
+  origin: string;
+  adjustedAmount?: number;
+}): Promise<ApprovalOutcome> {
+  const { invoiceId, approvedByUserId, origin } = args;
+  const invoice = await db.getInvoiceById(invoiceId);
+  if (!invoice) return { outcome: "not_found" };
+  if (invoice.kind !== "balance") return { outcome: "not_a_balance_invoice" };
+  // Idempotent: only a pending invoice can be approved. An invoice already sent
+  // or settled (including collected in person) is never re-billed here.
+  if (invoice.status !== "awaiting_approval") return { outcome: "not_awaiting_approval", status: invoice.status };
+  if (!invoice.bookingId) return { outcome: "booking_not_found" };
+
+  const booking = await db.getBookingById(invoice.bookingId);
+  if (!booking) return { outcome: "booking_not_found" };
+  const customer = await db.getCustomerById(invoice.customerId);
+  if (!customer) return { outcome: "customer_not_found" };
+
+  const amount = args.adjustedAmount ?? invoice.amount;
+  const now = new Date();
+
+  // An admin can zero out the balance (goodwill, or the deposit turned out to
+  // cover it). Settle it outright rather than emailing a $0 payment link.
+  if (amount <= 0) {
+    await db.updateInvoice(invoiceId, {
+      amount: 0,
+      status: "paid",
+      paidAt: now,
+      approvedAt: now,
+      approvedByUserId,
+    });
+    return { outcome: "settled_without_link", invoiceId };
+  }
+
+  const expiresAt = balanceLinkExpiresAt(now);
+  const payToken = invoice.payToken ?? randomBytes(24).toString("hex");
+  const session = await createBalanceCheckoutSession({
+    invoice: { id: invoiceId, number: invoice.number, amount, payToken },
+    booking,
+    customerEmail: customer.email,
+    origin,
+    now,
+  });
+
+  await db.updateInvoice(invoiceId, {
+    amount,
+    status: "sent",
+    approvedAt: now,
+    approvedByUserId,
+    dueDate: expiresAt.toISOString().slice(0, 10),
+    payToken,
+    stripeSessionId: session.id,
+    linkSentAt: now,
+    linkExpiresAt: expiresAt,
+  });
+
+  const bizPhone = (await db.getSetting("business_phone"))?.trim() || undefined;
+  const emailed = await sendBalanceDueEmail(
+    toBalanceEmailData(
+      booking,
+      customer,
+      { number: invoice.number, amount },
+      balancePayUrl(origin, payToken),
+      expiresAt,
+      bizPhone
+    )
+  );
+
+  return { outcome: "approved", invoiceId, amount, emailed, expiresOn: expiresAt.toISOString().slice(0, 10) };
+}
+
 export type ResendOutcome =
   | { outcome: "not_found" }
   | { outcome: "not_a_balance_invoice" }
+  | { outcome: "awaiting_approval" }
   | { outcome: "already_paid" }
   | { outcome: "voided" }
   | { outcome: "booking_not_found" }
@@ -261,6 +352,8 @@ export async function resendBalanceLink(invoiceId: number, origin: string): Prom
   const invoice = await db.getInvoiceById(invoiceId);
   if (!invoice) return { outcome: "not_found" };
   if (invoice.kind !== "balance") return { outcome: "not_a_balance_invoice" };
+  // Nothing to resend before an admin has approved the amount.
+  if (invoice.status === "awaiting_approval") return { outcome: "awaiting_approval" };
   if (invoice.status === "paid") return { outcome: "already_paid" };
   if (invoice.status === "void") return { outcome: "voided" };
   if (!invoice.bookingId) return { outcome: "booking_not_found" };

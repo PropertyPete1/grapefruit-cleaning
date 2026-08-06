@@ -26,6 +26,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { ASSETS } from "@/lib/assets";
+import { trpc } from "@/lib/trpc";
 
 const AdminDashboard = lazy(() => import("./AdminDashboard"));
 const AdminAppointments = lazy(() => import("./AdminAppointments"));
@@ -68,6 +69,13 @@ function AdminShell({ children }: { children: React.ReactNode }) {
   const activeItem = NAV_ITEMS.find(item =>
     item.exact ? location === item.path : location.startsWith(item.path)
   );
+  // Balances sitting unapproved are money not yet billed — surface the count.
+  const pendingApproval = trpc.admin.awaitingApprovalInvoices.useQuery(undefined, {
+    staleTime: 60_000,
+    refetchOnWindowFocus: true,
+  });
+  const badgeFor = (path: string) =>
+    path === "/admin/invoices" ? (pendingApproval.data?.length ?? 0) : 0;
 
   return (
     <div className="flex min-h-screen bg-muted/30">
@@ -94,7 +102,15 @@ function AdminShell({ children }: { children: React.ReactNode }) {
                 }`}
               >
                 <item.icon className="h-4 w-4 shrink-0" />
-                {item.label}
+                <span className="flex-1">{item.label}</span>
+                {badgeFor(item.path) > 0 && (
+                  <span
+                    className="ml-auto min-w-5 rounded-full bg-amber-500 px-1.5 py-0.5 text-center text-[10px] font-bold text-white"
+                    aria-label={`${badgeFor(item.path)} awaiting approval`}
+                  >
+                    {badgeFor(item.path)}
+                  </span>
+                )}
               </Link>
             );
           })}
@@ -147,7 +163,15 @@ function AdminShell({ children }: { children: React.ReactNode }) {
                     }`}
                   >
                     <item.icon className="h-4 w-4 shrink-0" />
-                    {item.label}
+                    <span className="flex-1">{item.label}</span>
+                    {badgeFor(item.path) > 0 && (
+                      <span
+                        className="ml-auto min-w-5 rounded-full bg-amber-500 px-1.5 py-0.5 text-center text-[10px] font-bold text-white"
+                        aria-label={`${badgeFor(item.path)} awaiting approval`}
+                      >
+                        {badgeFor(item.path)}
+                      </span>
+                    )}
                   </Link>
                 );
               })}
