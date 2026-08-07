@@ -41,6 +41,8 @@ import {
   type Frequency,
 } from "@shared/pricing";
 import { usePricing } from "@/hooks/usePricing";
+import { formatPrice } from "@/lib/formatPrice";
+import { ENTRY_BATHROOMS, ENTRY_BEDROOMS, entrySqft } from "@/lib/quoteDefaults";
 
 const SERVICE_ICONS: Record<CleaningType, typeof HomeIcon> = {
   residential: HomeIcon,
@@ -91,9 +93,17 @@ export default function Quote() {
   const [step, setStep] = useState(0);
   const [direction, setDirection] = useState(1);
   const [type, setType] = useState<CleaningType>("residential");
-  const [bedrooms, setBedrooms] = useState(2);
-  const [bathrooms, setBathrooms] = useState(1);
-  const [sqft, setSqft] = useState(1200);
+  const [bedrooms, setBedrooms] = useState(ENTRY_BEDROOMS);
+  const [bathrooms, setBathrooms] = useState(ENTRY_BATHROOMS);
+  /**
+   * Null until the visitor (or a verified county record) sets a size. While it
+   * is null the form sits at the entry size for the selected service, so the
+   * panel opens on the cheapest price and follows along if they switch service
+   * before filling anything in. It also means the figure is still correct when
+   * the live pricing config arrives after first paint, or when the owner
+   * reshapes the tiers.
+   */
+  const [enteredSqft, setEnteredSqft] = useState<number | null>(null);
   const [extras, setExtras] = useState<ExtraId[]>([]);
   const [frequency, setFrequency] = useState<Frequency>("onetime");
   // Optional address — verifies sqft against public county records and locks the slider to it.
@@ -123,10 +133,12 @@ export default function Quote() {
     propertyLookup.data?.verified && propertyLookup.data.sqft ? propertyLookup.data.sqft : null;
   // Auto-fill the slider from the verified record.
   useEffect(() => {
-    if (verifiedSqft) setSqft(Math.min(10000, Math.max(200, verifiedSqft)));
+    if (verifiedSqft) setEnteredSqft(Math.min(10000, Math.max(200, verifiedSqft)));
   }, [verifiedSqft]);
 
   const pricing = usePricing();
+  const sqft = enteredSqft ?? entrySqft(type, pricing);
+  const setSqft = setEnteredSqft;
   const breakdown = useMemo(
     () => calculateQuote({ type, bedrooms, bathrooms, sqft, extras, frequency }, pricing),
     [type, bedrooms, bathrooms, sqft, extras, frequency, pricing]
@@ -561,7 +573,7 @@ export default function Quote() {
                         <p className="mt-1 text-sm text-muted-foreground">{t.quote.perCleaning}</p>
                         {breakdown.discount > 0 && (
                           <p className="mt-3 inline-block rounded-full bg-secondary/10 px-4 py-1.5 text-sm font-bold text-secondary">
-                            {t.quote.savings} ${breakdown.discount}
+                            {t.quote.savings} ${formatPrice(breakdown.discount)}
                           </p>
                         )}
                       </>
@@ -640,7 +652,7 @@ export default function Quote() {
               <div className="mt-6 space-y-2.5 border-t border-background/15 pt-5 text-sm">
                 <div className="flex justify-between">
                   <span className="text-background/60">{t.quote.steps.type}</span>
-                  <span className="font-medium">${breakdown.base}</span>
+                  <span className="font-medium">${formatPrice(breakdown.base)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-background/60">
@@ -651,7 +663,7 @@ export default function Quote() {
                 {breakdown.sqftCharge > 0 && (
                   <div className="flex justify-between">
                     <span className="text-background/60">{sqft.toLocaleString()} ft²</span>
-                    <span className="font-medium">${breakdown.sqftCharge}</span>
+                    <span className="font-medium">${formatPrice(breakdown.sqftCharge)}</span>
                   </div>
                 )}
                 {breakdown.extrasTotal > 0 && (
@@ -659,13 +671,13 @@ export default function Quote() {
                     <span className="text-background/60">
                       {t.quote.steps.extras} ({extras.length})
                     </span>
-                    <span className="font-medium">${breakdown.extrasTotal}</span>
+                    <span className="font-medium">${formatPrice(breakdown.extrasTotal)}</span>
                   </div>
                 )}
                 {breakdown.discount > 0 && (
                   <div className="flex justify-between text-emerald-400">
                     <span>{frequencyLabels[frequency]} · {Math.round(pricing.frequencyDiscounts[frequency] * 100)}%</span>
-                    <span className="font-medium">−${breakdown.discount}</span>
+                    <span className="font-medium">−${formatPrice(breakdown.discount)}</span>
                   </div>
                 )}
               </div>

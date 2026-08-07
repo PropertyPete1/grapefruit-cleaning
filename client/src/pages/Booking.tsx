@@ -39,6 +39,8 @@ import {
   type Frequency,
 } from "@shared/pricing";
 import { usePricing } from "@/hooks/usePricing";
+import { formatPrice } from "@/lib/formatPrice";
+import { ENTRY_BATHROOMS, ENTRY_BEDROOMS, entrySqft } from "@/lib/quoteDefaults";
 
 const SERVICE_ICONS: Record<CleaningType, typeof HomeIcon> = {
   residential: HomeIcon,
@@ -97,9 +99,24 @@ export default function Booking() {
     const q = params.get("type");
     return VALID_TYPES.includes(q as CleaningType) ? (q as CleaningType) : "residential";
   });
-  const [bedrooms] = useState(() => Math.min(10, Math.max(0, Number(params.get("bedrooms") ?? 2) || 2)));
-  const [bathrooms] = useState(() => Math.min(10, Math.max(1, Number(params.get("bathrooms") ?? 1) || 1)));
-  const [sqft] = useState(() => Math.min(10000, Math.max(200, Number(params.get("sqft") ?? 1200) || 1200)));
+  const [bedrooms] = useState(() =>
+    Math.min(10, Math.max(0, Number(params.get("bedrooms") ?? ENTRY_BEDROOMS) || ENTRY_BEDROOMS))
+  );
+  const [bathrooms] = useState(() =>
+    Math.min(10, Math.max(1, Number(params.get("bathrooms") ?? ENTRY_BATHROOMS) || ENTRY_BATHROOMS))
+  );
+  /**
+   * Size carried over from the quote flow, or null when someone lands on
+   * /book directly. Null falls through to the entry size for the selected
+   * service, so a cold visit opens on the cheapest price rather than a
+   * mid-ladder default — same rule as the quote page.
+   */
+  const [sqftParam] = useState<number | null>(() => {
+    const raw = params.get("sqft");
+    if (raw === null) return null;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.min(10000, Math.max(200, parsed)) : null;
+  });
   const [extras, setExtras] = useState<ExtraId[]>(() => {
     const raw = params.get("extras");
     if (!raw) return [];
@@ -163,6 +180,7 @@ export default function Booking() {
     !verifiedSqft && propertyLookup.data?.addressVerified ? (propertyLookup.data.county ?? null) : null;
 
   const pricing = usePricing();
+  const sqft = sqftParam ?? entrySqft(type, pricing);
   // Match server behavior: price from the verified record when it lands in a higher tier.
   const { breakdown, sqftAdjusted } = useMemo(() => {
     const entered = calculateQuote({ type, bedrooms, bathrooms, sqft, extras, frequency }, pricing);
@@ -844,14 +862,14 @@ export default function Booking() {
                       )}
                       <div className="flex items-center justify-between">
                         <span className="text-muted-foreground">{t.booking.estimatedTotal}</span>
-                        <span className="font-display text-xl font-bold text-foreground">${breakdown.total}</span>
+                        <span className="font-display text-xl font-bold text-foreground">${formatPrice(breakdown.total)}</span>
                       </div>
                       <div className="mt-2 flex items-center justify-between">
                         {/* Rate comes from the live pricing config — the admin can change it. */}
                         <span className="font-semibold text-foreground">
                           {t.booking.depositDue} ({Math.round(pricing.depositRate * 100)}%)
                         </span>
-                        <span className="font-display text-2xl font-extrabold text-primary">${deposit}</span>
+                        <span className="font-display text-2xl font-extrabold text-primary">${formatPrice(deposit)}</span>
                       </div>
                       <p className="mt-4 flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
                         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-secondary" />
@@ -871,7 +889,7 @@ export default function Booking() {
                         </>
                       ) : (
                         <>
-                          {t.booking.payDeposit} — ${deposit}
+                          {t.booking.payDeposit} — ${formatPrice(deposit)}
                         </>
                       )}
                     </Button>
@@ -936,7 +954,7 @@ export default function Booking() {
                 )}
                 <div className="flex justify-between border-t border-background/15 pt-2.5">
                   <span className="text-background/60">{t.booking.depositDue}</span>
-                  <span className="font-bold text-primary-foreground">${deposit}</span>
+                  <span className="font-bold text-primary-foreground">${formatPrice(deposit)}</span>
                 </div>
               </div>
             </div>
