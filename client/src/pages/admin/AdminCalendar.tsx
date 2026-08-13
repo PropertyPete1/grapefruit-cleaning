@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { formatJobSpan, intervalEndTime } from "@shared/availability";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -107,9 +108,10 @@ export default function AdminCalendar() {
                           <div
                             key={b.id}
                             className="truncate rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-accent-foreground"
-                            title={`${b.reference} · ${SERVICE_LABELS[b.serviceType]} · ${b.scheduledTime}`}
+                            title={`${b.reference} · ${SERVICE_LABELS[b.serviceType]} · ${formatJobSpan(b.scheduledTime, b.durationHours)}`}
                           >
-                            {b.scheduledTime} {SERVICE_LABELS[b.serviceType]}
+                            {b.scheduledTime}–{intervalEndTime(b.scheduledTime, b.durationHours)}{" "}
+                            {SERVICE_LABELS[b.serviceType]}
                           </div>
                         ))}
                         {dayBookings.length > 3 && (
@@ -143,7 +145,7 @@ export default function AdminCalendar() {
                   </div>
                   <div className="text-right">
                     <p className="text-muted-foreground">
-                      {b.scheduledDate} · {b.scheduledTime}
+                      {b.scheduledDate} · {formatJobSpan(b.scheduledTime, b.durationHours)}
                     </p>
                     <StatusBadge status={b.status} />
                   </div>

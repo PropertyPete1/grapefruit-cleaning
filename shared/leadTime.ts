@@ -15,7 +15,6 @@
  * schedule (open days, opening hours, the Sunday toggle) and the taken-slot
  * list, never instead of them.
  */
-import { slotsForDate, type WeeklySchedule } from "./schedule";
 
 /** Setting key that stores the admin-configured lead time, in whole hours. */
 export const LEAD_TIME_SETTING_KEY = "booking_lead_time_hours";
@@ -130,18 +129,6 @@ export function slotMeetsLeadTime(
   return slotStartInstant(dateStr, time) - now.getTime() >= leadTimeHours * 3_600_000;
 }
 
-/**
- * Slots on a date that both fall inside the weekly schedule and clear the lead
- * time. Composition, not replacement: a closed day still yields nothing, and
- * the lead time can only shorten the list the schedule produced.
- */
-export function offerableSlots(
-  dateStr: string,
-  schedule: WeeklySchedule,
-  leadTimeHours: number,
-  now: Date = new Date()
-): string[] {
-  return slotsForDate(dateStr, schedule).filter(time =>
-    slotMeetsLeadTime(dateStr, time, leadTimeHours, now)
-  );
-}
+// Composing this rule with the schedule, existing bookings and closing time
+// lives in shared/availability.ts, so there is exactly one place that decides
+// what a customer may book.

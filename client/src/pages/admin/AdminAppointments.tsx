@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
+import { formatJobSpan } from "@shared/availability";
 import { trpc } from "@/lib/trpc";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -108,7 +109,10 @@ export default function AdminAppointments() {
                     </td>
                     <td className="px-5 py-3.5">
                       {fmtDate(b.scheduledDate)}
-                      <span className="block text-xs text-muted-foreground">{b.scheduledTime}</span>
+                      {/* The span, not the start: this is what the calendar holds. */}
+                      <span className="block text-xs text-muted-foreground">
+                        {formatJobSpan(b.scheduledTime, b.durationHours)}
+                      </span>
                       {b.slotConflict && (
                         <span
                           className="mt-1 block w-fit rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-700"
@@ -212,7 +216,7 @@ export default function AdminAppointments() {
                     <span>{SERVICE_LABELS[b.serviceType] ?? b.serviceType}</span>
                   </span>
                 }
-                subtitle={`${fmtDate(b.scheduledDate)} · ${b.scheduledTime}`}
+                subtitle={`${fmtDate(b.scheduledDate)} · ${formatJobSpan(b.scheduledTime, b.durationHours)}`}
                 amount={fmtMoney(b.totalAmount)}
                 badge={<StatusBadge status={b.status} />}
                 details={[

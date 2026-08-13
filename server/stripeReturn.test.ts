@@ -18,7 +18,7 @@ const mockSessionCreate = vi.fn();
 
 vi.mock("./db", () => ({
   getSetting: vi.fn().mockResolvedValue(null),
-  getBookedSlots: vi.fn().mockResolvedValue([]),
+  getOccupiedBookings: vi.fn().mockResolvedValue([]),
   getCouponByCode: vi.fn().mockResolvedValue(undefined),
   findOrCreateCustomer: vi.fn().mockResolvedValue(7),
   createBooking: vi.fn().mockResolvedValue(99),

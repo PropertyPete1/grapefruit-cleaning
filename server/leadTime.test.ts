@@ -14,14 +14,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockGetSetting = vi.fn();
 const mockSetSetting = vi.fn();
-const mockGetBookedSlots = vi.fn();
+const mockGetOccupiedBookings = vi.fn();
 const mockCreateBooking = vi.fn();
 const mockSessionCreate = vi.fn();
 
 vi.mock("./db", () => ({
   getSetting: (...args: unknown[]) => mockGetSetting(...args),
   setSetting: (...args: unknown[]) => mockSetSetting(...args),
-  getBookedSlots: (...args: unknown[]) => mockGetBookedSlots(...args),
+  getOccupiedBookings: (...args: unknown[]) => mockGetOccupiedBookings(...args),
   getCouponByCode: vi.fn().mockResolvedValue(undefined),
   findOrCreateCustomer: vi.fn().mockResolvedValue(7),
   createBooking: (...args: unknown[]) => mockCreateBooking(...args),
@@ -38,12 +38,12 @@ vi.mock("./stripe", () => ({
   getStripe: () => ({ checkout: { sessions: { create: (...a: unknown[]) => mockSessionCreate(...a) } } }),
 }));
 
+import { bookableSlots } from "@shared/availability";
 import {
   DEFAULT_LEAD_TIME_HOURS,
   LEAD_TIME_SETTING_KEY,
   MAX_LEAD_TIME_HOURS,
   isValidLeadTimeHours,
-  offerableSlots,
   parseLeadTimeHours,
   readLeadTimeHours,
   slotMeetsLeadTime,
@@ -183,21 +183,21 @@ describe("slot times are San Antonio wall clock, not UTC", () => {
 describe("composition with the weekly schedule", () => {
   it("adds nothing the schedule did not already offer", () => {
     const now = hoursBefore(new Date(slotStartInstant(WEDNESDAY, "08:00")), 48);
-    const offerable = offerableSlots(WEDNESDAY, DEFAULT_SCHEDULE, 3, now);
+    const offerable = bookableSlots({ date: WEDNESDAY, schedule: DEFAULT_SCHEDULE, leadTimeHours: 3, occupied: [], now: now });
     expect(offerable).toEqual(slotsForDate(WEDNESDAY, DEFAULT_SCHEDULE));
     expect(offerable).not.toContain("12:00"); // the lunch gap survives
   });
 
   it("keeps a closed Sunday closed at every lead time", () => {
     const longBefore = hoursBefore(new Date(slotStartInstant(SUNDAY, "08:00")), 500);
-    expect(offerableSlots(SUNDAY, DEFAULT_SCHEDULE, 0, longBefore)).toEqual([]);
-    expect(offerableSlots(SUNDAY, DEFAULT_SCHEDULE, 3, longBefore)).toEqual([]);
+    expect(bookableSlots({ date: SUNDAY, schedule: DEFAULT_SCHEDULE, leadTimeHours: 0, occupied: [], now: longBefore })).toEqual([]);
+    expect(bookableSlots({ date: SUNDAY, schedule: DEFAULT_SCHEDULE, leadTimeHours: 3, occupied: [], now: longBefore })).toEqual([]);
   });
 
   it("trims only the front of the day when the clock is already inside it", () => {
     // 09:00 local, 3 hours' notice: 12:00 is the lunch gap, so 13:00 is first.
     const now = new Date(slotStartInstant(WEDNESDAY, "09:00"));
-    expect(offerableSlots(WEDNESDAY, DEFAULT_SCHEDULE, 3, now)).toEqual([
+    expect(bookableSlots({ date: WEDNESDAY, schedule: DEFAULT_SCHEDULE, leadTimeHours: 3, occupied: [], now: now })).toEqual([
       "13:00",
       "14:00",
       "15:00",
@@ -208,13 +208,13 @@ describe("composition with the weekly schedule", () => {
 
   it("empties the day once every slot is inside the window", () => {
     const now = new Date(slotStartInstant(WEDNESDAY, "17:00"));
-    expect(offerableSlots(WEDNESDAY, DEFAULT_SCHEDULE, 3, now)).toEqual([]);
+    expect(bookableSlots({ date: WEDNESDAY, schedule: DEFAULT_SCHEDULE, leadTimeHours: 3, occupied: [], now: now })).toEqual([]);
   });
 
   it("respects an admin-shortened day", () => {
     const shortDay = { ...DEFAULT_SCHEDULE, 3: { open: true, start: 8, end: 11 } };
     const now = hoursBefore(new Date(slotStartInstant(WEDNESDAY, "08:00")), 48);
-    expect(offerableSlots(WEDNESDAY, shortDay, 3, now)).toEqual(["08:00", "09:00", "10:00"]);
+    expect(bookableSlots({ date: WEDNESDAY, schedule: shortDay, leadTimeHours: 3, occupied: [], now: now })).toEqual(["08:00", "09:00", "10:00"]);
   });
 });
 
@@ -265,7 +265,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   settings();
   mockSetSetting.mockReset().mockResolvedValue(undefined);
-  mockGetBookedSlots.mockReset().mockResolvedValue([]);
+  mockGetOccupiedBookings.mockReset().mockResolvedValue([]);
   mockCreateBooking.mockReset().mockResolvedValue(99);
   mockSessionCreate.mockReset().mockResolvedValue({ id: "cs_1", url: "https://stripe.test/pay" });
 });
@@ -316,7 +316,10 @@ describe("booking.availability applies the lead time", () => {
   });
 
   it("composes with taken slots rather than overriding them", async () => {
-    mockGetBookedSlots.mockResolvedValue(["14:00"]);
+    // A one-hour job at 14:00, so this case stays about the lead time.
+    mockGetOccupiedBookings.mockResolvedValue([
+      { id: 1, time: "14:00", serviceType: "residential", sqft: 900, estimatedHours: 1 },
+    ]);
     vi.setSystemTime(new Date(slotStartInstant(WEDNESDAY, "09:00")));
     const slots = await publicCaller().availability({ date: WEDNESDAY });
     expect(slots.find(s => s.time === "14:00")?.available).toBe(false); // taken

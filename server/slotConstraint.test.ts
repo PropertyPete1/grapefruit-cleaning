@@ -25,7 +25,7 @@ vi.mock("./db", async () => {
   const actual = await vi.importActual<typeof import("./db")>("./db");
   return {
     getSetting: vi.fn().mockResolvedValue(null),
-    getBookedSlots: vi.fn().mockResolvedValue([]),
+    getOccupiedBookings: vi.fn().mockResolvedValue([]),
     getCouponByCode: vi.fn().mockResolvedValue(undefined),
     findOrCreateCustomer: vi.fn().mockResolvedValue(7),
     createBooking: (...args: unknown[]) => mockCreateBooking(...args),

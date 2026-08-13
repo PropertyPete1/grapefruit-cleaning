@@ -193,8 +193,11 @@ export default function Booking() {
   const deposit = Math.max(1, Math.round(breakdown.total * pricing.depositRate));
 
   const dateString = date ? toDateString(date) : null;
+  // Service type and size go with the date: they decide how long the job runs,
+  // which is what lets the server withhold a slot too late in the day to finish
+  // before closing. booking.create re-derives both and re-checks.
   const availability = trpc.booking.availability.useQuery(
-    { date: dateString ?? "" },
+    { date: dateString ?? "", serviceType: type, sqft },
     { enabled: Boolean(dateString) }
   );
   const scheduleQuery = trpc.booking.schedule.useQuery(undefined, { staleTime: 5 * 60 * 1000 });

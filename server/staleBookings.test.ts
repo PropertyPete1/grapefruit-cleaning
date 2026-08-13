@@ -10,7 +10,7 @@ const mockGetBookingById = vi.fn();
 const mockUpdateBooking = vi.fn();
 const mockCreatePayment = vi.fn();
 const mockExpireStale = vi.fn();
-const mockGetBookedSlots = vi.fn();
+const mockGetOccupiedBookings = vi.fn();
 const mockSessionCreate = vi.fn();
 const mockConfirmUnpaidBooking = vi.fn();
 
@@ -27,7 +27,7 @@ vi.mock("./db", () => ({
   expireStaleBookingsForSlot: vi.fn().mockResolvedValue(0),
   isSlotTakenError: () => false,
   listUpcomingConfirmedBookings: vi.fn().mockResolvedValue([]),
-  getBookedSlots: (...args: unknown[]) => mockGetBookedSlots(...args),
+  getOccupiedBookings: (...args: unknown[]) => mockGetOccupiedBookings(...args),
   findOrCreateCustomer: vi.fn().mockResolvedValue(7),
   createBooking: vi.fn().mockResolvedValue(99),
 }));
@@ -55,12 +55,21 @@ import type { TrpcContext } from "./_core/context";
 const NOW = new Date("2026-07-16T12:00:00Z");
 const minutesAgo = (m: number) => new Date(NOW.getTime() - m * 60_000);
 
+/** A live booking occupying `hours` from `time`, as getOccupiedBookings returns it. */
+const occupying = (time: string, hours = 1, id = 7) => ({
+  id,
+  time,
+  serviceType: "residential",
+  sqft: 900,
+  estimatedHours: hours,
+});
+
 beforeEach(() => {
   mockGetBookingById.mockReset();
   mockUpdateBooking.mockReset();
   mockCreatePayment.mockReset();
   mockExpireStale.mockReset();
-  mockGetBookedSlots.mockReset().mockResolvedValue([]);
+  mockGetOccupiedBookings.mockReset().mockResolvedValue([]);
   mockSessionCreate.mockReset().mockResolvedValue({ id: "cs_test_123", url: "https://stripe.test/pay" });
   // Default: this caller wins the claim. Races override it per-test.
   mockConfirmUnpaidBooking.mockReset().mockResolvedValue(true);
@@ -98,11 +107,16 @@ describe("finalizeBooking (late-payment recovery)", () => {
     reference: "GFC-TEST42",
     scheduledDate: OPEN_MONDAY,
     scheduledTime: "10:00",
+    // A one-hour job, so these cases stay about slot release and late payment
+    // rather than about interval overlap (covered in jobDuration.test.ts).
+    serviceType: "residential",
+    sqft: 900,
+    estimatedHours: 1,
   };
 
   it("confirms an expired booking when the Stripe payment lands late (free slot: no conflict flag)", async () => {
     mockGetBookingById.mockResolvedValue({ ...baseBooking, status: "expired" });
-    mockGetBookedSlots.mockResolvedValue([]);
+    mockGetOccupiedBookings.mockResolvedValue([]);
     await finalizeBooking(42, "pi_late_123");
     expect(mockConfirmUnpaidBooking).toHaveBeenCalledWith(
       42,
@@ -115,9 +129,9 @@ describe("finalizeBooking (late-payment recovery)", () => {
 
   it("flags slotConflict when the late payment lands after another booking retook the slot", async () => {
     mockGetBookingById.mockResolvedValue({ ...baseBooking, status: "expired" });
-    mockGetBookedSlots.mockResolvedValue(["09:00", "10:00"]);
+    mockGetOccupiedBookings.mockResolvedValue([occupying("09:00"), occupying("10:00", 1, 8)]);
     await finalizeBooking(42, "pi_late_456");
-    expect(mockGetBookedSlots).toHaveBeenCalledWith(OPEN_MONDAY);
+    expect(mockGetOccupiedBookings).toHaveBeenCalledWith(OPEN_MONDAY);
     expect(mockConfirmUnpaidBooking).toHaveBeenCalledWith(42, expect.objectContaining({ slotConflict: true }));
     expect(mockCreatePayment).toHaveBeenCalled();
   });
@@ -127,7 +141,7 @@ describe("finalizeBooking (late-payment recovery)", () => {
     await finalizeBooking(42, "pi_123");
     expect(mockConfirmUnpaidBooking).toHaveBeenCalledWith(42, expect.objectContaining({ slotConflict: false }));
     // A fresh pending_deposit row would match its own slot — must not be checked.
-    expect(mockGetBookedSlots).not.toHaveBeenCalled();
+    expect(mockGetOccupiedBookings).not.toHaveBeenCalled();
   });
 
   it("skips the conflict check while a fresh pending_deposit booking still holds its slot", async () => {
@@ -137,7 +151,7 @@ describe("finalizeBooking (late-payment recovery)", () => {
       createdAt: new Date(Date.now() - 5 * 60_000),
     });
     await finalizeBooking(42, "pi_fresh");
-    expect(mockGetBookedSlots).not.toHaveBeenCalled();
+    expect(mockGetOccupiedBookings).not.toHaveBeenCalled();
     expect(mockConfirmUnpaidBooking).toHaveBeenCalledWith(42, expect.objectContaining({ slotConflict: false }));
   });
 
@@ -154,9 +168,9 @@ describe("finalizeBooking (late-payment recovery)", () => {
       status: "pending_deposit",
       createdAt: new Date(Date.now() - (STALE_DEPOSIT_MINUTES + 5) * 60_000),
     });
-    mockGetBookedSlots.mockResolvedValue(["10:00"]);
+    mockGetOccupiedBookings.mockResolvedValue([occupying("10:00")]);
     await finalizeBooking(42, "pi_stale_retaken");
-    expect(mockGetBookedSlots).toHaveBeenCalledWith(OPEN_MONDAY);
+    expect(mockGetOccupiedBookings).toHaveBeenCalledWith(OPEN_MONDAY);
     expect(mockConfirmUnpaidBooking).toHaveBeenCalledWith(42, expect.objectContaining({ slotConflict: true }));
     expect(mockCreatePayment).toHaveBeenCalled();
   });
@@ -167,7 +181,7 @@ describe("finalizeBooking (late-payment recovery)", () => {
       status: "pending_deposit",
       createdAt: new Date(Date.now() - (STALE_DEPOSIT_MINUTES + 5) * 60_000),
     });
-    mockGetBookedSlots.mockResolvedValue(["09:00"]);
+    mockGetOccupiedBookings.mockResolvedValue([occupying("09:00")]);
     await finalizeBooking(42, "pi_stale_free");
     expect(mockConfirmUnpaidBooking).toHaveBeenCalledWith(42, expect.objectContaining({ slotConflict: false }));
   });
@@ -224,7 +238,7 @@ describe("booking.create checkout session", () => {
   });
 
   it("rejects a booking whose slot is already taken", async () => {
-    mockGetBookedSlots.mockResolvedValue(["10:00"]);
+    mockGetOccupiedBookings.mockResolvedValue([occupying("10:00")]);
     await expect(caller().create(createInput)).rejects.toThrow(/not available/i);
     expect(mockSessionCreate).not.toHaveBeenCalled();
   });

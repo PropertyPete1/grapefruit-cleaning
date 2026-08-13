@@ -31,7 +31,7 @@ vi.mock("./db", () => ({
   createPayment: vi.fn(),
   getCouponByCode: vi.fn().mockResolvedValue(undefined),
   incrementCouponRedemptions: vi.fn(),
-  getBookedSlots: vi.fn().mockResolvedValue([]),
+  getOccupiedBookings: vi.fn().mockResolvedValue([]),
   updateBooking: vi.fn(),
 }));
 

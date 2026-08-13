@@ -18,7 +18,7 @@ const mockCreatePayment = vi.fn();
 const mockIncrementCoupon = vi.fn();
 const mockSendBookingEmails = vi.fn();
 const mockNotifyOwner = vi.fn();
-const mockGetBookedSlots = vi.fn();
+const mockGetOccupiedBookings = vi.fn();
 
 /** Server-side row state the conditional UPDATEs act on. */
 const row = {
@@ -78,7 +78,7 @@ vi.mock("./db", () => ({
     paidVia: row.invoiceStatus === "paid" ? "stripe" : null,
     stripePaymentIntentId: row.invoiceStatus === "paid" ? "pi_race" : null,
   })),
-  getBookedSlots: (...args: unknown[]) => mockGetBookedSlots(...args),
+  getOccupiedBookings: (...args: unknown[]) => mockGetOccupiedBookings(...args),
   getCouponByCode: vi.fn().mockResolvedValue({ id: 9, code: "SPARKLE10" }),
   incrementCouponRedemptions: (...args: unknown[]) => mockIncrementCoupon(...args),
   createPayment: (...args: unknown[]) => mockCreatePayment(...args),
@@ -128,7 +128,7 @@ beforeEach(() => {
   mockIncrementCoupon.mockReset();
   mockSendBookingEmails.mockReset();
   mockNotifyOwner.mockReset();
-  mockGetBookedSlots.mockReset().mockResolvedValue([]);
+  mockGetOccupiedBookings.mockReset().mockResolvedValue([]);
 });
 
 describe("concurrent deposit confirmation (webhook + return page)", () => {

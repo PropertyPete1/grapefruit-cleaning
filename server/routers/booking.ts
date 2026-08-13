@@ -8,12 +8,20 @@ import {
   type PricingConfig,
 } from "@shared/pricing";
 import {
-  LEAD_TIME_SETTING_KEY,
-  offerableSlots,
-  parseLeadTimeHours,
-  slotMeetsLeadTime,
-} from "@shared/leadTime";
-import { parseSchedule, slotsForDate, SCHEDULE_SETTING_KEY } from "@shared/schedule";
+  isSlotBookable,
+  overlapsAny,
+  slotAvailability,
+  type AvailabilityContext,
+  type OccupiedInterval,
+} from "@shared/availability";
+import {
+  DURATION_SETTING_KEY,
+  durationHoursFor,
+  parseDurationConfig,
+  type DurationConfig,
+} from "@shared/duration";
+import { LEAD_TIME_SETTING_KEY, parseLeadTimeHours } from "@shared/leadTime";
+import { parseSchedule, SCHEDULE_SETTING_KEY } from "@shared/schedule";
 import * as db from "../db";
 import { assertRateLimit, clientIp } from "../antiSpam";
 import { blocksSlot, STALE_DEPOSIT_MINUTES } from "../bookingRules";
@@ -67,6 +75,62 @@ export async function loadPricingConfig(): Promise<PricingConfig> {
   return parsePricingConfig(await db.getSetting(PRICING_SETTING_KEY));
 }
 
+/** Load the live job-duration ladders from settings (fallback: defaults). */
+export async function loadDurationConfig(): Promise<DurationConfig> {
+  return parseDurationConfig(await db.getSetting(DURATION_SETTING_KEY));
+}
+
+/** The three settings every scheduling decision reads, fetched together. */
+async function loadSchedulingRules() {
+  const [scheduleRaw, leadTimeRaw, durationRaw] = await Promise.all([
+    db.getSetting(SCHEDULE_SETTING_KEY),
+    db.getSetting(LEAD_TIME_SETTING_KEY),
+    db.getSetting(DURATION_SETTING_KEY),
+  ]);
+  return {
+    schedule: parseSchedule(scheduleRaw),
+    leadTimeHours: parseLeadTimeHours(leadTimeRaw),
+    durations: parseDurationConfig(durationRaw),
+  };
+}
+
+/**
+ * The spans live bookings occupy on a date.
+ *
+ * Each booking's duration is the one pinned when it was made. Rows written
+ * before durations existed have none, and fall back to what the current ladder
+ * says a job that size would take — which is the best guess available, and
+ * strictly better than the old behaviour of blocking only the start hour.
+ */
+/**
+ * Adds the resolved duration to booking rows for the dashboards.
+ *
+ * `estimatedHours` is NULL on anything booked before durations existed, and the
+ * dashboards should still show a span for those rather than nothing — so the
+ * fallback to the current ladder happens here, once, instead of in every view.
+ * The raw column is left untouched beside it.
+ */
+export async function withDurationHours<
+  T extends { serviceType: string; sqft: number; estimatedHours: number | null },
+>(rows: T[]): Promise<(T & { durationHours: number })[]> {
+  if (rows.length === 0) return [];
+  const durations = await loadDurationConfig();
+  return rows.map(row => ({
+    ...row,
+    durationHours: row.estimatedHours ?? durationHoursFor(row.serviceType, row.sqft, durations),
+  }));
+}
+
+export function occupiedIntervals(
+  rows: { time: string; serviceType: string; sqft: number; estimatedHours: number | null }[],
+  durations: DurationConfig
+): OccupiedInterval[] {
+  return rows.map(row => ({
+    time: row.time,
+    hours: row.estimatedHours ?? durationHoursFor(row.serviceType, row.sqft, durations),
+  }));
+}
+
 export const bookingRouter = router({
   /** Server-side authoritative quote calculation. */
   calculate: publicProcedure.input(quoteInputSchema).query(async ({ input }) => {
@@ -92,28 +156,37 @@ export const bookingRouter = router({
     )
     .query(async ({ input }) => lookupPropertySqft(input.address, input.city, input.zip)),
 
-  /** Available time slots for a given date. */
+  /**
+   * Available time slots for a given date.
+   *
+   * The service type and size are optional so the calendar still works before
+   * a quote is complete, but the client sends them once it has them: they are
+   * what lets the closing-time rule keep a job from starting too late to
+   * finish. Unavailable slots are returned flagged rather than dropped — an
+   * empty list is how the calendar says "closed that day", which would be the
+   * wrong thing to say about a day that is open but fully committed.
+   */
   availability: publicProcedure
-    .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
+    .input(
+      z.object({
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        serviceType: z.enum(["residential", "commercial", "airbnb", "moveinout", "deep", "office"]).optional(),
+        sqft: z.number().min(200).max(20000).optional(),
+      })
+    )
     .query(async ({ input }) => {
-      const [scheduleRaw, leadTimeRaw] = await Promise.all([
-        db.getSetting(SCHEDULE_SETTING_KEY),
-        db.getSetting(LEAD_TIME_SETTING_KEY),
-      ]);
-      const schedule = parseSchedule(scheduleRaw);
-      const leadTimeHours = parseLeadTimeHours(leadTimeRaw);
-      const slots = slotsForDate(input.date, schedule);
-      if (slots.length === 0) return [];
-      const booked = await db.getBookedSlots(input.date);
-      // Too-soon slots are greyed out exactly like taken ones rather than
-      // dropped: an empty list is the calendar's "we're closed that day"
-      // message, which would be the wrong thing to say about a day that is
-      // open but already too close to book.
-      const now = new Date();
-      return slots.map(slot => ({
-        time: slot,
-        available: !booked.includes(slot) && slotMeetsLeadTime(input.date, slot, leadTimeHours, now),
-      }));
+      const { schedule, leadTimeHours, durations } = await loadSchedulingRules();
+      const rows = await db.getOccupiedBookings(input.date);
+      return slotAvailability({
+        date: input.date,
+        schedule,
+        leadTimeHours,
+        occupied: occupiedIntervals(rows, durations),
+        jobHours:
+          input.serviceType && input.sqft !== undefined
+            ? durationHoursFor(input.serviceType, input.sqft, durations)
+            : undefined,
+      });
     }),
 
   /** Weekly booking schedule (public) so the calendar can disable closed days. */
@@ -158,20 +231,12 @@ export const bookingRouter = router({
     .mutation(async ({ input, ctx }) => {
       // Nuisance-bot protection: max 5 booking attempts per IP per minute.
       assertRateLimit("booking", clientIp(ctx), 5, 60_000);
-      // Enforce the configured booking schedule server-side: reject any
-      // date/time outside the admin-defined hours (e.g. Sundays when closed),
-      // and any slot that no longer clears the minimum lead time. The calendar
-      // already hides both, so this is what stops a crafted request.
-      const [scheduleRaw, leadTimeRaw] = await Promise.all([
-        db.getSetting(SCHEDULE_SETTING_KEY),
-        db.getSetting(LEAD_TIME_SETTING_KEY),
-      ]);
-      const schedule = parseSchedule(scheduleRaw);
-      const leadTimeHours = parseLeadTimeHours(leadTimeRaw);
-      // One list, built by the same helper the calendar's rules go through, so
-      // "open that day" and "far enough ahead" cannot drift apart here.
-      const offerable = offerableSlots(input.date, schedule, leadTimeHours);
-      const takenSlots = await db.getBookedSlots(input.date);
+      // Enforce every scheduling rule server-side: the admin-defined hours
+      // (e.g. Sundays when closed), the minimum lead time, the hours other
+      // bookings have already committed for their full duration, and whether
+      // this job finishes before closing. The calendar hides all four, so this
+      // is what stops a crafted request.
+      const { schedule, leadTimeHours, durations } = await loadSchedulingRules();
       /** The one message a customer ever sees for an unavailable slot. */
       const slotUnavailable = () =>
         new TRPCError({
@@ -181,7 +246,23 @@ export const bookingRouter = router({
               ? "El horario seleccionado no está disponible. Por favor elija otro."
               : "The selected time is not available for booking. Please choose another.",
         });
-      if (!offerable.includes(input.time) || takenSlots.includes(input.time)) {
+      /** The same rules the calendar renders from, against a given occupancy. */
+      const bookableNow = async (jobHours: number) => {
+        const rows = await db.getOccupiedBookings(input.date);
+        const context: AvailabilityContext = {
+          date: input.date,
+          schedule,
+          leadTimeHours,
+          occupied: occupiedIntervals(rows, durations),
+          jobHours,
+        };
+        return isSlotBookable(context, input.time);
+      };
+
+      // Fast fail on what the entered size implies, before spending a network
+      // round trip on the county records. The authoritative check is the second
+      // one, immediately before the insert.
+      if (!(await bookableNow(durationHoursFor(input.quote.type, input.quote.sqft, durations)))) {
         throw slotUnavailable();
       }
       // Verify square footage against public property records (best-effort).
@@ -236,12 +317,30 @@ export const bookingRouter = router({
         preferredLocale: input.locale,
       });
 
-      // The availability check above reads the calendar; the unique index on
-      // slotKey is what actually decides. Between the two, hand back any hold
-      // left by an abandoned checkout on this slot — getBookedSlots already
-      // counts those as free, but the row keeps the slot until its status
-      // changes, and the index goes by the row.
+      // The unique index on slotKey is what finally decides an identical start
+      // time. Before reaching it, hand back any hold left by an abandoned
+      // checkout on this slot — getOccupiedBookings already counts those as
+      // free, but the row keeps the slot until its status changes, and the
+      // index goes by the row.
       await db.expireStaleBookingsForSlot(input.date, input.time);
+
+      // Re-check as close to the insert as this can get. Two things can have
+      // moved since the first check: another booking may have taken overlapping
+      // hours during the county lookup, and the verified square footage may have
+      // pushed this job into a longer duration band that no longer fits.
+      //
+      // Interval overlap is APPLICATION-ENFORCED and cannot be otherwise. The
+      // slotKey unique index expresses "one booking per exact start time" and
+      // has no way to express "no booking whose span crosses mine" — MySQL has
+      // no exclusion constraint. So the index remains the last-line guard for
+      // two customers submitting the same start, and everything wider than that
+      // is this check. The window between it and the insert is small but real;
+      // a collision inside it costs an overlapping pair the owner has to
+      // reschedule, the same outcome as the slot-conflict flag below.
+      const estimatedHours = durationHoursFor(input.quote.type, effectiveSqft, durations);
+      if (!(await bookableNow(estimatedHours))) {
+        throw slotUnavailable();
+      }
 
       let bookingId: number;
       try {
@@ -255,6 +354,9 @@ export const bookingRouter = router({
           bedrooms: input.quote.bedrooms,
           bathrooms: input.quote.bathrooms,
           sqft: Math.round(effectiveSqft),
+          // Pinned now, so a later edit to the duration ladder cannot change
+          // the span this booking occupies once it is paid for.
+          estimatedHours,
           extras: JSON.stringify(input.quote.extras),
           addressLine: input.address,
           city: input.city,
@@ -389,6 +491,29 @@ export const bookingRouter = router({
  * Idempotent — only acts on unpaid bookings: pending_deposit, or expired
  * (a stale checkout whose Stripe payment arrived late still gets confirmed).
  */
+/**
+ * Whether any other live booking's span crosses this one's.
+ *
+ * Excludes the booking itself by id, so a row that does still hold its own
+ * hours can never be reported as clashing with itself.
+ */
+async function overlapsLiveBooking(booking: {
+  id: number;
+  scheduledDate: string;
+  scheduledTime: string;
+  serviceType: string;
+  sqft: number;
+  estimatedHours: number | null;
+}): Promise<boolean> {
+  const durations = await loadDurationConfig();
+  const others = (await db.getOccupiedBookings(booking.scheduledDate)).filter(row => row.id !== booking.id);
+  const mine = {
+    time: booking.scheduledTime,
+    hours: booking.estimatedHours ?? durationHoursFor(booking.serviceType, booking.sqft, durations),
+  };
+  return overlapsAny(mine, occupiedIntervals(others, durations));
+}
+
 export async function finalizeBooking(bookingId: number, paymentIntentId: string | null): Promise<void> {
   const booking = await db.getBookingById(bookingId);
   if (!booking || (booking.status !== "pending_deposit" && booking.status !== "expired")) return;
@@ -402,10 +527,15 @@ export async function finalizeBooking(bookingId: number, paymentIntentId: string
   // A pending_deposit row releases its slot on the clock, at
   // STALE_DEPOSIT_MINUTES, but only flips to "expired" when the daily cron
   // runs — so a status check misses every conflict in that window. While the
-  // booking does still hold its slot, getBookedSlots would match itself.
+  // booking does still hold its slot, getOccupiedBookings would match itself.
+  //
+  // Overlap, not an identical start: while this checkout sat unpaid, a longer
+  // job could have been booked earlier in the day and now runs across this
+  // booking's hours without starting on them. That is just as much a clash for
+  // the crew, and the owner needs the same warning.
   const slotConflict =
     !blocksSlot({ status: booking.status, createdAt: booking.createdAt ?? null }) &&
-    (await db.getBookedSlots(booking.scheduledDate)).includes(booking.scheduledTime);
+    (await overlapsLiveBooking(booking));
 
   // Claim the booking before doing anything with side effects. The status check
   // above is only a fast path — the webhook and the return-page confirmation

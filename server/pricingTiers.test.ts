@@ -15,7 +15,7 @@ vi.mock("./db", () => ({
   getSetting: (...args: unknown[]) => mockGetSetting(...args),
   setSetting: (...args: unknown[]) => mockSetSetting(...args),
   createBooking: (...args: unknown[]) => mockCreateBooking(...args),
-  getBookedSlots: vi.fn().mockResolvedValue([]),
+  getOccupiedBookings: vi.fn().mockResolvedValue([]),
   findOrCreateCustomer: vi.fn().mockResolvedValue(7),
   getCouponByCode: vi.fn().mockResolvedValue(undefined),
   updateBooking: vi.fn(),
