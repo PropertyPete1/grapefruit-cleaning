@@ -96,6 +96,20 @@ function zoneOffsetMs(instantMs: number): number {
 }
 
 /**
+ * Today's date in the business's own timezone, "YYYY-MM-DD".
+ *
+ * The booking calendar runs in the customer's browser, and using their local
+ * date to decide which days are in the past gets it wrong for anyone not in
+ * Central time — a customer in Europe would have the current San Antonio day
+ * hidden from them while it is still perfectly bookable.
+ */
+export function todayInBookingZone(now: Date = new Date()): string {
+  const parts = zoneFormat.formatToParts(now);
+  const field = (type: string) => parts.find(p => p.type === type)?.value ?? "";
+  return `${field("year")}-${field("month")}-${field("day")}`;
+}
+
+/**
  * The real instant a "YYYY-MM-DD" + "HH:MM" slot starts, reading both as wall
  * time in America/Chicago.
  *
@@ -116,8 +130,15 @@ export function slotStartInstant(dateStr: string, time: string): number {
  * Whether a slot starts far enough ahead to be offered.
  *
  * The boundary is inclusive: a slot exactly `leadTimeHours` away is still
- * offerable, one minute inside the window is not. A lead time of 0 disables
- * the rule entirely.
+ * offerable, one minute inside the window is not.
+ *
+ * At 0 the rule is disabled in the sense that matters — no notice is required,
+ * and a slot starting this very second is bookable — but a slot that has
+ * already begun is still refused. That falls straight out of the comparison
+ * ("at least 0 hours from now" is "not in the past"), and it is the behaviour
+ * you want: "no notice required" is a scheduling policy, whereas booking a
+ * cleaning for nine o'clock this morning at half past four is a mistake. It
+ * only became reachable when the calendar stopped hiding today.
  */
 export function slotMeetsLeadTime(
   dateStr: string,
@@ -125,8 +146,8 @@ export function slotMeetsLeadTime(
   leadTimeHours: number,
   now: Date = new Date()
 ): boolean {
-  if (leadTimeHours <= 0) return true;
-  return slotStartInstant(dateStr, time) - now.getTime() >= leadTimeHours * 3_600_000;
+  const required = Math.max(0, leadTimeHours) * 3_600_000;
+  return slotStartInstant(dateStr, time) - now.getTime() >= required;
 }
 
 // Composing this rule with the schedule, existing bookings and closing time

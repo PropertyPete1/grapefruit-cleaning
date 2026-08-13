@@ -408,6 +408,7 @@ export const en = {
     morningSlots: "Morning",
     afternoonSlots: "Afternoon",
     closedDay: "We're not scheduling cleanings on this day. Please pick another date.",
+    noTimesLeft: "There are no times left to book on this day. Please pick another date.",
     extrasTitle: "Add any extras",
     contactTitle: "Your contact information",
     firstName: "First name",

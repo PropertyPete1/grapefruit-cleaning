@@ -136,6 +136,14 @@ describe("the lead-time boundary", () => {
     expect(slotMeetsLeadTime(WEDNESDAY, "10:00", 0, minutesBefore(TEN_AM, 1))).toBe(true);
   });
 
+  it("still refuses a slot that has already begun, even at 0", () => {
+    // "No notice required" is a scheduling policy; booking this morning's nine
+    // o'clock at half past four is a mistake. Only reachable at all since the
+    // calendar stopped hiding today.
+    expect(slotMeetsLeadTime(WEDNESDAY, "10:00", 0, new Date(TEN_AM.getTime() + 60_000))).toBe(false);
+    expect(slotMeetsLeadTime(WEDNESDAY, "10:00", 0, new Date(TEN_AM.getTime() + 6 * 3_600_000))).toBe(false);
+  });
+
   it("scales with the configured hours", () => {
     const now = hoursBefore(TEN_AM, 5);
     expect(slotMeetsLeadTime(WEDNESDAY, "10:00", 3, now)).toBe(true);
@@ -297,14 +305,16 @@ describe("booking.availability applies the lead time", () => {
     expect(slots.every(s => s.available)).toBe(true);
   });
 
-  it("offers everything, right up to the hour, when set to 0", async () => {
+  it("offers everything still ahead, right up to the hour, when set to 0", async () => {
     settings("0");
     vi.setSystemTime(new Date(slotStartInstant(WEDNESDAY, "09:59")));
     const slots = await publicCaller().availability({ date: WEDNESDAY });
+    // One minute of notice is enough with the rule off.
     expect(slots.find(s => s.time === "10:00")?.available).toBe(true);
-    // 09:00 has already started, so even with the rule off it is behind us —
-    // but nothing here removes it, because nothing here is a lead time.
-    expect(slots.every(s => s.available)).toBe(true);
+    expect(slots.find(s => s.time === "17:00")?.available).toBe(true);
+    // But the morning has been and gone.
+    expect(slots.find(s => s.time === "08:00")?.available).toBe(false);
+    expect(slots.find(s => s.time === "09:00")?.available).toBe(false);
   });
 
   it("honours an admin-edited notice period", async () => {
