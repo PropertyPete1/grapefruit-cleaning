@@ -7,6 +7,12 @@ import {
   PRICING_SETTING_KEY,
   type PricingConfig,
 } from "@shared/pricing";
+import {
+  LEAD_TIME_SETTING_KEY,
+  offerableSlots,
+  parseLeadTimeHours,
+  slotMeetsLeadTime,
+} from "@shared/leadTime";
 import { parseSchedule, slotsForDate, SCHEDULE_SETTING_KEY } from "@shared/schedule";
 import * as db from "../db";
 import { assertRateLimit, clientIp } from "../antiSpam";
@@ -90,11 +96,24 @@ export const bookingRouter = router({
   availability: publicProcedure
     .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
     .query(async ({ input }) => {
-      const schedule = parseSchedule(await db.getSetting(SCHEDULE_SETTING_KEY));
+      const [scheduleRaw, leadTimeRaw] = await Promise.all([
+        db.getSetting(SCHEDULE_SETTING_KEY),
+        db.getSetting(LEAD_TIME_SETTING_KEY),
+      ]);
+      const schedule = parseSchedule(scheduleRaw);
+      const leadTimeHours = parseLeadTimeHours(leadTimeRaw);
       const slots = slotsForDate(input.date, schedule);
       if (slots.length === 0) return [];
       const booked = await db.getBookedSlots(input.date);
-      return slots.map(slot => ({ time: slot, available: !booked.includes(slot) }));
+      // Too-soon slots are greyed out exactly like taken ones rather than
+      // dropped: an empty list is the calendar's "we're closed that day"
+      // message, which would be the wrong thing to say about a day that is
+      // open but already too close to book.
+      const now = new Date();
+      return slots.map(slot => ({
+        time: slot,
+        available: !booked.includes(slot) && slotMeetsLeadTime(input.date, slot, leadTimeHours, now),
+      }));
     }),
 
   /** Weekly booking schedule (public) so the calendar can disable closed days. */
@@ -140,9 +159,18 @@ export const bookingRouter = router({
       // Nuisance-bot protection: max 5 booking attempts per IP per minute.
       assertRateLimit("booking", clientIp(ctx), 5, 60_000);
       // Enforce the configured booking schedule server-side: reject any
-      // date/time outside the admin-defined hours (e.g. Sundays when closed).
-      const schedule = parseSchedule(await db.getSetting(SCHEDULE_SETTING_KEY));
-      const validSlots = slotsForDate(input.date, schedule);
+      // date/time outside the admin-defined hours (e.g. Sundays when closed),
+      // and any slot that no longer clears the minimum lead time. The calendar
+      // already hides both, so this is what stops a crafted request.
+      const [scheduleRaw, leadTimeRaw] = await Promise.all([
+        db.getSetting(SCHEDULE_SETTING_KEY),
+        db.getSetting(LEAD_TIME_SETTING_KEY),
+      ]);
+      const schedule = parseSchedule(scheduleRaw);
+      const leadTimeHours = parseLeadTimeHours(leadTimeRaw);
+      // One list, built by the same helper the calendar's rules go through, so
+      // "open that day" and "far enough ahead" cannot drift apart here.
+      const offerable = offerableSlots(input.date, schedule, leadTimeHours);
       const takenSlots = await db.getBookedSlots(input.date);
       /** The one message a customer ever sees for an unavailable slot. */
       const slotUnavailable = () =>
@@ -153,7 +181,7 @@ export const bookingRouter = router({
               ? "El horario seleccionado no está disponible. Por favor elija otro."
               : "The selected time is not available for booking. Please choose another.",
         });
-      if (!validSlots.includes(input.time) || takenSlots.includes(input.time)) {
+      if (!offerable.includes(input.time) || takenSlots.includes(input.time)) {
         throw slotUnavailable();
       }
       // Verify square footage against public property records (best-effort).
@@ -424,6 +452,7 @@ export async function finalizeBooking(bookingId: number, paymentIntentId: string
       customerEmail: customer.email,
       customerPhone: customer.phone ?? undefined,
       address: [booking.addressLine, booking.city, booking.zip].filter(Boolean).join(", "),
+      notes: booking.notes ?? undefined,
       locale,
       bizPhone,
       slotConflict,

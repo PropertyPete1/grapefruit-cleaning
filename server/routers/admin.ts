@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { randomBytes } from "node:crypto";
+import { LEAD_TIME_SETTING_KEY, MAX_LEAD_TIME_HOURS, readLeadTimeHours } from "@shared/leadTime";
 import {
   PRICING_SETTING_KEY,
   serializePricingConfig,
@@ -11,6 +12,7 @@ import * as db from "../db";
 import { approveBalanceInvoice, issueBalanceSafely, originFromRequest, resendBalanceLink } from "../balance";
 import { balanceLinkStatus } from "../balanceRules";
 import { buildStaffInviteEmail, deliverEmail } from "../emails";
+import { sendJobStartedEmailSafely } from "../statusEmails";
 import { storagePut } from "../storage";
 import { getStripe } from "../stripe";
 import { protectedProcedure, router } from "../_core/trpc";
@@ -30,6 +32,21 @@ function assertValidPricingConfig(raw: string): PricingConfig {
   return result.config;
 }
 
+/**
+ * Rejects a lead time the booking rules would not honour — asked of the same
+ * reader the booking flow uses, so "saved" and "in force" can never differ. The
+ * read path falls back to the default on anything invalid, so without this an
+ * admin could save 100 hours and silently get 3.
+ */
+function assertValidLeadTimeHours(raw: string): void {
+  if (readLeadTimeHours(raw) === null) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Minimum booking notice must be a whole number of hours between 0 and ${MAX_LEAD_TIME_HOURS}.`,
+    });
+  }
+}
+
 const bookingStatusEnum = z.enum(["pending_deposit", "confirmed", "in_progress", "completed", "cancelled", "expired"]);
 
 export const adminRouter = router({
@@ -45,6 +62,9 @@ export const adminRouter = router({
   updateBookingStatus: adminProcedure
     .input(z.object({ id: z.number().int(), status: bookingStatusEnum }))
     .mutation(async ({ ctx, input }) => {
+      // Read first: only an actual confirmed → in progress move is a job
+      // starting, and that is what the customer gets told about.
+      const before = await db.getBookingById(input.id);
       try {
         await db.updateBooking(input.id, { status: input.status });
       } catch (error) {
@@ -64,6 +84,11 @@ export const adminRouter = router({
       // fails the status update.
       if (input.status === "completed") {
         await issueBalanceSafely(input.id, originFromRequest(ctx.req));
+      }
+      // Same best-effort contract: an email failure never fails the status
+      // change, and the send is claimed so it happens at most once per booking.
+      if (input.status === "in_progress" && before?.status === "confirmed") {
+        await sendJobStartedEmailSafely(input.id);
       }
       return { success: true } as const;
     }),
@@ -291,6 +316,8 @@ export const adminRouter = router({
           bookingReference: booking?.reference ?? null,
           serviceType: booking?.serviceType ?? null,
           serviceDate: booking?.scheduledDate ?? null,
+          // What the customer asked for, in front of whoever approves the bill.
+          bookingNotes: booking?.notes ?? null,
           bookingTotal: booking?.totalAmount ?? null,
           // Only a captured deposit is credited against the balance.
           depositCredited: booking?.stripePaymentIntentId ? (booking?.depositAmount ?? 0) : 0,
@@ -465,6 +492,9 @@ export const adminRouter = router({
       // that would silently fall back to defaults on read.
       if (input.key === PRICING_SETTING_KEY) {
         assertValidPricingConfig(input.value);
+      }
+      if (input.key === LEAD_TIME_SETTING_KEY) {
+        assertValidLeadTimeHours(input.value);
       }
       await db.setSetting(input.key, input.value);
       return { success: true } as const;

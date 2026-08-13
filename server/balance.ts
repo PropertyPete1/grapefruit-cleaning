@@ -26,6 +26,7 @@ import {
   type BalanceEmailData,
 } from "./emails";
 import { SERVICE_NAMES } from "./routers/booking";
+import { sendJobCompleteEmailSafely } from "./statusEmails";
 import { getStripe } from "./stripe";
 
 /** Metadata tag that marks a Checkout Session as a balance payment. */
@@ -229,6 +230,13 @@ export async function issueBalanceSafely(bookingId: number, origin: string): Pro
   try {
     const result = await issueBalanceForCompletedBooking(bookingId, origin);
     console.log(`[Balance] Booking ${bookingId} completed → ${result.outcome}`);
+    // Nothing to collect means nothing else will reach this customer: no
+    // payment link, and no approved-balance email to carry the news that the
+    // job is done. This is their completion notice. Every other outcome already
+    // has one (or is not a completion at all).
+    if (result.outcome === "zero_balance") {
+      await sendJobCompleteEmailSafely(bookingId, origin);
+    }
   } catch (error) {
     console.error(`[Balance] Failed to issue balance for booking ${bookingId}:`, error);
   }

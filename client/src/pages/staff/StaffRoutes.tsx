@@ -306,9 +306,13 @@ function StaffCalendar() {
                   <p className={`text-xs font-bold ${isToday ? "text-primary" : "text-muted-foreground"}`}>{day}</p>
                   <div className="mt-1 space-y-1">
                     {jobs.slice(0, 3).map((j) => (
+                      // text-secondary is this chip's own near-white fill, so on
+                      // a 15%-tinted background it measured 1.08:1 — invisible.
+                      // The -foreground pairing is the dark token made for this
+                      // fill: ~9:1 in ordinary cells and in today's, both themes.
                       <div
                         key={j.booking.id}
-                        className="truncate rounded-md bg-secondary/15 px-1.5 py-0.5 text-[10px] font-semibold text-secondary"
+                        className="truncate rounded-md bg-secondary/15 px-1.5 py-0.5 text-[10px] font-semibold text-secondary-foreground"
                         title={`${j.booking.scheduledTime} ${SERVICE_LABELS[j.booking.serviceType] ?? j.booking.serviceType} — ${j.customer ? `${j.customer.firstName} ${j.customer.lastName}` : ""}`}
                       >
                         {j.booking.scheduledTime} {SERVICE_LABELS[j.booking.serviceType] ?? j.booking.serviceType}

@@ -49,6 +49,7 @@ vi.mock("./stripe", () => ({
 import { blocksSlot, STALE_DEPOSIT_MINUTES } from "./bookingRules";
 import { bookingRouter, finalizeBooking } from "./routers/booking";
 import { sendDueReminders } from "./reminders";
+import { OPEN_MONDAY } from "./testDates";
 import type { TrpcContext } from "./_core/context";
 
 const NOW = new Date("2026-07-16T12:00:00Z");
@@ -95,7 +96,7 @@ describe("finalizeBooking (late-payment recovery)", () => {
     couponCode: null,
     extras: "[]",
     reference: "GFC-TEST42",
-    scheduledDate: "2026-07-20",
+    scheduledDate: OPEN_MONDAY,
     scheduledTime: "10:00",
   };
 
@@ -116,7 +117,7 @@ describe("finalizeBooking (late-payment recovery)", () => {
     mockGetBookingById.mockResolvedValue({ ...baseBooking, status: "expired" });
     mockGetBookedSlots.mockResolvedValue(["09:00", "10:00"]);
     await finalizeBooking(42, "pi_late_456");
-    expect(mockGetBookedSlots).toHaveBeenCalledWith("2026-07-20");
+    expect(mockGetBookedSlots).toHaveBeenCalledWith(OPEN_MONDAY);
     expect(mockConfirmUnpaidBooking).toHaveBeenCalledWith(42, expect.objectContaining({ slotConflict: true }));
     expect(mockCreatePayment).toHaveBeenCalled();
   });
@@ -155,7 +156,7 @@ describe("finalizeBooking (late-payment recovery)", () => {
     });
     mockGetBookedSlots.mockResolvedValue(["10:00"]);
     await finalizeBooking(42, "pi_stale_retaken");
-    expect(mockGetBookedSlots).toHaveBeenCalledWith("2026-07-20");
+    expect(mockGetBookedSlots).toHaveBeenCalledWith(OPEN_MONDAY);
     expect(mockConfirmUnpaidBooking).toHaveBeenCalledWith(42, expect.objectContaining({ slotConflict: true }));
     expect(mockCreatePayment).toHaveBeenCalled();
   });
@@ -198,7 +199,7 @@ describe("booking.create checkout session", () => {
       extras: [],
       frequency: "onetime" as const,
     },
-    date: "2026-07-20", // Monday — open under the default schedule
+    date: OPEN_MONDAY, // Monday, a week out — open, and clear of the lead time
     time: "10:00",
     firstName: "Ana",
     lastName: "Lopez",

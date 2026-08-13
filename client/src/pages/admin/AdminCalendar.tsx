@@ -99,9 +99,14 @@ export default function AdminCalendar() {
                       </span>
                       <div className="mt-1 space-y-1">
                         {dayBookings.slice(0, 3).map(b => (
+                          // The same problem as the staff calendar, milder: coral
+                          // text on a 10% coral fill measured 2.9:1, under the
+                          // 4.5:1 floor for text this small. accent-foreground is
+                          // the dark coral paired with this tint — 5.8:1 light,
+                          // 12:1 dark — so the chip keeps its colour and reads.
                           <div
                             key={b.id}
-                            className="truncate rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary"
+                            className="truncate rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-accent-foreground"
                             title={`${b.reference} · ${SERVICE_LABELS[b.serviceType]} · ${b.scheduledTime}`}
                           >
                             {b.scheduledTime} {SERVICE_LABELS[b.serviceType]}

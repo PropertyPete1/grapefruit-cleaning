@@ -9,6 +9,7 @@
  */
 import nodemailer, { type Transporter } from "nodemailer";
 import { notifyOwner } from "./_core/notification";
+import { renderBrandedEmail, renderBrandedEmailText, type BrandedEmail } from "./emailShell";
 
 export interface BookingEmailData {
   reference: string;
@@ -24,6 +25,8 @@ export interface BookingEmailData {
   customerPhone?: string;
   address?: string;
   locale: "en" | "es";
+  /** Whatever the customer typed at checkout — door codes, access notes. */
+  notes?: string;
   /** Live business phone from Admin → Settings; omitted when not configured. */
   bizPhone?: string;
   /**
@@ -97,8 +100,12 @@ export function __resetTransporter(): void {
  * Sends an email via Gmail SMTP. Returns true when delivered.
  * Falls back to logging when GMAIL_USER / GMAIL_APP_PASSWORD are not
  * configured so booking flows never fail because of email issues.
+ *
+ * `html` overrides the generic line-styling wrapper for emails that lay
+ * themselves out (see emailShell). `body` is still sent as the text part
+ * either way, so every message has a plain-text alternative.
  */
-export async function deliverEmail(to: string, subject: string, body: string): Promise<boolean> {
+export async function deliverEmail(to: string, subject: string, body: string, html?: string): Promise<boolean> {
   const transporter = getTransporter();
   if (!transporter) {
     console.log(`[Email fallback → ${to}] ${subject}\n${body}`);
@@ -110,7 +117,7 @@ export async function deliverEmail(to: string, subject: string, body: string): P
       to,
       subject,
       text: body,
-      html: wrapEmailHtml(subject, body),
+      html: html ?? wrapEmailHtml(subject, body),
     });
     console.log(`[Email] Delivered to ${to}: ${subject}`);
     return true;
@@ -297,6 +304,9 @@ export function buildOwnerNotification(data: BookingEmailData): { title: string;
       `Email: ${data.customerEmail}`,
       data.customerPhone ? `Phone: ${data.customerPhone}` : ``,
       data.address ? `Address: ${data.address}` : ``,
+      // Access instructions belong where the owner reads the booking, not only
+      // on the crew's job card.
+      ...(data.notes ? [``, `CUSTOMER NOTES`, data.notes] : []),
       ``,
       `Total: ${fmtUsd(data.total)} | Deposit paid: ${fmtUsd(data.deposit)} | Balance due: ${fmtUsd(data.total - data.deposit)}`,
     ]
@@ -554,6 +564,186 @@ async function notifyOwnerWithEmailCopy(note: { title: string; content: string }
   } else if (process.env.GMAIL_USER) {
     await deliverEmail(process.env.GMAIL_USER, note.title, note.content);
   }
+}
+
+/**
+ * Everything the two job-status emails need. Deliberately smaller than
+ * BookingEmailData: these are told-you-where-we-are notes, not receipts, so
+ * they carry no money at all.
+ */
+export interface JobStatusEmailData {
+  reference: string;
+  serviceName: string;
+  /** Date the cleaning is scheduled for (YYYY-MM-DD). */
+  date: string;
+  customerName: string;
+  customerEmail: string;
+  locale: "en" | "es";
+  bizPhone?: string;
+  /** Public review-form URL; omitted when no public origin is known. */
+  reviewUrl?: string;
+}
+
+/** "We're here and we've started" — sent when a job moves to in progress. */
+export function buildJobStartedEmail(data: JobStatusEmailData): {
+  subject: string;
+  body: string;
+  html: string;
+} {
+  const spanish = data.locale === "es";
+  const email: BrandedEmail = spanish
+    ? {
+        preheader: `Su equipo de limpieza ya está en su hogar — reserva ${data.reference}.`,
+        eyebrow: "Servicio en curso",
+        headline: "¡Comenzamos su limpieza! 🍊",
+        intro: [
+          `Hola ${data.customerName},`,
+          `Su equipo de Grapefruit Cleaning Co. ya llegó y está trabajando. Le avisaremos en cuanto todo quede listo.`,
+        ],
+        detailsTitle: "Detalles del servicio",
+        details: [
+          { label: "Servicio", value: data.serviceName },
+          { label: "Fecha", value: data.date },
+          { label: "Referencia", value: data.reference },
+        ],
+        outro: [
+          data.bizPhone
+            ? `¿Necesita algo mientras estamos ahí? Llámenos al ${data.bizPhone} o responda a este correo.`
+            : `¿Necesita algo mientras estamos ahí? Simplemente responda a este correo.`,
+        ],
+        signOff: ["Con aprecio,", "El equipo de Grapefruit Cleaning Co."],
+        footerNote: data.bizPhone
+          ? `Grapefruit Cleaning Co. · ${data.bizPhone}`
+          : `Grapefruit Cleaning Co.`,
+      }
+    : {
+        preheader: `Your cleaning crew has arrived and started work — booking ${data.reference}.`,
+        eyebrow: "Service in progress",
+        headline: "We've started your cleaning! 🍊",
+        intro: [
+          `Hi ${data.customerName},`,
+          `Your Grapefruit Cleaning Co. crew has arrived and is at work. We'll let you know the moment everything is done.`,
+        ],
+        detailsTitle: "Service details",
+        details: [
+          { label: "Service", value: data.serviceName },
+          { label: "Date", value: data.date },
+          { label: "Reference", value: data.reference },
+        ],
+        outro: [
+          data.bizPhone
+            ? `Need anything while we're there? Call us at ${data.bizPhone} or just reply to this email.`
+            : `Need anything while we're there? Just reply to this email.`,
+        ],
+        signOff: ["Warmly,", "The Grapefruit Cleaning Co. Team"],
+        footerNote: data.bizPhone
+          ? `Grapefruit Cleaning Co. · ${data.bizPhone}`
+          : `Grapefruit Cleaning Co.`,
+      };
+
+  return {
+    subject: spanish
+      ? `Comenzamos su limpieza — Reserva ${data.reference} | Grapefruit Cleaning Co.`
+      : `We've started your cleaning — Booking ${data.reference} | Grapefruit Cleaning Co.`,
+    body: renderBrandedEmailText(email),
+    html: renderBrandedEmail(email),
+  };
+}
+
+/**
+ * "All done, thank you" — the completion notice for a job with nothing left to
+ * collect. Balance-due jobs get their completion news from the approved-balance
+ * email instead, so this one never goes to them.
+ */
+export function buildJobCompleteEmail(data: JobStatusEmailData): {
+  subject: string;
+  body: string;
+  html: string;
+} {
+  const spanish = data.locale === "es";
+  const reviewAsk = data.reviewUrl
+    ? {
+        text: spanish
+          ? "¿Nos ayuda con unas palabras? Su reseña le dice a otras familias qué esperar."
+          : "Would you share a few words? Your review tells other families what to expect.",
+        ctaLabel: spanish ? "Dejar una reseña" : "Leave a review",
+        ctaUrl: data.reviewUrl,
+      }
+    : undefined;
+
+  const email: BrandedEmail = spanish
+    ? {
+        preheader: `Su limpieza está completa y pagada por completo — reserva ${data.reference}.`,
+        eyebrow: "Servicio completado",
+        headline: "Su limpieza está completa — ¡gracias! 🍊",
+        intro: [
+          `Hola ${data.customerName},`,
+          `Terminamos su limpieza y su equipo ya se retiró. Gracias por confiar su hogar a Grapefruit Cleaning Co.`,
+          `No queda ningún saldo por pagar — su cuenta está al día.`,
+        ],
+        detailsTitle: "Resumen del servicio",
+        details: [
+          { label: "Servicio", value: data.serviceName },
+          { label: "Fecha", value: data.date },
+          { label: "Referencia", value: data.reference },
+        ],
+        callout: reviewAsk,
+        outro: [
+          data.bizPhone
+            ? `¿Algo no quedó como esperaba? Llámenos al ${data.bizPhone} o responda a este correo y lo resolvemos.`
+            : `¿Algo no quedó como esperaba? Responda a este correo y lo resolvemos.`,
+        ],
+        signOff: ["Con aprecio,", "El equipo de Grapefruit Cleaning Co."],
+        footerNote: data.bizPhone
+          ? `Grapefruit Cleaning Co. · ${data.bizPhone}`
+          : `Grapefruit Cleaning Co.`,
+      }
+    : {
+        preheader: `Your cleaning is complete and paid in full — booking ${data.reference}.`,
+        eyebrow: "Service complete",
+        headline: "Your cleaning is complete — thank you! 🍊",
+        intro: [
+          `Hi ${data.customerName},`,
+          `We've finished your cleaning and your crew has headed out. Thank you for trusting your home to Grapefruit Cleaning Co.`,
+          `There's no balance left to pay — you're all settled up.`,
+        ],
+        detailsTitle: "Service summary",
+        details: [
+          { label: "Service", value: data.serviceName },
+          { label: "Date", value: data.date },
+          { label: "Reference", value: data.reference },
+        ],
+        callout: reviewAsk,
+        outro: [
+          data.bizPhone
+            ? `Anything not quite right? Call us at ${data.bizPhone} or reply to this email and we'll make it right.`
+            : `Anything not quite right? Reply to this email and we'll make it right.`,
+        ],
+        signOff: ["Warmly,", "The Grapefruit Cleaning Co. Team"],
+        footerNote: data.bizPhone
+          ? `Grapefruit Cleaning Co. · ${data.bizPhone}`
+          : `Grapefruit Cleaning Co.`,
+      };
+
+  return {
+    subject: spanish
+      ? `Su limpieza está completa — ¡gracias! | Grapefruit Cleaning Co.`
+      : `Your cleaning is complete — thank you | Grapefruit Cleaning Co.`,
+    body: renderBrandedEmailText(email),
+    html: renderBrandedEmail(email),
+  };
+}
+
+/** Tells the customer their crew has arrived. Returns true when delivered. */
+export async function sendJobStartedEmail(data: JobStatusEmailData): Promise<boolean> {
+  const email = buildJobStartedEmail(data);
+  return deliverEmail(data.customerEmail, email.subject, email.body, email.html);
+}
+
+/** Thanks the customer for a job with nothing left to collect. */
+export async function sendJobCompleteEmail(data: JobStatusEmailData): Promise<boolean> {
+  const email = buildJobCompleteEmail(data);
+  return deliverEmail(data.customerEmail, email.subject, email.body, email.html);
 }
 
 export interface ContactEmailData {

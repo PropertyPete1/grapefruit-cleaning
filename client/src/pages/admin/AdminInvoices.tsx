@@ -20,7 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { PageHeader, RowCard, StatusBadge, TableOrCards, fmtDate, fmtMoney } from "./adminShared";
+import { NotesBlock, PageHeader, RowCard, StatusBadge, TableOrCards, fmtDate, fmtMoney } from "./adminShared";
 
 const INVOICE_STATUSES = ["draft", "sent", "paid", "overdue", "void"] as const;
 
@@ -40,6 +40,7 @@ type PendingInvoice = {
   computedAmount: number | null;
   bookingReference: string | null;
   serviceDate: string | null;
+  bookingNotes: string | null;
   bookingTotal: number | null;
   depositCredited: number;
   customerName: string | null;
@@ -109,6 +110,11 @@ function ReviewAndSendDialog({
                 </div>
               </dl>
             </div>
+
+            {/* What the customer asked for. Worth re-reading before billing —
+                an access note or a special request often explains why the job
+                ran bigger or smaller than the booking. */}
+            {invoice.bookingNotes && <NotesBlock notes={invoice.bookingNotes} />}
 
             <div>
               <Label htmlFor="approve-amount">Final amount to charge (USD)</Label>

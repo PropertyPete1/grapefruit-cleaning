@@ -10,7 +10,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { PageHeader, RowCard, SERVICE_LABELS, StatusBadge, TableOrCards, fmtDate, fmtMoney } from "./adminShared";
+import {
+  NotesBlock,
+  PageHeader,
+  RowCard,
+  SERVICE_LABELS,
+  StatusBadge,
+  TableOrCards,
+  fmtDate,
+  fmtMoney,
+} from "./adminShared";
 
 const STATUSES = ["pending_deposit", "confirmed", "in_progress", "completed", "cancelled", "expired"] as const;
 
@@ -83,6 +92,7 @@ export default function AdminAppointments() {
                   <th className="px-5 py-3 font-medium">Service</th>
                   <th className="px-5 py-3 font-medium">Date & time</th>
                   <th className="px-5 py-3 font-medium">Address</th>
+                  <th className="px-5 py-3 font-medium">Customer notes</th>
                   <th className="px-5 py-3 font-medium">Total / Deposit</th>
                   <th className="px-5 py-3 font-medium">Cleaner</th>
                   <th className="px-5 py-3 font-medium">Status</th>
@@ -125,6 +135,16 @@ export default function AdminAppointments() {
                           {b.verifiedSqft.toLocaleString()} ft² verified
                         </span>
                       ) : null}
+                    </td>
+                    <td className="px-5 py-3.5 align-top">
+                      {b.notes ? (
+                        // The cap goes on the block, not the cell: max-width on
+                        // a td is only a hint under auto table layout, so a long
+                        // note would widen the column and squeeze the rest.
+                        <NotesBlock notes={b.notes} className="max-w-64" />
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
                     </td>
                     <td className="px-5 py-3.5">
                       <span className="font-semibold">{fmtMoney(b.totalAmount)}</span>
@@ -218,6 +238,7 @@ export default function AdminAppointments() {
                       ]
                     : []),
                 ]}
+                note={b.notes ? <NotesBlock notes={b.notes} /> : undefined}
                 actions={
                   <>
                     <Select

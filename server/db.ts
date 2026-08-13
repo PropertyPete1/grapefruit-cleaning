@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, like, lte, notInArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, like, lte, notInArray, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
@@ -347,6 +347,34 @@ export async function listUpcomingConfirmedBookings(today: string) {
         lte(bookings.scheduledDate, endStr)
       )
     );
+}
+
+/**
+ * Claims the once-per-booking "job started" email.
+ *
+ * Same conditional-UPDATE shape as confirmUnpaidBooking: the "not sent yet"
+ * test lives in the WHERE, so a status flipped confirmed → in progress →
+ * confirmed → in progress, or two dashboards pressing Start at once, can only
+ * produce one email. Returns true for the caller that claimed it — the one that
+ * should actually send.
+ */
+export async function claimJobStartedEmail(id: number, now: Date = new Date()): Promise<boolean> {
+  const db = requireDb(await getDb());
+  const result = await db
+    .update(bookings)
+    .set({ startedEmailSentAt: now })
+    .where(and(eq(bookings.id, id), isNull(bookings.startedEmailSentAt)));
+  return affectedRows(result) > 0;
+}
+
+/** Claims the once-per-booking "cleaning complete" thank-you. See above. */
+export async function claimJobCompletedEmail(id: number, now: Date = new Date()): Promise<boolean> {
+  const db = requireDb(await getDb());
+  const result = await db
+    .update(bookings)
+    .set({ completedEmailSentAt: now })
+    .where(and(eq(bookings.id, id), isNull(bookings.completedEmailSentAt)));
+  return affectedRows(result) > 0;
 }
 
 /** Records that a reminder email was sent so the cron never double-sends. */

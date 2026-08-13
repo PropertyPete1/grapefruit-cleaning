@@ -2,6 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import * as db from "../db";
 import { issueBalanceSafely, originFromRequest } from "../balance";
+import { sendJobStartedEmailSafely } from "../statusEmails";
 import { protectedProcedure, router } from "../_core/trpc";
 
 /**
@@ -81,6 +82,9 @@ export const staffRouter = router({
   updateJobStatus: staffProcedure
     .input(z.object({ bookingId: z.number().int(), status: z.enum(["in_progress", "completed"]) }))
     .mutation(async ({ ctx, input }) => {
+      // Read first: only an actual confirmed → in progress move is a job
+      // starting, and that is what the customer gets told about.
+      const before = await db.getBookingById(input.bookingId);
       try {
         await db.updateBooking(input.bookingId, { status: input.status });
       } catch (error) {
@@ -99,6 +103,11 @@ export const staffRouter = router({
       // fails the status update.
       if (input.status === "completed") {
         await issueBalanceSafely(input.bookingId, originFromRequest(ctx.req));
+      }
+      // Tapping Start job tells the customer their crew has arrived. Same
+      // best-effort contract: a mail failure never fails the status change.
+      if (input.status === "in_progress" && before?.status === "confirmed") {
+        await sendJobStartedEmailSafely(input.bookingId);
       }
       return { success: true } as const;
     }),
