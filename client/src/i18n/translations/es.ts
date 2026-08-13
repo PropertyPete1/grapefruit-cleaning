@@ -412,7 +412,7 @@ export const es: Dictionary = {
     },
     serviceTitle: "Elija su servicio",
     datetimeTitle: "Seleccione fecha y hora",
-    datetimeSubtitle: "Recomendamos reservar con al menos 48 horas de anticipación.",
+    datetimeSubtitle: "¿La necesita hoy? Hay horarios disponibles el mismo día con solo unas horas de anticipación.",
     morningSlots: "Mañana",
     afternoonSlots: "Tarde",
     closedDay: "No agendamos limpiezas este día. Por favor elija otra fecha.",

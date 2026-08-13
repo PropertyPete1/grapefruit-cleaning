@@ -404,7 +404,7 @@ export const en = {
     },
     serviceTitle: "Choose your service",
     datetimeTitle: "Pick a date and time",
-    datetimeSubtitle: "We recommend booking at least 48 hours ahead.",
+    datetimeSubtitle: "Need it today? Same-day slots are available with just a few hours' notice.",
     morningSlots: "Morning",
     afternoonSlots: "Afternoon",
     closedDay: "We're not scheduling cleanings on this day. Please pick another date.",
