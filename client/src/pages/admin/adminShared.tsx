@@ -67,6 +67,7 @@ export function RowCard({
   badge,
   amount,
   details,
+  note,
   actions,
   onClick,
 }: {
@@ -76,12 +77,17 @@ export function RowCard({
   amount?: ReactNode;
   /** Secondary fields, revealed on tap. */
   details?: { label: string; value: ReactNode }[];
+  /**
+   * Full-width block shown under the details, for content the label/value grid
+   * would squash — customer notes, above all.
+   */
+  note?: ReactNode;
   /** Always-visible controls (selects, buttons). */
   actions?: ReactNode;
   onClick?: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const hasDetails = Boolean(details && details.length > 0);
+  const hasDetails = Boolean((details && details.length > 0) || note);
 
   return (
     <div className="px-4 py-3.5">
@@ -113,19 +119,44 @@ export function RowCard({
             {open ? "Hide details" : "Details"}
           </button>
           {open && (
-            <dl className="mt-2 space-y-1.5 rounded-xl bg-muted/50 p-3 text-xs">
-              {details!.map(d => (
-                <div key={d.label} className="flex justify-between gap-3">
-                  <dt className="shrink-0 text-muted-foreground">{d.label}</dt>
-                  <dd className="min-w-0 break-words text-right font-medium text-foreground">{d.value}</dd>
-                </div>
-              ))}
-            </dl>
+            <div className="mt-2 space-y-2">
+              {details && details.length > 0 && (
+                <dl className="space-y-1.5 rounded-xl bg-muted/50 p-3 text-xs">
+                  {details.map(d => (
+                    <div key={d.label} className="flex justify-between gap-3">
+                      <dt className="shrink-0 text-muted-foreground">{d.label}</dt>
+                      <dd className="min-w-0 break-words text-right font-medium text-foreground">{d.value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
+              {note}
+            </div>
           )}
         </>
       )}
 
       {actions && <div className="mt-3 flex flex-wrap items-center gap-2">{actions}</div>}
+    </div>
+  );
+}
+
+/**
+ * What the customer wrote when they booked — door codes, gate instructions,
+ * "the dog is friendly, leave the side gate shut".
+ *
+ * Deliberately louder than the fields around it. This is the one piece of a
+ * booking an admin cannot afford to skim past, and it used to render nowhere in
+ * the admin dashboard at all. Quoted and italic like the staff job card, on the
+ * amber the dashboard already uses for "look at this".
+ */
+export function NotesBlock({ notes, className = "" }: { notes: string; className?: string }) {
+  return (
+    <div className={`rounded-xl bg-amber-50 p-2.5 text-left ring-1 ring-amber-200 ${className}`}>
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-800">Customer notes</p>
+      <p className="mt-0.5 whitespace-pre-wrap break-words text-xs font-normal italic text-amber-900">
+        “{notes}”
+      </p>
     </div>
   );
 }

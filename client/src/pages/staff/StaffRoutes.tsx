@@ -19,6 +19,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/co
 import { Switch as ToggleSwitch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
+import { formatJobSpan, intervalEndTime } from "@shared/availability";
 import { trpc } from "@/lib/trpc";
 import { ASSETS } from "@/lib/assets";
 import { PageHeader, StatusBadge, SERVICE_LABELS, fmtMoney, fmtDate } from "../admin/adminShared";
@@ -53,6 +54,8 @@ type StaffBookingRow = {
     depositAmount: number;
     status: string;
     employeeId: number | null;
+    /** Hours on site — resolved server-side, so legacy rows still have one. */
+    durationHours: number;
   };
   customer: { firstName: string; lastName: string; phone: string | null; email: string } | null;
 };
@@ -80,7 +83,12 @@ function JobCard({ row, onStatusChange }: { row: StaffBookingRow; onStatusChange
             <StatusBadge status={booking.status} />
           </div>
           <p className="mt-0.5 text-xs font-medium text-muted-foreground">
-            {booking.reference} · {fmtDate(booking.scheduledDate)} at {booking.scheduledTime}
+            {booking.reference} · {fmtDate(booking.scheduledDate)}
+          </p>
+          {/* The whole span, not just the start: this is the block of the day
+              the job actually takes, and what the calendar holds for it. */}
+          <p className="mt-0.5 text-xs font-semibold text-foreground">
+            {formatJobSpan(booking.scheduledTime, booking.durationHours)}
           </p>
         </div>
         <p className="text-sm font-bold text-foreground">{money(booking.totalAmount)}</p>
@@ -306,12 +314,17 @@ function StaffCalendar() {
                   <p className={`text-xs font-bold ${isToday ? "text-primary" : "text-muted-foreground"}`}>{day}</p>
                   <div className="mt-1 space-y-1">
                     {jobs.slice(0, 3).map((j) => (
+                      // text-secondary is this chip's own near-white fill, so on
+                      // a 15%-tinted background it measured 1.08:1 — invisible.
+                      // The -foreground pairing is the dark token made for this
+                      // fill: ~9:1 in ordinary cells and in today's, both themes.
                       <div
                         key={j.booking.id}
-                        className="truncate rounded-md bg-secondary/15 px-1.5 py-0.5 text-[10px] font-semibold text-secondary"
-                        title={`${j.booking.scheduledTime} ${SERVICE_LABELS[j.booking.serviceType] ?? j.booking.serviceType} — ${j.customer ? `${j.customer.firstName} ${j.customer.lastName}` : ""}`}
+                        className="truncate rounded-md bg-secondary/15 px-1.5 py-0.5 text-[10px] font-semibold text-secondary-foreground"
+                        title={`${formatJobSpan(j.booking.scheduledTime, j.booking.durationHours)} — ${SERVICE_LABELS[j.booking.serviceType] ?? j.booking.serviceType}${j.customer ? ` — ${j.customer.firstName} ${j.customer.lastName}` : ""}`}
                       >
-                        {j.booking.scheduledTime} {SERVICE_LABELS[j.booking.serviceType] ?? j.booking.serviceType}
+                        {j.booking.scheduledTime}–{intervalEndTime(j.booking.scheduledTime, j.booking.durationHours)}{" "}
+                        {SERVICE_LABELS[j.booking.serviceType] ?? j.booking.serviceType}
                       </div>
                     ))}
                     {jobs.length > 3 && <p className="text-[10px] font-medium text-muted-foreground">+{jobs.length - 3} more</p>}

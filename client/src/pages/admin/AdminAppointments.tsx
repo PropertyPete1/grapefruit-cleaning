@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
+import { formatJobSpan } from "@shared/availability";
 import { trpc } from "@/lib/trpc";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -10,7 +11,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { PageHeader, RowCard, SERVICE_LABELS, StatusBadge, TableOrCards, fmtDate, fmtMoney } from "./adminShared";
+import {
+  NotesBlock,
+  PageHeader,
+  RowCard,
+  SERVICE_LABELS,
+  StatusBadge,
+  TableOrCards,
+  fmtDate,
+  fmtMoney,
+} from "./adminShared";
 
 const STATUSES = ["pending_deposit", "confirmed", "in_progress", "completed", "cancelled", "expired"] as const;
 
@@ -83,6 +93,7 @@ export default function AdminAppointments() {
                   <th className="px-5 py-3 font-medium">Service</th>
                   <th className="px-5 py-3 font-medium">Date & time</th>
                   <th className="px-5 py-3 font-medium">Address</th>
+                  <th className="px-5 py-3 font-medium">Customer notes</th>
                   <th className="px-5 py-3 font-medium">Total / Deposit</th>
                   <th className="px-5 py-3 font-medium">Cleaner</th>
                   <th className="px-5 py-3 font-medium">Status</th>
@@ -98,7 +109,10 @@ export default function AdminAppointments() {
                     </td>
                     <td className="px-5 py-3.5">
                       {fmtDate(b.scheduledDate)}
-                      <span className="block text-xs text-muted-foreground">{b.scheduledTime}</span>
+                      {/* The span, not the start: this is what the calendar holds. */}
+                      <span className="block text-xs text-muted-foreground">
+                        {formatJobSpan(b.scheduledTime, b.durationHours)}
+                      </span>
                       {b.slotConflict && (
                         <span
                           className="mt-1 block w-fit rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-700"
@@ -125,6 +139,16 @@ export default function AdminAppointments() {
                           {b.verifiedSqft.toLocaleString()} ft² verified
                         </span>
                       ) : null}
+                    </td>
+                    <td className="px-5 py-3.5 align-top">
+                      {b.notes ? (
+                        // The cap goes on the block, not the cell: max-width on
+                        // a td is only a hint under auto table layout, so a long
+                        // note would widen the column and squeeze the rest.
+                        <NotesBlock notes={b.notes} className="max-w-64" />
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
                     </td>
                     <td className="px-5 py-3.5">
                       <span className="font-semibold">{fmtMoney(b.totalAmount)}</span>
@@ -192,7 +216,7 @@ export default function AdminAppointments() {
                     <span>{SERVICE_LABELS[b.serviceType] ?? b.serviceType}</span>
                   </span>
                 }
-                subtitle={`${fmtDate(b.scheduledDate)} · ${b.scheduledTime}`}
+                subtitle={`${fmtDate(b.scheduledDate)} · ${formatJobSpan(b.scheduledTime, b.durationHours)}`}
                 amount={fmtMoney(b.totalAmount)}
                 badge={<StatusBadge status={b.status} />}
                 details={[
@@ -218,6 +242,7 @@ export default function AdminAppointments() {
                       ]
                     : []),
                 ]}
+                note={b.notes ? <NotesBlock notes={b.notes} /> : undefined}
                 actions={
                   <>
                     <Select

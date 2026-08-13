@@ -2,7 +2,20 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import * as db from "../db";
 import { issueBalanceSafely, originFromRequest } from "../balance";
+import { withDurationHours } from "./booking";
+import { sendJobStartedEmailSafely } from "../statusEmails";
 import { protectedProcedure, router } from "../_core/trpc";
+
+/**
+ * The staff views nest the booking under a `booking` key alongside its
+ * customer, so the duration is resolved on the inner row and lifted back out.
+ */
+async function withJobDuration<
+  T extends { booking: { serviceType: string; sqft: number; estimatedHours: number | null } },
+>(rows: T[]): Promise<(T & { booking: T["booking"] & { durationHours: number } })[]> {
+  const resolved = await withDurationHours(rows.map(r => r.booking));
+  return rows.map((row, index) => ({ ...row, booking: resolved[index]! }));
+}
 
 /**
  * Staff procedures: available to users whose role is "staff" or "admin".
@@ -72,15 +85,18 @@ export const staffRouter = router({
       if (input?.mineOnly) {
         const employee = await db.getEmployeeByUserId(ctx.user.id);
         if (!employee) return [];
-        return rows.filter((r) => r.booking.employeeId === employee.id);
+        return withJobDuration(rows.filter((r) => r.booking.employeeId === employee.id));
       }
-      return rows;
+      return withJobDuration(rows);
     }),
 
   /** Staff may progress job status (confirmed → in_progress → completed) but not cancel or delete. */
   updateJobStatus: staffProcedure
     .input(z.object({ bookingId: z.number().int(), status: z.enum(["in_progress", "completed"]) }))
     .mutation(async ({ ctx, input }) => {
+      // Read first: only an actual confirmed → in progress move is a job
+      // starting, and that is what the customer gets told about.
+      const before = await db.getBookingById(input.bookingId);
       try {
         await db.updateBooking(input.bookingId, { status: input.status });
       } catch (error) {
@@ -100,11 +116,16 @@ export const staffRouter = router({
       if (input.status === "completed") {
         await issueBalanceSafely(input.bookingId, originFromRequest(ctx.req));
       }
+      // Tapping Start job tells the customer their crew has arrived. Same
+      // best-effort contract: a mail failure never fails the status change.
+      if (input.status === "in_progress" && before?.status === "confirmed") {
+        await sendJobStartedEmailSafely(input.bookingId);
+      }
       return { success: true } as const;
     }),
 
   /** Month schedule for the staff calendar. */
   schedule: staffProcedure
     .input(z.object({ month: z.string().regex(/^\d{4}-\d{2}$/) }))
-    .query(({ input }) => db.listBookingsForMonth(input.month)),
+    .query(async ({ input }) => withJobDuration(await db.listBookingsForMonth(input.month))),
 });

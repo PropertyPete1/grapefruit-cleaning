@@ -83,6 +83,29 @@ export const bookings = mysqlTable("bookings", {
   weekReminderSentAt: timestamp("weekReminderSentAt"),
   /** Timestamp when the 1-day-before reminder email was sent (null = not sent yet). */
   dayReminderSentAt: timestamp("dayReminderSentAt"),
+  /**
+   * Timestamp when the "we've started your cleaning" email was sent (null = not
+   * sent yet). This column, not the status, is what makes that email
+   * once-per-booking: a job flipped back to confirmed and started again is a
+   * correction, not a second cleaning to announce.
+   */
+  startedEmailSentAt: timestamp("startedEmailSentAt"),
+  /** Timestamp when the standalone "cleaning complete" thank-you was sent (null = not sent yet). */
+  completedEmailSentAt: timestamp("completedEmailSentAt"),
+  /**
+   * Hours the crew is expected to be on site, pinned when the booking was made.
+   *
+   * Stored rather than recomputed so that editing the duration ladder later
+   * cannot change the span a booking that is already paid for occupies —
+   * lengthening residential by an hour would otherwise make two confirmed
+   * neighbours overlap each other retroactively, with no fix but rescheduling
+   * a customer. Same reasoning as totalAmount and depositAmount, which are
+   * likewise frozen at their computed value.
+   *
+   * NULL on rows written before durations existed; the scheduler falls back to
+   * the current ladder for those, so no backfill was needed.
+   */
+  estimatedHours: int("estimatedHours"),
   /** Square footage verified against public property records (null = no record found / not looked up). */
   verifiedSqft: int("verifiedSqft"),
   /** Source of the verified square footage, e.g. "bexar_gis". */

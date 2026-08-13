@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, like, lte, notInArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, like, lte, notInArray, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
@@ -232,7 +232,7 @@ export async function confirmUnpaidBooking(
  * Expires unpaid bookings that are still holding one specific slot past the
  * stale cutoff.
  *
- * getBookedSlots already treats those as free (see blocksSlot), but the row
+ * getOccupiedBookings already treats those as free (see blocksSlot), but the row
  * keeps its slotKey until something actually changes its status — and the
  * unique index goes by the row, not by the clock. Releasing the slot for real
  * right before booking it keeps the database's view and the application's view
@@ -303,16 +303,34 @@ export async function listBookingsForCustomer(customerId: number) {
   return db.select().from(bookings).where(eq(bookings.customerId, customerId)).orderBy(desc(bookings.createdAt));
 }
 
-/** Booked time slots for a given date (to grey out taken slots). */
-export async function getBookedSlots(date: string) {
+/**
+ * Live bookings on a date, with everything needed to work out the span each one
+ * occupies — a job blocks its whole duration, not just its starting hour.
+ *
+ * Cancelled and expired bookings are excluded by the query and stale unpaid
+ * checkouts by blocksSlot, so a released booking frees its entire interval, not
+ * only the slot it started in: the row simply stops being returned.
+ *
+ * `estimatedHours` is whatever was pinned at creation, and NULL for rows older
+ * than that column. Resolving the fallback needs the duration ladder, which is
+ * a settings read, so the caller does it.
+ */
+export async function getOccupiedBookings(date: string) {
   const db = requireDb(await getDb());
   const rows = await db
-    .select({ time: bookings.scheduledTime, status: bookings.status, createdAt: bookings.createdAt })
+    .select({
+      id: bookings.id,
+      time: bookings.scheduledTime,
+      serviceType: bookings.serviceType,
+      sqft: bookings.sqft,
+      estimatedHours: bookings.estimatedHours,
+      status: bookings.status,
+      createdAt: bookings.createdAt,
+    })
     .from(bookings)
     .where(and(eq(bookings.scheduledDate, date), sql`${bookings.status} NOT IN ('cancelled', 'expired')`));
-  // Stale unpaid checkouts release their slot (see blocksSlot).
   const now = new Date();
-  return rows.filter(r => blocksSlot(r, now)).map(r => r.time);
+  return rows.filter(r => blocksSlot(r, now));
 }
 
 /**
@@ -347,6 +365,34 @@ export async function listUpcomingConfirmedBookings(today: string) {
         lte(bookings.scheduledDate, endStr)
       )
     );
+}
+
+/**
+ * Claims the once-per-booking "job started" email.
+ *
+ * Same conditional-UPDATE shape as confirmUnpaidBooking: the "not sent yet"
+ * test lives in the WHERE, so a status flipped confirmed → in progress →
+ * confirmed → in progress, or two dashboards pressing Start at once, can only
+ * produce one email. Returns true for the caller that claimed it — the one that
+ * should actually send.
+ */
+export async function claimJobStartedEmail(id: number, now: Date = new Date()): Promise<boolean> {
+  const db = requireDb(await getDb());
+  const result = await db
+    .update(bookings)
+    .set({ startedEmailSentAt: now })
+    .where(and(eq(bookings.id, id), isNull(bookings.startedEmailSentAt)));
+  return affectedRows(result) > 0;
+}
+
+/** Claims the once-per-booking "cleaning complete" thank-you. See above. */
+export async function claimJobCompletedEmail(id: number, now: Date = new Date()): Promise<boolean> {
+  const db = requireDb(await getDb());
+  const result = await db
+    .update(bookings)
+    .set({ completedEmailSentAt: now })
+    .where(and(eq(bookings.id, id), isNull(bookings.completedEmailSentAt)));
+  return affectedRows(result) > 0;
 }
 
 /** Records that a reminder email was sent so the cron never double-sends. */

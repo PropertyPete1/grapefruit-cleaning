@@ -15,7 +15,7 @@ vi.mock("./db", () => ({
   getSetting: (...args: unknown[]) => mockGetSetting(...args),
   setSetting: (...args: unknown[]) => mockSetSetting(...args),
   createBooking: (...args: unknown[]) => mockCreateBooking(...args),
-  getBookedSlots: vi.fn().mockResolvedValue([]),
+  getOccupiedBookings: vi.fn().mockResolvedValue([]),
   findOrCreateCustomer: vi.fn().mockResolvedValue(7),
   getCouponByCode: vi.fn().mockResolvedValue(undefined),
   updateBooking: vi.fn(),
@@ -47,6 +47,7 @@ import {
 } from "@shared/pricing";
 import { adminRouter } from "./routers/admin";
 import { bookingRouter } from "./routers/booking";
+import { OPEN_MONDAY } from "./testDates";
 import type { TrpcContext } from "./_core/context";
 
 /** A mutable deep copy of the defaults in stored (JSON) form. */
@@ -473,7 +474,7 @@ describe("county-verified sqft re-pricing", () => {
       extras: [] as never[],
       frequency: "onetime" as const,
     },
-    date: "2026-07-20", // Monday — open under the default schedule
+    date: OPEN_MONDAY, // Monday, a week out — open, and clear of the lead time
     time: "10:00",
     firstName: "Ana",
     lastName: "Lopez",

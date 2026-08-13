@@ -25,7 +25,7 @@ vi.mock("./db", async () => {
   const actual = await vi.importActual<typeof import("./db")>("./db");
   return {
     getSetting: vi.fn().mockResolvedValue(null),
-    getBookedSlots: vi.fn().mockResolvedValue([]),
+    getOccupiedBookings: vi.fn().mockResolvedValue([]),
     getCouponByCode: vi.fn().mockResolvedValue(undefined),
     findOrCreateCustomer: vi.fn().mockResolvedValue(7),
     createBooking: (...args: unknown[]) => mockCreateBooking(...args),
@@ -52,6 +52,7 @@ import { isSlotTakenError } from "./db";
 import { adminRouter } from "./routers/admin";
 import { bookingRouter } from "./routers/booking";
 import { staffRouter } from "./routers/staff";
+import { OPEN_MONDAY } from "./testDates";
 import type { TrpcContext } from "./_core/context";
 
 const DRIZZLE_DIR = path.resolve(import.meta.dirname, "..", "drizzle");
@@ -160,7 +161,7 @@ const input = {
     extras: [],
     frequency: "onetime" as const,
   },
-  date: "2026-07-20", // Monday — open under the default schedule
+  date: OPEN_MONDAY, // Monday, a week out — open, and clear of the lead time
   time: "10:00",
   firstName: "Ana",
   lastName: "Lopez",
@@ -184,7 +185,7 @@ beforeEach(() => {
 describe("booking.create against the constraint", () => {
   it("hands back the slot an abandoned checkout is still holding, before inserting", async () => {
     await caller().create(input);
-    expect(mockExpireStaleForSlot).toHaveBeenCalledWith("2026-07-20", "10:00");
+    expect(mockExpireStaleForSlot).toHaveBeenCalledWith(OPEN_MONDAY, "10:00");
     // Order matters: releasing the slot after the insert would be too late.
     expect(mockExpireStaleForSlot.mock.invocationCallOrder[0]!).toBeLessThan(
       mockCreateBooking.mock.invocationCallOrder[0]!

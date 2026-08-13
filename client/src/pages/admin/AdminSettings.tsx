@@ -7,6 +7,12 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import {
+  DEFAULT_LEAD_TIME_HOURS,
+  LEAD_TIME_SETTING_KEY,
+  MAX_LEAD_TIME_HOURS,
+  parseLeadTimeHours,
+} from "@shared/leadTime";
+import {
   DEFAULT_SCHEDULE,
   parseSchedule,
   SCHEDULE_SETTING_KEY,
@@ -166,6 +172,90 @@ function BookingHoursSection() {
   );
 }
 
+/**
+ * Minimum notice before a slot may be booked. Sits with the booking hours
+ * because it is the same question — when can a customer book — and it only
+ * ever removes slots the hours already allow.
+ */
+function BookingLeadTimeSection() {
+  const utils = trpc.useUtils();
+  const settings = trpc.admin.settings.useQuery();
+  const save = trpc.admin.saveSetting.useMutation({
+    onSuccess: () => {
+      utils.admin.settings.invalidate();
+      utils.booking.availability.invalidate();
+      toast.success("Minimum booking notice saved — live on the booking calendar");
+    },
+    onError: e => toast.error(e.message || "Failed to save minimum booking notice"),
+  });
+
+  const [hours, setHours] = useState(String(DEFAULT_LEAD_TIME_HOURS));
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    if (settings.data && !dirty) {
+      const raw = settings.data.find(s => s.settingKey === LEAD_TIME_SETTING_KEY)?.settingValue ?? null;
+      setHours(String(parseLeadTimeHours(raw)));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.data]);
+
+  const parsed = Number(hours.trim());
+  const valid =
+    hours.trim() !== "" && Number.isInteger(parsed) && parsed >= 0 && parsed <= MAX_LEAD_TIME_HOURS;
+
+  return (
+    <div className="rounded-2xl bg-card p-8 shadow-sm ring-1 ring-border">
+      <h2 className="font-display text-lg font-bold text-foreground">Minimum booking notice</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        How far ahead a customer has to book. A time slot is only offered when it starts at least this many hours
+        from now, San Antonio time. Set it to 0 to accept bookings right up to the start of a slot.
+      </p>
+      <div className="mt-6 flex flex-wrap items-end gap-3">
+        <div>
+          <Label htmlFor="setting-lead-time">Hours of notice</Label>
+          <Input
+            id="setting-lead-time"
+            type="number"
+            inputMode="numeric"
+            min="0"
+            max={MAX_LEAD_TIME_HOURS}
+            step="1"
+            className="mt-1.5 w-32 rounded-xl"
+            value={hours}
+            onChange={e => {
+              setDirty(true);
+              setHours(e.target.value);
+            }}
+          />
+        </div>
+        <Button
+          className="rounded-xl"
+          disabled={save.isPending || !dirty || !valid}
+          onClick={() => {
+            save.mutate({ key: LEAD_TIME_SETTING_KEY, value: String(parsed) });
+            setDirty(false);
+          }}
+        >
+          Save minimum notice
+        </Button>
+      </div>
+      {!valid && (
+        <p className="mt-2 text-xs text-destructive">
+          Enter a whole number of hours between 0 and {MAX_LEAD_TIME_HOURS}.
+        </p>
+      )}
+      <p className="mt-3 text-xs text-muted-foreground">
+        {parsed === 0 && valid
+          ? "Disabled — customers can book any open slot, including one starting right now."
+          : valid
+            ? `Customers booking now would see slots starting ${parsed} ${parsed === 1 ? "hour" : "hours"} from now and later.`
+            : ""}
+      </p>
+    </div>
+  );
+}
+
 export default function AdminSettings() {
   const utils = trpc.useUtils();
   const settings = trpc.admin.settings.useQuery();
@@ -233,6 +323,7 @@ export default function AdminSettings() {
             </div>
           ))}
           <BookingHoursSection />
+          <BookingLeadTimeSection />
           <p className="rounded-xl bg-muted/50 p-4 text-xs leading-relaxed text-muted-foreground">
             Changes go live on the public site right away. Anything left blank is hidden automatically, so the site
             never shows placeholder details.

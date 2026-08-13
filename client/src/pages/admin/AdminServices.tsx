@@ -16,6 +16,17 @@ import {
   type PricingTier,
   type TieredType,
 } from "@shared/pricing";
+import {
+  DEFAULT_DURATIONS,
+  DURATION_FLAT_TYPES,
+  DURATION_LADDER_TYPES,
+  MAX_DURATION_HOURS,
+  MAX_DURATION_TIERS_PER_SERVICE,
+  durationRangeLabel,
+  serializeDurationConfig,
+  type DurationConfig,
+  type DurationTier,
+} from "@shared/duration";
 import { PageHeader, SERVICE_LABELS, TableOrCards } from "./adminShared";
 
 const EXTRA_LABELS: Record<ExtraId, string> = {
@@ -87,6 +98,351 @@ function cloneConfig(cfg: PricingConfig): PricingConfig {
     frequencyDiscounts: { ...cfg.frequencyDiscounts },
     depositRate: cfg.depositRate,
   };
+}
+
+/**
+ * Client-side mirror of the server's duration-ladder rules, so an admin sees
+ * the problem inline instead of a rejected save. The server re-checks all of it.
+ */
+function durationProblems(bands: DurationTier[], service: string): string[] {
+  const problems: string[] = [];
+  const label = SERVICE_LABELS[service] ?? service;
+  if (bands.length === 0) problems.push(`${label}: needs at least one band`);
+  if (bands.length > MAX_DURATION_TIERS_PER_SERVICE)
+    problems.push(`${label}: at most ${MAX_DURATION_TIERS_PER_SERVICE} bands (currently ${bands.length})`);
+  const unbounded = bands.filter(b => b.maxSqft === Infinity).length;
+  if (unbounded !== 1 || bands[bands.length - 1]?.maxSqft !== Infinity)
+    problems.push(`${label}: the last band must be the only open-ended one`);
+  let previous = 0;
+  bands.forEach((band, idx) => {
+    if (!Number.isInteger(band.hours) || band.hours < 1 || band.hours > MAX_DURATION_HOURS) {
+      problems.push(`${label} band ${idx + 1}: hours must be a whole number from 1 to ${MAX_DURATION_HOURS}`);
+    }
+    if (band.maxSqft === Infinity) return;
+    if (!Number.isInteger(band.maxSqft) || band.maxSqft <= 0) {
+      problems.push(`${label} band ${idx + 1}: max sq ft must be a whole number above 0`);
+      return;
+    }
+    if (band.maxSqft <= previous) {
+      problems.push(
+        `${label} band ${idx + 1}: ${band.maxSqft.toLocaleString("en-US")} must be larger than ${previous.toLocaleString("en-US")}`
+      );
+      return;
+    }
+    previous = band.maxSqft;
+  });
+  return problems;
+}
+
+function cloneDurations(cfg: DurationConfig): DurationConfig {
+  return {
+    ladders: {
+      residential: cfg.ladders.residential.map(b => ({ ...b })),
+      deep: cfg.ladders.deep.map(b => ({ ...b })),
+      moveinout: cfg.ladders.moveinout.map(b => ({ ...b })),
+    },
+    flatHours: { ...cfg.flatHours },
+  };
+}
+
+/**
+ * How much of the calendar each job blocks.
+ *
+ * Sits with the pricing ladders because it is the same shape of decision keyed
+ * off the same square footage — but saves to its own setting, so a pricing save
+ * from a stale tab can never revert a duration change.
+ */
+function JobDurationsSection() {
+  const utils = trpc.useUtils();
+  const configQuery = trpc.admin.durationConfig.useQuery(undefined, { staleTime: 0 });
+  const [draft, setDraft] = useState<DurationConfig | null>(null);
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    if (configQuery.data && !draft) setDraft(cloneDurations(configQuery.data));
+  }, [configQuery.data, draft]);
+
+  const save = trpc.admin.saveDurationConfig.useMutation({
+    onSuccess: () => {
+      utils.admin.durationConfig.invalidate();
+      utils.booking.availability.invalidate();
+      setDirty(false);
+      toast.success("Job durations saved — the booking calendar blocks these spans now");
+    },
+    onError: e => toast.error(e.message || "Could not save job durations"),
+  });
+
+  if (!draft) {
+    return (
+      <div className="mt-6 flex items-center gap-2 rounded-2xl bg-card p-6 text-sm text-muted-foreground shadow-sm ring-1 ring-border">
+        <Loader2 className="h-4 w-4 animate-spin" /> Loading job durations…
+      </div>
+    );
+  }
+
+  const update = (fn: (cfg: DurationConfig) => void) => {
+    setDraft(prev => {
+      if (!prev) return prev;
+      const next = cloneDurations(prev);
+      fn(next);
+      return next;
+    });
+    setDirty(true);
+  };
+
+  const problems = DURATION_LADDER_TYPES.flatMap(svc => durationProblems(draft.ladders[svc], svc));
+
+  const hoursInput = (value: number, onChange: (n: number) => void, ariaLabel: string) => (
+    <Input
+      aria-label={ariaLabel}
+      type="number"
+      inputMode="numeric"
+      min={1}
+      max={MAX_DURATION_HOURS}
+      step="1"
+      className="h-9 w-20 text-right text-sm"
+      value={value}
+      onChange={e => {
+        const n = Number(e.target.value);
+        if (Number.isFinite(n)) onChange(Math.round(n));
+      }}
+    />
+  );
+
+  const addBand = (svc: (typeof DURATION_LADDER_TYPES)[number]) => {
+    update(cfg => {
+      const bands = cfg.ladders[svc];
+      const lastBoundedIdx = bands.length - 2;
+      const lastBounded = lastBoundedIdx >= 0 ? bands[lastBoundedIdx] : undefined;
+      const maxSqft = lastBounded ? lastBounded.maxSqft + 500 : 1000;
+      const hours = lastBounded ? Math.min(MAX_DURATION_HOURS, lastBounded.hours + 1) : 2;
+      bands.splice(Math.max(0, bands.length - 1), 0, { maxSqft, hours });
+    });
+  };
+
+  return (
+    <div className="mt-8">
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <div className="mr-auto">
+          <h2 className="font-display text-lg font-bold text-foreground">Job durations</h2>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            How long a crew is on site, by service and home size. A booking blocks every hour it runs, so a
+            4-hour job starting at 11:00 takes 11, 12 and 1 off the calendar and leaves 2 free. Jobs are only
+            offered a start time they can finish by closing.
+          </p>
+        </div>
+        <Button
+          onClick={() => save.mutate({ config: serializeDurationConfig(draft) })}
+          disabled={!dirty || save.isPending || problems.length > 0}
+          className="press"
+        >
+          {save.isPending ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Save className="mr-1.5 h-4 w-4" />}
+          Save durations
+        </Button>
+        <Button
+          variant="outline"
+          className="press bg-card"
+          disabled={save.isPending}
+          onClick={() => {
+            setDraft(cloneDurations(DEFAULT_DURATIONS));
+            setDirty(true);
+            toast.info("Reset to default durations — click Save to apply");
+          }}
+        >
+          <RotateCcw className="mr-1.5 h-4 w-4" /> Reset
+        </Button>
+      </div>
+      {problems.length > 0 ? (
+        <p className="mb-3 text-xs font-medium text-destructive">{problems[0]}</p>
+      ) : (
+        dirty && <p className="mb-3 text-xs font-medium text-amber-600">Unsaved changes</p>
+      )}
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        {DURATION_LADDER_TYPES.map(svc => {
+          const bands = draft.ladders[svc];
+          return (
+            <div key={svc} className="rounded-2xl bg-card shadow-sm ring-1 ring-border">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-4 lg:px-6">
+                <div>
+                  <h3 className="font-semibold text-foreground">{SERVICE_LABELS[svc] ?? svc} — hours by size</h3>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {bands.length} bands · each row covers up to its max sq ft
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="press h-8 rounded-lg bg-card text-xs"
+                  disabled={bands.length >= MAX_DURATION_TIERS_PER_SERVICE}
+                  onClick={() => addBand(svc)}
+                >
+                  <Plus className="mr-1 h-3.5 w-3.5" /> Add band
+                </Button>
+              </div>
+              <TableOrCards
+                table={
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                        <th className="px-6 py-2 font-medium">Range</th>
+                        <th className="px-2 py-2 font-medium">Max sq ft</th>
+                        <th className="px-2 py-2 text-right font-medium">Hours</th>
+                        <th className="w-10 px-2 py-2" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bands.map((band, idx) => (
+                        <tr key={idx} className="border-b border-border/60 last:border-0">
+                          <td className="px-6 py-2 text-xs text-muted-foreground">
+                            {durationRangeLabel(band, bands[idx - 1])}
+                          </td>
+                          <td className="px-2 py-2">
+                            {band.maxSqft === Infinity ? (
+                              <span className="text-xs text-muted-foreground">Open-ended</span>
+                            ) : (
+                              <Input
+                                aria-label={`${SERVICE_LABELS[svc] ?? svc} band ${idx + 1} max sq ft`}
+                                type="number"
+                                inputMode="numeric"
+                                min={1}
+                                step="1"
+                                className="h-9 w-24 text-right text-sm"
+                                value={band.maxSqft}
+                                onChange={e => {
+                                  const n = Number(e.target.value);
+                                  if (Number.isFinite(n))
+                                    update(cfg => {
+                                      cfg.ladders[svc][idx]!.maxSqft = Math.round(n);
+                                    });
+                                }}
+                              />
+                            )}
+                          </td>
+                          <td className="px-2 py-2 text-right">
+                            {hoursInput(
+                              band.hours,
+                              n =>
+                                update(cfg => {
+                                  cfg.ladders[svc][idx]!.hours = n;
+                                }),
+                              `${SERVICE_LABELS[svc] ?? svc} band ${idx + 1} hours`
+                            )}
+                          </td>
+                          <td className="px-2 py-2">
+                            {bands.length > 1 && band.maxSqft !== Infinity && (
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-8 w-8"
+                                aria-label={`Remove ${SERVICE_LABELS[svc] ?? svc} band ${idx + 1}`}
+                                onClick={() =>
+                                  update(cfg => {
+                                    cfg.ladders[svc].splice(idx, 1);
+                                  })
+                                }
+                              >
+                                <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
+                              </Button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                }
+                cards={bands.map((band, idx) => (
+                  <div key={idx} className="space-y-2 px-4 py-3">
+                    <p className="text-xs font-medium text-muted-foreground">
+                      {durationRangeLabel(band, bands[idx - 1])}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                        Max sq ft (mobile)
+                        {band.maxSqft === Infinity ? (
+                          <span className="text-xs">Open-ended</span>
+                        ) : (
+                          <Input
+                            aria-label={`${SERVICE_LABELS[svc] ?? svc} band ${idx + 1} max sq ft`}
+                            type="number"
+                            inputMode="numeric"
+                            min={1}
+                            step="1"
+                            className="h-9 w-24 text-right text-sm"
+                            value={band.maxSqft}
+                            onChange={e => {
+                              const n = Number(e.target.value);
+                              if (Number.isFinite(n))
+                                update(cfg => {
+                                  cfg.ladders[svc][idx]!.maxSqft = Math.round(n);
+                                });
+                            }}
+                          />
+                        )}
+                      </label>
+                      <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                        Hours
+                        {hoursInput(
+                          band.hours,
+                          n =>
+                            update(cfg => {
+                              cfg.ladders[svc][idx]!.hours = n;
+                            }),
+                          `${SERVICE_LABELS[svc] ?? svc} band ${idx + 1} hours`
+                        )}
+                      </label>
+                      {bands.length > 1 && band.maxSqft !== Infinity && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-8 text-xs"
+                          aria-label={`Remove ${SERVICE_LABELS[svc] ?? svc} band ${idx + 1}`}
+                          onClick={() =>
+                            update(cfg => {
+                              cfg.ladders[svc].splice(idx, 1);
+                            })
+                          }
+                        >
+                          <Trash2 className="mr-1 h-3.5 w-3.5" /> Remove
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              />
+            </div>
+          );
+        })}
+
+        <div className="rounded-2xl bg-card shadow-sm ring-1 ring-border">
+          <div className="border-b border-border px-4 py-4 lg:px-6">
+            <h3 className="font-semibold text-foreground">Other services — flat block</h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Commercial and office jobs vary too much for square footage to predict, so they book a fixed block.
+            </p>
+          </div>
+          {DURATION_FLAT_TYPES.map(svc => (
+            <div key={svc} className="flex items-center justify-between border-b border-border/60 px-6 py-3 text-sm last:border-0">
+              <span className="font-medium text-foreground">{SERVICE_LABELS[svc] ?? svc}</span>
+              {hoursInput(
+                draft.flatHours[svc],
+                n =>
+                  update(cfg => {
+                    cfg.flatHours[svc] = n;
+                  }),
+                `${SERVICE_LABELS[svc] ?? svc} hours`
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <p className="mt-6 rounded-2xl bg-muted/50 p-4 text-xs leading-relaxed text-muted-foreground">
+        New bookings block the span these ladders give them. Bookings already taken keep the duration they were
+        booked with, so changing a ladder never reshuffles a job a customer has already paid for.
+      </p>
+    </div>
+  );
 }
 
 export default function AdminServices() {
@@ -552,6 +908,8 @@ export default function AdminServices() {
           </p>
         </div>
       </div>
+
+      <JobDurationsSection />
     </div>
   );
 }

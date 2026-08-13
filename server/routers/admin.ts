@@ -2,6 +2,13 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { randomBytes } from "node:crypto";
 import {
+  DURATION_SETTING_KEY,
+  serializeDurationConfig,
+  validateDurationConfig,
+  type DurationConfig,
+} from "@shared/duration";
+import { LEAD_TIME_SETTING_KEY, MAX_LEAD_TIME_HOURS, readLeadTimeHours } from "@shared/leadTime";
+import {
   PRICING_SETTING_KEY,
   serializePricingConfig,
   validatePricingConfig,
@@ -11,6 +18,8 @@ import * as db from "../db";
 import { approveBalanceInvoice, issueBalanceSafely, originFromRequest, resendBalanceLink } from "../balance";
 import { balanceLinkStatus } from "../balanceRules";
 import { buildStaffInviteEmail, deliverEmail } from "../emails";
+import { loadDurationConfig, withDurationHours } from "./booking";
+import { sendJobStartedEmailSafely } from "../statusEmails";
 import { storagePut } from "../storage";
 import { getStripe } from "../stripe";
 import { protectedProcedure, router } from "../_core/trpc";
@@ -30,6 +39,30 @@ function assertValidPricingConfig(raw: string): PricingConfig {
   return result.config;
 }
 
+/**
+ * Rejects a lead time the booking rules would not honour — asked of the same
+ * reader the booking flow uses, so "saved" and "in force" can never differ. The
+ * read path falls back to the default on anything invalid, so without this an
+ * admin could save 100 hours and silently get 3.
+ */
+function assertValidLeadTimeHours(raw: string): void {
+  if (readLeadTimeHours(raw) === null) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Minimum booking notice must be a whole number of hours between 0 and ${MAX_LEAD_TIME_HOURS}.`,
+    });
+  }
+}
+
+/** Validates a duration config, throwing a readable BAD_REQUEST if a ladder breaks the rules. */
+function assertValidDurationConfig(raw: string): DurationConfig {
+  const result = validateDurationConfig(raw);
+  if (!result.ok) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: `Invalid job durations — ${result.errors.join("; ")}` });
+  }
+  return result.config;
+}
+
 const bookingStatusEnum = z.enum(["pending_deposit", "confirmed", "in_progress", "completed", "cancelled", "expired"]);
 
 export const adminRouter = router({
@@ -41,10 +74,13 @@ export const adminRouter = router({
   // ---------- Appointments ----------
   bookings: adminProcedure
     .input(z.object({ status: bookingStatusEnum.optional(), from: z.string().optional(), to: z.string().optional() }).optional())
-    .query(({ input }) => db.listBookings(input)),
+    .query(async ({ input }) => withDurationHours(await db.listBookings(input))),
   updateBookingStatus: adminProcedure
     .input(z.object({ id: z.number().int(), status: bookingStatusEnum }))
     .mutation(async ({ ctx, input }) => {
+      // Read first: only an actual confirmed → in progress move is a job
+      // starting, and that is what the customer gets told about.
+      const before = await db.getBookingById(input.id);
       try {
         await db.updateBooking(input.id, { status: input.status });
       } catch (error) {
@@ -64,6 +100,11 @@ export const adminRouter = router({
       // fails the status update.
       if (input.status === "completed") {
         await issueBalanceSafely(input.id, originFromRequest(ctx.req));
+      }
+      // Same best-effort contract: an email failure never fails the status
+      // change, and the send is claimed so it happens at most once per booking.
+      if (input.status === "in_progress" && before?.status === "confirmed") {
+        await sendJobStartedEmailSafely(input.id);
       }
       return { success: true } as const;
     }),
@@ -291,6 +332,8 @@ export const adminRouter = router({
           bookingReference: booking?.reference ?? null,
           serviceType: booking?.serviceType ?? null,
           serviceDate: booking?.scheduledDate ?? null,
+          // What the customer asked for, in front of whoever approves the bill.
+          bookingNotes: booking?.notes ?? null,
           bookingTotal: booking?.totalAmount ?? null,
           // Only a captured deposit is credited against the balance.
           depositCredited: booking?.stripePaymentIntentId ? (booking?.depositAmount ?? 0) : 0,
@@ -466,6 +509,12 @@ export const adminRouter = router({
       if (input.key === PRICING_SETTING_KEY) {
         assertValidPricingConfig(input.value);
       }
+      if (input.key === LEAD_TIME_SETTING_KEY) {
+        assertValidLeadTimeHours(input.value);
+      }
+      if (input.key === DURATION_SETTING_KEY) {
+        assertValidDurationConfig(input.value);
+      }
       await db.setSetting(input.key, input.value);
       return { success: true } as const;
     }),
@@ -483,6 +532,24 @@ export const adminRouter = router({
       await db.setSetting(PRICING_SETTING_KEY, serializePricingConfig(config));
       return { success: true } as const;
     }),
+  /**
+   * Saves the job-duration ladders that decide how much of the calendar each
+   * booking blocks. Server-authoritative in the same way as pricing: the ladder
+   * rules are re-checked here and an invalid one is rejected with the exact
+   * problems, never silently ignored.
+   *
+   * Its own setting key rather than a section of pricing_config, so a pricing
+   * save from a stale editor cannot revert a duration change (and vice versa).
+   */
+  saveDurationConfig: adminProcedure
+    .input(z.object({ config: z.string().min(2).max(10000) }))
+    .mutation(async ({ input }) => {
+      const config = assertValidDurationConfig(input.config);
+      await db.setSetting(DURATION_SETTING_KEY, serializeDurationConfig(config));
+      return { success: true } as const;
+    }),
+  /** Live job-duration ladders for the admin editor. */
+  durationConfig: adminProcedure.query(() => loadDurationConfig()),
 
   // ---------- Blog ----------
   blogPosts: adminProcedure.query(() => db.listBlogPosts()),

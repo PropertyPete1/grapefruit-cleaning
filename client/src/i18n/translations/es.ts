@@ -412,10 +412,11 @@ export const es: Dictionary = {
     },
     serviceTitle: "Elija su servicio",
     datetimeTitle: "Seleccione fecha y hora",
-    datetimeSubtitle: "Recomendamos reservar con al menos 48 horas de anticipación.",
+    datetimeSubtitle: "¿La necesita hoy? Hay horarios disponibles el mismo día con solo unas horas de anticipación.",
     morningSlots: "Mañana",
     afternoonSlots: "Tarde",
     closedDay: "No agendamos limpiezas este día. Por favor elija otra fecha.",
+    noTimesLeft: "No quedan horarios disponibles este día. Por favor elija otra fecha.",
     extrasTitle: "Agregue extras",
     contactTitle: "Su información de contacto",
     firstName: "Nombre",
@@ -511,7 +512,7 @@ export const es: Dictionary = {
       },
       {
         q: "¿Con cuánta anticipación debo reservar?",
-        a: "La mayoría de los horarios están disponibles dentro de las 48 horas, pero recomendamos reservar con 3 a 5 días de anticipación para tener la mayor variedad de horarios, especialmente los fines de semana.",
+        a: "Con frecuencia hay horarios disponibles el mismo día con solo unas horas de anticipación. Reservar con uno o dos días de anticipación le asegura el horario que prefiere, lo cual vale la pena los fines de semana.",
       },
       {
         q: "¿Traen su propia ropa de cama para los cambios de Airbnb?",

@@ -32,6 +32,7 @@ import { useLocale } from "@/i18n/LocaleContext";
 import { useSeo } from "@/hooks/useSeo";
 import { AnimatedPrice } from "@/components/AnimatedPrice";
 import { trpc } from "@/lib/trpc";
+import { todayInBookingZone } from "@shared/leadTime";
 import {
   calculateQuote,
   type CleaningType,
@@ -193,8 +194,11 @@ export default function Booking() {
   const deposit = Math.max(1, Math.round(breakdown.total * pricing.depositRate));
 
   const dateString = date ? toDateString(date) : null;
+  // Service type and size go with the date: they decide how long the job runs,
+  // which is what lets the server withhold a slot too late in the day to finish
+  // before closing. booking.create re-derives both and re-checks.
   const availability = trpc.booking.availability.useQuery(
-    { date: dateString ?? "" },
+    { date: dateString ?? "", serviceType: type, sqft },
     { enabled: Boolean(dateString) }
   );
   const scheduleQuery = trpc.booking.schedule.useQuery(undefined, { staleTime: 5 * 60 * 1000 });
@@ -423,6 +427,10 @@ export default function Booking() {
   // ---------- Booking wizard ----------
   const morning = (availability.data ?? []).filter(s => Number(s.time.slice(0, 2)) < 12);
   const afternoon = (availability.data ?? []).filter(s => Number(s.time.slice(0, 2)) >= 12);
+  // Reachable now that today is selectable: the day is open, but everything
+  // left on it is inside the notice period or too late for the job to finish.
+  // A grid of uniformly disabled buttons explains none of that.
+  const noneLeftToday = (availability.data ?? []).length > 0 && !availability.data!.some(s => s.available);
 
   return (
     <div className="pt-28 pb-24 md:pt-36 md:pb-32">
@@ -546,7 +554,19 @@ export default function Booking() {
                           setTime(null);
                         }}
                         disabled={[
-                          { before: new Date(Date.now() + 24 * 3600 * 1000) },
+                          // Only the past is closed outright. How soon a
+                          // customer may book is the lead-time rule's job now
+                          // (Admin → Settings, 3 hours by default), and it is
+                          // applied per slot by booking.availability and
+                          // re-checked by booking.create. A day whose remaining
+                          // slots are all too soon renders them unavailable
+                          // rather than disappearing, which is why today is
+                          // selectable here.
+                          //
+                          // Compared in the business's timezone, not the
+                          // browser's: a customer abroad must not have the
+                          // current San Antonio day hidden from them.
+                          (d: Date) => toDateString(d) < todayInBookingZone(),
                           (d: Date) => {
                             const day = scheduleQuery.data?.[d.getDay()];
                             return day ? !day.open : false;
@@ -570,7 +590,12 @@ export default function Booking() {
                           {t.booking.closedDay}
                         </div>
                       )}
-                      {date && availability.data && availability.data.length > 0 && (
+                      {date && availability.data && noneLeftToday && (
+                        <div className="flex h-full min-h-40 items-center justify-center rounded-2xl bg-muted/40 px-6 text-center text-sm text-muted-foreground">
+                          {t.booking.noTimesLeft}
+                        </div>
+                      )}
+                      {date && availability.data && availability.data.length > 0 && !noneLeftToday && (
                         <div className="space-y-5">
                           <div>
                             <p className="flex items-center gap-2 text-sm font-semibold text-foreground">

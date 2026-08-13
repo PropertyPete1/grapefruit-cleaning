@@ -404,10 +404,11 @@ export const en = {
     },
     serviceTitle: "Choose your service",
     datetimeTitle: "Pick a date and time",
-    datetimeSubtitle: "We recommend booking at least 48 hours ahead.",
+    datetimeSubtitle: "Need it today? Same-day slots are available with just a few hours' notice.",
     morningSlots: "Morning",
     afternoonSlots: "Afternoon",
     closedDay: "We're not scheduling cleanings on this day. Please pick another date.",
+    noTimesLeft: "There are no times left to book on this day. Please pick another date.",
     extrasTitle: "Add any extras",
     contactTitle: "Your contact information",
     firstName: "First name",
@@ -502,7 +503,7 @@ export const en = {
       },
       {
         q: "How far in advance should I book?",
-        a: "Most slots are available within 48 hours, but we recommend booking 3–5 days ahead for the widest selection of times, especially on weekends.",
+        a: "Same-day slots are often available with just a few hours' notice. Booking a day or two ahead guarantees your preferred time, which is worth doing on weekends.",
       },
       {
         q: "Do you bring your own linens for Airbnb turnovers?",
