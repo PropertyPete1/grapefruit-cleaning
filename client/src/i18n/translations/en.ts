@@ -503,7 +503,7 @@ export const en = {
       },
       {
         q: "How far in advance should I book?",
-        a: "Most slots are available within 48 hours, but we recommend booking 3–5 days ahead for the widest selection of times, especially on weekends.",
+        a: "Same-day slots are often available with just a few hours' notice. Booking a day or two ahead guarantees your preferred time, which is worth doing on weekends.",
       },
       {
         q: "Do you bring your own linens for Airbnb turnovers?",

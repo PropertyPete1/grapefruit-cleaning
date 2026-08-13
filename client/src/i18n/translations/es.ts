@@ -512,7 +512,7 @@ export const es: Dictionary = {
       },
       {
         q: "¿Con cuánta anticipación debo reservar?",
-        a: "La mayoría de los horarios están disponibles dentro de las 48 horas, pero recomendamos reservar con 3 a 5 días de anticipación para tener la mayor variedad de horarios, especialmente los fines de semana.",
+        a: "Con frecuencia hay horarios disponibles el mismo día con solo unas horas de anticipación. Reservar con uno o dos días de anticipación le asegura el horario que prefiere, lo cual vale la pena los fines de semana.",
       },
       {
         q: "¿Traen su propia ropa de cama para los cambios de Airbnb?",
