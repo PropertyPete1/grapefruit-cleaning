@@ -11,6 +11,16 @@
  * verify the address exists in county records ("address_verified") while the
  * square footage remains customer-entered (confirmed at the appointment).
  *
+ * Travis County (Austin) is covered through the Travis Central Appraisal
+ * District's parcel data as published on the county's public ArcGIS server.
+ * The adapter reads living area when the layer provides it and degrades to
+ * address verification when it does not — schema drift on a county's side
+ * must look like a failed lookup, never an error.
+ *
+ * Every county hangs off COUNTY_ADAPTERS: one entry per county, each an
+ * independent lookup function. Adding the next county (Hays is the likely
+ * candidate) means adding ZIPs/cities for detection and one adapter entry.
+ *
  * The lookup is best-effort: when no record is found (outside Bexar County,
  * new construction, unparseable address) we return `verified: false` and the
  * quote/booking proceeds with the customer-entered square footage.
@@ -43,7 +53,8 @@ export type PropertySource =
   | "comal_cad"
   | "guadalupe_cad"
   | "medina_cad"
-  | "kendall_cad";
+  | "kendall_cad"
+  | "travis_cad";
 
 const BEXAR_QUERY_URL = "https://maps.bexar.org/arcgis/rest/services/Parcels/MapServer/0/query";
 const LOOKUP_TIMEOUT_MS = 8000;
@@ -79,7 +90,7 @@ const BEXAR_CITIES = new Set([
 
 export type Coverage = "in_coverage" | "outside_coverage" | "unknown";
 
-export type CountyKey = "bexar" | "comal" | "guadalupe" | "medina" | "kendall";
+export type CountyKey = "bexar" | "comal" | "guadalupe" | "medina" | "kendall" | "travis";
 
 export const COUNTY_NAMES: Record<CountyKey, string> = {
   bexar: "Bexar",
@@ -87,6 +98,7 @@ export const COUNTY_NAMES: Record<CountyKey, string> = {
   guadalupe: "Guadalupe",
   medina: "Medina",
   kendall: "Kendall",
+  travis: "Travis",
 };
 
 /**
@@ -121,6 +133,24 @@ const KENDALL_ZIPS = new Set([
 const KENDALL_CITIES = new Set([
   "boerne", "comfort", "kendalia", "waring", "sisterdale", "bergheim", "fair oaks ranch",
 ]);
+/**
+ * Travis County (Austin metro). A few edge ZIPs straddle Williamson/Hays/
+ * Bastrop lines; a straddler only means the Travis provider is TRIED, and a
+ * miss falls through gracefully like any other not-found.
+ */
+const TRAVIS_ZIPS = new Set([
+  "78617", "78652", "78653", "78660", "78669", "78701", "78702", "78703", "78704", "78705",
+  "78712", "78719", "78721", "78722", "78723", "78724", "78725", "78726", "78727", "78728",
+  "78729", "78730", "78731", "78732", "78733", "78734", "78735", "78736", "78737", "78738",
+  "78739", "78741", "78742", "78744", "78745", "78746", "78747", "78748", "78749", "78750",
+  "78751", "78752", "78753", "78754", "78756", "78757", "78758", "78759",
+]);
+const TRAVIS_CITIES = new Set([
+  "austin", "pflugerville", "manor", "del valle", "lakeway", "bee cave", "bee caves",
+  "west lake hills", "rollingwood", "sunset valley", "jonestown", "lago vista",
+  "point venture", "the hills", "briarcliff", "creedmoor", "manchaca", "hornsby bend",
+  "hudson bend", "garfield", "webberville",
+]);
 
 const COUNTY_ZIPS: Record<CountyKey, Set<string>> = {
   bexar: BEXAR_ZIPS,
@@ -128,6 +158,7 @@ const COUNTY_ZIPS: Record<CountyKey, Set<string>> = {
   guadalupe: GUADALUPE_ZIPS,
   medina: MEDINA_ZIPS,
   kendall: KENDALL_ZIPS,
+  travis: TRAVIS_ZIPS,
 };
 const COUNTY_CITIES: Record<CountyKey, Set<string>> = {
   bexar: BEXAR_CITIES,
@@ -135,8 +166,9 @@ const COUNTY_CITIES: Record<CountyKey, Set<string>> = {
   guadalupe: GUADALUPE_CITIES,
   medina: MEDINA_CITIES,
   kendall: KENDALL_CITIES,
+  travis: TRAVIS_CITIES,
 };
-const COUNTY_ORDER: CountyKey[] = ["bexar", "comal", "guadalupe", "medina", "kendall"];
+const COUNTY_ORDER: CountyKey[] = ["bexar", "comal", "guadalupe", "medina", "kendall", "travis"];
 
 /**
  * Resolve candidate counties for an address. ZIP is the strongest signal;
@@ -323,7 +355,7 @@ export async function lookupBexarProperty(addressLine: string): Promise<Property
  * situs_zip. These layers do NOT publish living-area sqft — a match verifies
  * the address only.
  */
-const CAD_SERVICES: Record<Exclude<CountyKey, "bexar">, { url: string; source: PropertySource }> = {
+const CAD_SERVICES: Record<Exclude<CountyKey, "bexar" | "travis">, { url: string; source: PropertySource }> = {
   comal: {
     url: "https://services7.arcgis.com/Yz6eib2o8WvEgWq8/arcgis/rest/services/ComalCADWebService/FeatureServer/0/query",
     source: "comal_cad",
@@ -348,7 +380,7 @@ const CAD_SERVICES: Record<Exclude<CountyKey, "bexar">, { url: string; source: P
  * available from these layers.
  */
 export async function lookupCadAddress(
-  county: Exclude<CountyKey, "bexar">,
+  county: Exclude<CountyKey, "bexar" | "travis">,
   addressLine: string,
   zip?: string
 ): Promise<PropertyLookupResult> {
@@ -476,6 +508,111 @@ export function pickBestCadMatch(
   return bestScore >= 1 ? best : null;
 }
 
+const TRAVIS_QUERY_URL =
+  "https://gis.traviscountytx.gov/server/rest/services/Base/Parcels/MapServer/0/query";
+
+/**
+ * Attribute names TCAD-derived layers have used for living area and situs.
+ * Read defensively: the county republishing under different field names must
+ * degrade to address verification, never to an error or a wrong number.
+ */
+const TRAVIS_SQFT_FIELDS = ["LIVING_AREA", "living_area", "IMPR_SQFT", "BLDG_SQFT", "TOT_LIV_AREA", "SQFT"];
+const TRAVIS_SITUS_FIELDS = ["SITUS_ADDRESS", "SITUS", "FULL_STREET_NAME", "situs_address"];
+
+/**
+ * Query Travis County's public parcel layer (TCAD data) for a street address.
+ *
+ * Follows the Bexar shape — situs LIKE with the house number and street core —
+ * because both are county-hosted ArcGIS MapServers over appraisal-district
+ * parcels. Returns verified sqft when the layer carries a usable living area,
+ * address verification alone when it does not, and a plain not_found on any
+ * failure: the quote must never block on Austin's GIS having a bad day.
+ */
+export async function lookupTravisProperty(addressLine: string): Promise<PropertyLookupResult> {
+  const parsed = parseStreetAddress(addressLine);
+  if (!parsed) return { verified: false, reason: "unparseable" };
+
+  const safeStreet = parsed.streetCore.replace(/'/g, "''");
+  const params = new URLSearchParams({
+    where: `UPPER(SITUS_ADDRESS) LIKE '${parsed.houseNumber} %${safeStreet}%'`,
+    outFields: "*",
+    returnGeometry: "false",
+    resultRecordCount: "5",
+    f: "json",
+  });
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), LOOKUP_TIMEOUT_MS);
+    const res = await fetch(`${TRAVIS_QUERY_URL}?${params.toString()}`, {
+      signal: controller.signal,
+      headers: { Accept: "application/json" },
+    });
+    clearTimeout(timer);
+    if (!res.ok) return { verified: false, reason: "not_found" };
+    const data = (await res.json()) as { features?: BexarFeature[]; error?: unknown };
+    if (data.error || !Array.isArray(data.features) || data.features.length === 0) {
+      return { verified: false, reason: "not_found" };
+    }
+
+    const situsOf = (attrs: Record<string, unknown>): string | undefined => {
+      for (const field of TRAVIS_SITUS_FIELDS) {
+        const value = attrs[field];
+        if (typeof value === "string" && value.trim()) return value.replace(/\s+/g, " ").trim();
+      }
+      return undefined;
+    };
+
+    // Prefer a record with a usable living area — that is a full verification.
+    for (const feature of data.features) {
+      const attrs = feature.attributes ?? {};
+      for (const field of TRAVIS_SQFT_FIELDS) {
+        const sqft = parsePositiveInt(attrs[field]);
+        if (sqft && sqft >= 100) {
+          return {
+            verified: true,
+            sqft,
+            source: "travis_cad",
+            county: COUNTY_NAMES.travis,
+            matchedAddress: situsOf(attrs),
+          };
+        }
+      }
+    }
+
+    // Matched a parcel but no living-area field: the address exists in county
+    // records — same posture as the CAD-only counties.
+    const first = data.features[0]!.attributes ?? {};
+    return {
+      verified: false,
+      addressVerified: true,
+      reason: "address_verified",
+      source: "travis_cad",
+      county: COUNTY_NAMES.travis,
+      matchedAddress: situsOf(first),
+    };
+  } catch {
+    return { verified: false, reason: "not_found" };
+  }
+}
+
+/**
+ * One lookup function per covered county. lookupPropertySqft walks the
+ * candidate list from detectCounties through this table — adding a county
+ * touches the detection sets and this record, nothing else.
+ */
+export const COUNTY_ADAPTERS: Record<
+  CountyKey,
+  (addressLine: string, zip?: string) => Promise<PropertyLookupResult>
+> = {
+  bexar: addressLine => lookupBexarProperty(addressLine),
+  comal: (addressLine, zip) => lookupCadAddress("comal", addressLine, zip),
+  guadalupe: (addressLine, zip) => lookupCadAddress("guadalupe", addressLine, zip),
+  medina: (addressLine, zip) => lookupCadAddress("medina", addressLine, zip),
+  kendall: (addressLine, zip) => lookupCadAddress("kendall", addressLine, zip),
+  travis: addressLine => lookupTravisProperty(addressLine),
+};
+
 /** In-memory cache so repeated lookups of the same address don't re-hit the county service. */
 const cache = new Map<string, { result: PropertyLookupResult; at: number }>();
 const CACHE_TTL_MS = 1000 * 60 * 60 * 24; // 24h
@@ -499,19 +636,17 @@ export async function lookupPropertySqft(
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.result;
 
-  // Try each candidate county's provider until one yields a match. Bexar gives
-  // verified sqft; the CAD counties give address verification only.
+  // Try each candidate county's adapter until one yields a match. Bexar and
+  // Travis can verify sqft; the CAD-only counties verify the address.
   let result: PropertyLookupResult = { verified: false, reason: "not_found" };
   for (const county of candidates) {
-    const attempt = county === "bexar"
-      ? await lookupBexarProperty(addressLine)
-      : await lookupCadAddress(county, addressLine, zip);
+    const attempt = await COUNTY_ADAPTERS[county](addressLine, zip);
     if (attempt.reason === "unparseable") {
       result = attempt;
       break;
     }
     if (attempt.verified || attempt.addressVerified) {
-      result = county === "bexar" ? { ...attempt, county: COUNTY_NAMES.bexar } : attempt;
+      result = { county: COUNTY_NAMES[county], ...attempt };
       break;
     }
   }

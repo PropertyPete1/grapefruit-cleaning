@@ -421,6 +421,12 @@ export const en = {
     zip: "ZIP code",
     notes: "Entry instructions or special requests",
     notesPlaceholder: "Gate codes, parking, focus areas, pets we should know about…",
+    propertyTypeLabel: "Property type",
+    propertyHouse: "House",
+    propertyApartment: "Apartment / Condo",
+    apartmentNote:
+      "County records size whole buildings, not units — so we take your square footage as entered and confirm at your appointment.",
+    unitPlaceholder: "Unit #",
     reviewTitle: "Review your booking",
     service: "Service",
     dateTime: "Date & time",

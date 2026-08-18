@@ -20,6 +20,7 @@ import { Switch as ToggleSwitch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { formatJobSpan, intervalEndTime } from "@shared/availability";
+import { composeAddress } from "@shared/property";
 import { trpc } from "@/lib/trpc";
 import { ASSETS } from "@/lib/assets";
 import { PageHeader, StatusBadge, SERVICE_LABELS, fmtMoney, fmtDate } from "../admin/adminShared";
@@ -49,6 +50,7 @@ type StaffBookingRow = {
     sqft: number | null;
     extras: string | null;
     addressLine: string | null;
+    unitNumber: string | null;
     city: string | null;
     zip: string | null;
     notes: string | null;
@@ -109,7 +111,7 @@ function JobCard({ row, onStatusChange }: { row: StaffBookingRow; onStatusChange
         {(booking.addressLine || booking.city) && (
           <p className="flex items-center gap-1.5 sm:col-span-2">
             <MapPin className="h-3.5 w-3.5 shrink-0" />
-            {[booking.addressLine, booking.city, booking.zip].filter(Boolean).join(", ")}
+            {composeAddress(booking)}
           </p>
         )}
         <p className="sm:col-span-2">

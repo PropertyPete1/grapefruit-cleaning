@@ -12,6 +12,7 @@
  * Stripe: a Stripe Checkout Session may live at most 24 hours, so the route
  * mints a fresh session per visit for the whole BALANCE_LINK_DAYS window.
  */
+import { composeAddress } from "@shared/property";
 import { randomBytes } from "node:crypto";
 import type { Stripe } from "stripe";
 import type { Booking, Customer, Invoice } from "../drizzle/schema";
@@ -88,7 +89,7 @@ function toBalanceEmailData(
     customerName: customer.firstName,
     customerEmail: customer.email ?? "",
     customerPhone: customer.phone ?? undefined,
-    address: [booking.addressLine, booking.city, booking.zip].filter(Boolean).join(", "),
+    address: composeAddress(booking),
     payUrl,
     expiresOn: expiresOn.toISOString().slice(0, 10),
     locale,

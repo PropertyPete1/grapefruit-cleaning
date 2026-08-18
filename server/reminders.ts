@@ -5,6 +5,7 @@
  * Idempotent: each send is recorded on the booking row (weekReminderSentAt /
  * dayReminderSentAt) so retries never double-send.
  */
+import { composeAddress } from "@shared/property";
 import type { Booking, Customer } from "../drizzle/schema";
 import * as db from "./db";
 import { buildReminderEmail, deliverEmail, type BookingEmailData } from "./emails";
@@ -63,7 +64,7 @@ function toEmailData(booking: Booking, customer: Customer, bizPhone?: string): B
     customerName: customer.firstName,
     customerEmail: customer.email ?? "",
     customerPhone: customer.phone ?? undefined,
-    address: [booking.addressLine, booking.city, booking.zip].filter(Boolean).join(", "),
+    address: composeAddress(booking),
     locale,
     bizPhone,
   };

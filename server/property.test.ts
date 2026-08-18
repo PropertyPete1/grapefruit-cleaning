@@ -128,9 +128,15 @@ describe("detectCounties (multi-county)", () => {
     expect(detectCounties("Boerne")).toContain("kendall");
   });
 
+  it("maps Austin to Travis now that TCAD is covered", () => {
+    expect(detectCounties("Austin", "78701")).toEqual(["travis"]);
+    expect(detectCounties("Pflugerville")).toContain("travis");
+    expect(detectCounties(undefined, "78745")).toContain("travis");
+  });
+
   it("returns empty for addresses outside all covered counties", () => {
-    expect(detectCounties("Austin", "78701")).toEqual([]);
     expect(detectCounties("Houston", "77002")).toEqual([]);
+    expect(detectCounties("Dallas", "75201")).toEqual([]);
   });
 
   it("keeps Bexar detection working", () => {
@@ -221,10 +227,11 @@ describe("detectBexarCoverage", () => {
 });
 
 describe("lookupPropertySqft coverage gating", () => {
-  it("never queries the county for an outside-coverage address (ambiguous street name in Austin)", async () => {
-    // "Main St" exists in nearly every Texas county — an Austin ZIP must not
-    // false-match a Bexar County record with the same street name.
-    const result = await lookupPropertySqft("123 Main St", "Austin", "78701");
+  it("never queries the county for an outside-coverage address (ambiguous street name in Dallas)", async () => {
+    // "Main St" exists in nearly every Texas county — a Dallas ZIP must not
+    // false-match a Bexar County record with the same street name. (Austin
+    // used to be this fixture; it graduated to coverage when Travis landed.)
+    const result = await lookupPropertySqft("123 Main St", "Dallas", "75201");
     expect(result.verified).toBe(false);
     expect(result.reason).toBe("outside_coverage");
     expect(result.sqft).toBeUndefined();
