@@ -116,6 +116,8 @@ export function NewBookingDialog() {
   const [bedrooms, setBedrooms] = useState("");
   const [bathrooms, setBathrooms] = useState("");
   const [address, setAddress] = useState("");
+  const [propertyType, setPropertyType] = useState<"house" | "apartment">("house");
+  const [unitNumber, setUnitNumber] = useState("");
   const [city, setCity] = useState("");
   const [zip, setZip] = useState("");
   const [date, setDate] = useState("");
@@ -125,8 +127,10 @@ export function NewBookingDialog() {
   const [couponCode, setCouponCode] = useState("");
   const [sendEmail, setSendEmail] = useState(true);
 
-  const sqftNumber = Number(sqft);
-  const sqftValid = sqft.trim() !== "" && Number.isFinite(sqftNumber) && sqftNumber >= 200;
+  // Exact figure, clamped to the range the server accepts (200–20,000): the
+  // owner types "1732", not a step on a slider.
+  const sqftNumber = Math.min(20000, Math.max(200, Number(sqft)));
+  const sqftValid = sqft.trim() !== "" && Number.isFinite(Number(sqft)) && Number(sqft) >= 200;
 
   /**
    * Slot grid from the same public availability query the booking calendar
@@ -171,6 +175,8 @@ export function NewBookingDialog() {
     setBedrooms("");
     setBathrooms("");
     setAddress("");
+    setPropertyType("house");
+    setUnitNumber("");
     setCity("");
     setZip("");
     setDate("");
@@ -194,9 +200,15 @@ export function NewBookingDialog() {
     ? `${SERVICE_LABELS[serviceType] ?? serviceType}${frequency !== "onetime" ? ` · ${FREQUENCY_LABELS[frequency]}` : ""}`
     : "They'll choose on the link";
   const sizeSummary = address
-    ? `${address}${sqftValid ? ` · ${sqftNumber.toLocaleString()} ft²` : " · county records will size it"}`
+    ? `${address}${propertyType === "apartment" ? `${unitNumber ? ` · Apt ${unitNumber}` : ""} · apartment` : ""}${
+        sqftValid
+          ? ` · ${sqftNumber.toLocaleString()} ft²`
+          : propertyType === "house"
+            ? " · county records will size it"
+            : ""
+      }`
     : sqftValid
-      ? `${sqftNumber.toLocaleString()} ft²`
+      ? `${sqftNumber.toLocaleString()} ft²${propertyType === "apartment" ? " · apartment" : ""}`
       : "They'll size it on the link";
   const scheduleSummary = date && time ? `${date} at ${time} — held 24h` : "They'll pick a time on the link";
 
@@ -367,8 +379,47 @@ export function NewBookingDialog() {
               open={openSection === "home"}
               onToggle={() => setOpenSection(openSection === "home" ? null : "home")}
             >
-              <Field label="Street address" hint="With an address, county records size the home for you.">
-                <Input className="rounded-xl" value={address} onChange={e => setAddress(e.target.value)} />
+              <Field
+                label="Property type"
+                hint={
+                  propertyType === "apartment"
+                    ? "County records size whole buildings, not units — verification is skipped and the sqft you enter stands."
+                    : "Houses verify against county records; the verified figure wins if it prices higher."
+                }
+              >
+                <div className="grid grid-cols-2 gap-2">
+                  {(["house", "apartment"] as const).map(kind => (
+                    <button
+                      key={kind}
+                      type="button"
+                      aria-pressed={propertyType === kind}
+                      onClick={() => setPropertyType(kind)}
+                      className={`h-10 rounded-xl border text-sm font-semibold transition-colors ${
+                        propertyType === kind
+                          ? "border-primary bg-primary/5 text-foreground"
+                          : "border-border bg-card text-muted-foreground hover:border-primary/40"
+                      }`}
+                    >
+                      {kind === "house" ? "House" : "Apartment / Condo"}
+                    </button>
+                  ))}
+                </div>
+              </Field>
+              <Field
+                label="Street address"
+                hint={propertyType === "house" ? "With an address, county records size the home for you." : undefined}
+              >
+                <div className="flex gap-2">
+                  <Input className="flex-1 rounded-xl" value={address} onChange={e => setAddress(e.target.value)} />
+                  {propertyType === "apartment" && (
+                    <Input
+                      className="w-24 rounded-xl"
+                      placeholder="Unit #"
+                      value={unitNumber}
+                      onChange={e => setUnitNumber(e.target.value)}
+                    />
+                  )}
+                </div>
               </Field>
               <div className="grid gap-3 sm:grid-cols-2">
                 <Field label="City">
@@ -379,8 +430,17 @@ export function NewBookingDialog() {
                 </Field>
               </div>
               <div className="grid gap-3 sm:grid-cols-3">
-                <Field label="Sq ft (if known)">
-                  <Input type="number" inputMode="numeric" className="rounded-xl" value={sqft} onChange={e => setSqft(e.target.value)} />
+                <Field label="Sq ft (if known)" hint="Exact number, 200–20,000.">
+                  <Input
+                    type="number"
+                    inputMode="numeric"
+                    min={200}
+                    max={20000}
+                    step={1}
+                    className="rounded-xl"
+                    value={sqft}
+                    onChange={e => setSqft(e.target.value)}
+                  />
                 </Field>
                 <Field label="Bedrooms">
                   <Input type="number" inputMode="numeric" className="rounded-xl" placeholder="2" value={bedrooms} onChange={e => setBedrooms(e.target.value)} />
@@ -526,6 +586,8 @@ export function NewBookingDialog() {
                   bathrooms: bathrooms.trim() ? Number(bathrooms) : undefined,
                   sqft: sqftValid ? sqftNumber : undefined,
                   address: address.trim() || undefined,
+                  propertyType,
+                  unitNumber: propertyType === "apartment" ? unitNumber.trim() || undefined : undefined,
                   city: city.trim() || (address.trim() ? "San Antonio" : undefined),
                   zip: zip.trim() || undefined,
                   date: date || undefined,

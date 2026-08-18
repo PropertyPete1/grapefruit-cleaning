@@ -42,6 +42,7 @@ import {
   type ProvidedFact,
 } from "./depositLinkRules";
 import { lookupPropertySqft } from "./property";
+import { plausibleVerifiedSqft, type PropertyType } from "@shared/property";
 import { loadPricingConfig, loadSchedulingRules, occupiedIntervals } from "./routers/booking";
 
 /** A deposit-link token: 24 random bytes, the same strength as an invoice's. */
@@ -67,6 +68,9 @@ export interface AdminBookingInput {
   date?: string;
   time?: string;
   address?: string;
+  /** House verifies against county records; apartment/condo never does. */
+  propertyType?: PropertyType;
+  unitNumber?: string;
   city?: string;
   zip?: string;
   notes?: string;
@@ -213,6 +217,11 @@ export function resolveEffectiveSqft(args: {
   if (enteredSqft == null && verifiedSqft == null) return { sqft: null, corrected: false };
   if (enteredSqft == null) return { sqft: verifiedSqft, corrected: false };
   if (verifiedSqft == null) return { sqft: enteredSqft, corrected: false };
+  // A record wildly larger than the entered figure is a complex parcel or a
+  // mismatch, not this home — a failed lookup, never a reprice.
+  if (!plausibleVerifiedSqft(enteredSqft, verifiedSqft)) {
+    return { sqft: enteredSqft, corrected: false };
+  }
   const price = (sqft: number) =>
     computeBasePrice({ serviceType: args.serviceType, frequency: args.frequency }, sqft, args.pricing).total;
   return price(verifiedSqft) > price(enteredSqft)
@@ -246,10 +255,12 @@ export async function createAdminBooking(
 
   // County verification runs whenever there is an address to look up, exactly
   // as the public flow does — the verified figure can settle the size question
-  // even when the owner left sqft blank.
-  const property = input.address
-    ? await lookupPropertySqft(input.address, input.city, input.zip)
-    : ({ verified: false, addressVerified: false } as Awaited<ReturnType<typeof lookupPropertySqft>>);
+  // even when the owner left sqft blank. Never for apartments: parcels are
+  // building-level, and the complex's figure is nobody's home.
+  const property =
+    input.address && input.propertyType !== "apartment"
+      ? await lookupPropertySqft(input.address, input.city, input.zip)
+      : ({ verified: false, addressVerified: false } as Awaited<ReturnType<typeof lookupPropertySqft>>);
 
   let effectiveSqft: number | null = input.sqft ?? null;
   let sqftMismatch = false;
@@ -365,6 +376,8 @@ export async function createAdminBooking(
       // deliberately not asked to guess on their behalf.
       extras: JSON.stringify([]),
       addressLine: input.address,
+      unitNumber: input.unitNumber,
+      propertyType: input.propertyType ?? "house",
       city: input.city,
       zip: input.zip,
       notes: input.notes,

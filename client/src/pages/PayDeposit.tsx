@@ -48,6 +48,13 @@ const COPY = {
     reference: "Reference",
     stepService: "What kind of cleaning?",
     stepSize: "How big is your home?",
+    propertyTypeLabel: "What kind of place is it?",
+    propertyHouse: "House",
+    propertyApartment: "Apartment / Condo",
+    apartmentNote:
+      "County records size whole buildings, not units — so we take your square footage as entered and confirm at your appointment.",
+    unitPlaceholder: "Unit #",
+    typeItIn: "or type it:",
     sizeByAddress: "Enter your address and we'll size it from county records — that keeps your price exact.",
     addressLine: "Street address",
     cityLine: "City",
@@ -96,6 +103,13 @@ const COPY = {
     reference: "Referencia",
     stepService: "¿Qué tipo de limpieza?",
     stepSize: "¿Qué tan grande es su hogar?",
+    propertyTypeLabel: "¿Qué tipo de lugar es?",
+    propertyHouse: "Casa",
+    propertyApartment: "Apartamento / Condominio",
+    apartmentNote:
+      "Los registros del condado miden edificios completos, no unidades — así que tomamos sus pies cuadrados tal como los ingresó y los confirmamos en su cita.",
+    unitPlaceholder: "Unidad #",
+    typeItIn: "o escríbalo:",
     sizeByAddress: "Escriba su dirección y la medimos con registros del condado — así su precio queda exacto.",
     addressLine: "Dirección",
     cityLine: "Ciudad",
@@ -201,6 +215,8 @@ export default function PayDeposit() {
   const [addr, setAddr] = useState({ address: "", city: "", zip: "" });
   const [slider, setSlider] = useState(1200);
   const [sliderTouched, setSliderTouched] = useState(false);
+  const [unitNumber, setUnitNumber] = useState("");
+  const [kindChoice, setKindChoice] = useState<"house" | "apartment" | null>(null);
 
   const refresh = () => utils.depositLink.get.invalidate({ token });
 
@@ -247,6 +263,7 @@ export default function PayDeposit() {
   const t = locale === "es" ? es : en;
 
   const chosen = extras ?? ((booking?.selectedExtras ?? []) as ExtraId[]);
+  const kind = kindChoice ?? booking?.propertyType ?? "house";
   const noteText = note ?? booking?.customerNote ?? "";
 
   // Availability for the slot step, through the same public query the booking
@@ -413,19 +430,55 @@ export default function PayDeposit() {
             </div>
           </div>
         )}
-        {/* Step: size — address preferred, slider as the fallback. */}
+        {/* Step: size — what kind of place, then address or an exact figure.
+            Apartments never ask the county anything: parcels are building-
+            level, and the complex's square footage is nobody's unit. */}
         {(needs.size || changingSize) && !needs.service && (
           <div className="mt-6">
             <StepTitle done={false}>{c.stepSize}</StepTitle>
+            <p className="mt-2 text-xs font-semibold text-[#7a716b]">{c.propertyTypeLabel}</p>
+            <div className="mt-1.5 grid grid-cols-2 gap-2">
+              {(["house", "apartment"] as const).map(option => (
+                <button
+                  key={option}
+                  type="button"
+                  aria-pressed={kind === option}
+                  onClick={() => {
+                    setKindChoice(option);
+                    update.mutate({ token, propertyType: option });
+                  }}
+                  className={`h-11 rounded-xl border-2 text-sm font-semibold transition-colors ${
+                    kind === option
+                      ? "border-[#F26D5B] bg-[#FFF3F0] text-[#3d3733]"
+                      : "border-[#F0E6DE] bg-white text-[#7a716b] hover:border-[#F26D5B]/40"
+                  }`}
+                >
+                  {option === "house" ? c.propertyHouse : c.propertyApartment}
+                </button>
+              ))}
+            </div>
+            {kind === "apartment" && (
+              <p className="mt-1.5 text-[11px] leading-relaxed text-[#9b918a]">{c.apartmentNote}</p>
+            )}
             {!booking.address && (
               <div className="mt-3 space-y-2">
-                <p className="text-xs text-[#7a716b]">{c.sizeByAddress}</p>
-                <input
-                  className="h-11 w-full rounded-xl border-2 border-[#F0E6DE] px-3 text-sm"
-                  placeholder={c.addressLine}
-                  value={addr.address}
-                  onChange={e => setAddr({ ...addr, address: e.target.value })}
-                />
+                {kind === "house" && <p className="text-xs text-[#7a716b]">{c.sizeByAddress}</p>}
+                <div className="flex gap-2">
+                  <input
+                    className="h-11 min-w-0 flex-1 rounded-xl border-2 border-[#F0E6DE] px-3 text-sm"
+                    placeholder={c.addressLine}
+                    value={addr.address}
+                    onChange={e => setAddr({ ...addr, address: e.target.value })}
+                  />
+                  {kind === "apartment" && (
+                    <input
+                      className="h-11 w-24 rounded-xl border-2 border-[#F0E6DE] px-3 text-sm"
+                      placeholder={c.unitPlaceholder}
+                      value={unitNumber}
+                      onChange={e => setUnitNumber(e.target.value)}
+                    />
+                  )}
+                </div>
                 <div className="grid grid-cols-2 gap-2">
                   <input
                     className="h-11 rounded-xl border-2 border-[#F0E6DE] px-3 text-sm"
@@ -440,22 +493,24 @@ export default function PayDeposit() {
                     onChange={e => setAddr({ ...addr, zip: e.target.value })}
                   />
                 </div>
-                <Button
-                  variant="outline"
-                  className="rounded-xl border-[#F26D5B] text-[#F26D5B]"
-                  disabled={addr.address.trim().length < 3 || update.isPending}
-                  onClick={() =>
-                    update.mutate({
-                      token,
-                      address: addr.address.trim(),
-                      city: addr.city.trim() || "San Antonio",
-                      zip: addr.zip.trim() || undefined,
-                    })
-                  }
-                >
-                  {update.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                  {c.lookUp}
-                </Button>
+                {kind === "house" && (
+                  <Button
+                    variant="outline"
+                    className="rounded-xl border-[#F26D5B] text-[#F26D5B]"
+                    disabled={addr.address.trim().length < 3 || update.isPending}
+                    onClick={() =>
+                      update.mutate({
+                        token,
+                        address: addr.address.trim(),
+                        city: addr.city.trim() || "San Antonio",
+                        zip: addr.zip.trim() || undefined,
+                      })
+                    }
+                  >
+                    {update.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    {c.lookUp}
+                  </Button>
+                )}
               </div>
             )}
             <div className="mt-4">
@@ -473,19 +528,51 @@ export default function PayDeposit() {
                   }}
                   className="w-full accent-[#F26D5B]"
                 />
-                <span className="w-20 text-right text-sm font-bold text-[#2E2724]">
-                  {slider.toLocaleString()} ft²
+                {/* Tap-to-type: the slider is for feel, the field is for the
+                    customer who knows their lease says 743. */}
+                <span className="flex items-center gap-1 text-sm font-bold text-[#2E2724]">
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={200}
+                    max={10000}
+                    step={1}
+                    aria-label={c.typeItIn}
+                    className="h-9 w-20 rounded-lg border-2 border-[#F0E6DE] px-1.5 text-right text-sm font-bold"
+                    value={slider}
+                    onChange={e => {
+                      const typed = Number(e.target.value);
+                      if (Number.isFinite(typed)) {
+                        setSlider(Math.round(typed));
+                        setSliderTouched(true);
+                      }
+                    }}
+                  />
+                  ft²
                 </span>
               </div>
-              <p className="mt-1 text-[11px] text-[#9b918a]">{c.sliderNote}</p>
+              <p className="mt-1 text-[11px] text-[#9b918a]">{kind === "house" ? c.sliderNote : ""}</p>
               <Button
                 variant="outline"
                 className="mt-2 rounded-xl border-[#F26D5B] text-[#F26D5B]"
                 disabled={!sliderTouched || update.isPending}
-                onClick={() => update.mutate({ token, sqft: slider })}
+                onClick={() =>
+                  update.mutate({
+                    token,
+                    sqft: Math.min(10000, Math.max(200, slider)),
+                    ...(kind === "apartment" && !booking.address && addr.address.trim().length >= 3
+                      ? {
+                          address: addr.address.trim(),
+                          city: addr.city.trim() || "San Antonio",
+                          zip: addr.zip.trim() || undefined,
+                        }
+                      : {}),
+                    ...(kind === "apartment" && unitNumber.trim() ? { unitNumber: unitNumber.trim() } : {}),
+                  })
+                }
               >
                 {update.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                {c.saved.replace("!", "")} {slider.toLocaleString()} ft²
+                {c.saved.replace("!", "")} {Math.min(10000, Math.max(200, slider)).toLocaleString()} ft²
               </Button>
             </div>
           </div>

@@ -429,6 +429,12 @@ export const es: Dictionary = {
     zip: "Código postal",
     notes: "Instrucciones de acceso o solicitudes especiales",
     notesPlaceholder: "Códigos de acceso, estacionamiento, áreas prioritarias, mascotas que debamos conocer…",
+    propertyTypeLabel: "Tipo de propiedad",
+    propertyHouse: "Casa",
+    propertyApartment: "Apartamento / Condominio",
+    apartmentNote:
+      "Los registros del condado miden edificios completos, no unidades — así que tomamos sus pies cuadrados tal como los ingresó y los confirmamos en su cita.",
+    unitPlaceholder: "Unidad #",
     reviewTitle: "Revise su reserva",
     service: "Servicio",
     dateTime: "Fecha y hora",

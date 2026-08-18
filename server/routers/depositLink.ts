@@ -39,6 +39,7 @@ import {
   parseAdminProvided,
 } from "../depositLinkRules";
 import { customerNotesOf, mergeCustomerNotes } from "../notesMerge";
+import { composeAddress, PROPERTY_TYPES } from "@shared/property";
 import { lookupPropertySqft } from "../property";
 import { publicOrigin } from "../publicOrigin";
 import { getStripe } from "../stripe";
@@ -234,7 +235,9 @@ export const depositLinkRouter = router({
             : null,
           date: booking.scheduledDate,
           time: booking.scheduledTime,
-          address: [booking.addressLine, booking.city, booking.zip].filter(Boolean).join(", ") || null,
+          address: composeAddress(booking) || null,
+          propertyType: booking.propertyType,
+          unitNumber: booking.unitNumber,
           sqft: booking.sqft,
           sqftVerified: booking.verifiedSqft != null,
           selectedExtras,
@@ -281,6 +284,13 @@ export const depositLinkRouter = router({
         serviceType: z.enum(CLEANING_TYPES).optional(),
         sqft: z.number().min(200).max(10000).optional(),
         address: z.string().min(3).max(255).optional(),
+        /**
+         * House verifies against county records; apartment/condo never does.
+         * Part of the size question, so a locked size locks this too.
+         */
+        propertyType: z.enum(PROPERTY_TYPES).optional(),
+        /** Always editable — "Apt 204" is crew information, not a price lever. */
+        unitNumber: z.string().max(20).optional(),
         city: z.string().max(120).optional(),
         zip: z.string().max(20).optional(),
       })
@@ -296,6 +306,12 @@ export const depositLinkRouter = router({
       if (input.sqft !== undefined && locks.has("size")) {
         refuse(locale, "The home size was set when your booking was created — give us a call to change it.", "El tamaño se definió al crear su reserva — llámenos para cambiarlo.");
       }
+      // The house/apartment switch is a pricing lever (it decides whether
+      // county records may reprice), so a locked size locks it too — flipping
+      // to "apartment" must never reopen a settled figure.
+      if (input.propertyType !== undefined && locks.has("size")) {
+        refuse(locale, "The home size was set when your booking was created — give us a call to change it.", "El tamaño se definió al crear su reserva — llámenos para cambiarlo.");
+      }
       if (input.address && locks.has("address")) {
         refuse(locale, "The address was set when your booking was created — give us a call to change it.", "La dirección se definió al crear su reserva — llámenos para cambiarla.");
       }
@@ -303,12 +319,20 @@ export const depositLinkRouter = router({
       const patch: Parameters<typeof db.updateBooking>[1] = {};
       const serviceType = input.serviceType ?? booking.serviceType;
       if (input.serviceType) patch.serviceType = input.serviceType;
+      if (input.propertyType) patch.propertyType = input.propertyType;
+      if (input.unitNumber !== undefined) patch.unitNumber = input.unitNumber.trim() || null;
+      const propertyType = input.propertyType ?? booking.propertyType;
 
       let sqft = booking.sqft;
       let verified = booking.verifiedSqft;
       let sizeVerified = false;
       if (input.address) {
-        const property = await lookupPropertySqft(input.address, input.city, input.zip);
+        // Apartments store the address without asking the county anything:
+        // the parcel is the building, and the building is not the unit.
+        const property =
+          propertyType === "apartment"
+            ? ({ verified: false, addressVerified: false } as Awaited<ReturnType<typeof lookupPropertySqft>>)
+            : await lookupPropertySqft(input.address, input.city, input.zip);
         patch.addressLine = input.address;
         patch.city = input.city;
         patch.zip = input.zip;

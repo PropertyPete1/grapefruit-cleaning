@@ -83,6 +83,19 @@ export const bookings = mysqlTable("bookings", {
   sqft: int("sqft"),
   extras: text("extras"),
   addressLine: varchar("addressLine", { length: 255 }),
+  /**
+   * "204", "5B", "Ste 300" — rendered into the address wherever it shows
+   * (crew cards, emails, admin tables). "Apt 204" is the difference between a
+   * cleaning and twenty minutes of knocking on doors.
+   */
+  unitNumber: varchar("unitNumber", { length: 20 }),
+  /**
+   * House or apartment/condo. County parcels are BUILDING-level, so apartment
+   * bookings skip sqft verification entirely — a lookup for a unit either
+   * fails or returns the whole complex, and the complex must never reprice a
+   * one-bedroom upward. Houses verify as always.
+   */
+  propertyType: mysqlEnum("propertyType", ["house", "apartment"]).default("house").notNull(),
   city: varchar("city", { length: 100 }),
   zip: varchar("zip", { length: 20 }),
   notes: text("notes"),

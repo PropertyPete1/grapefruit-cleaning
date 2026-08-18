@@ -25,6 +25,7 @@ import * as db from "../db";
 import { createAdminBooking, generateDepositToken } from "../adminBooking";
 import { depositLinkExpiresAt, depositLinkStatus, depositPayUrl } from "../depositLinkRules";
 import { holdMinutesFor } from "../bookingRules";
+import { composeAddress, PROPERTY_TYPES } from "@shared/property";
 import { approveBalanceInvoice, issueBalanceSafely, originFromRequest, resendBalanceLink } from "../balance";
 import { balanceLinkStatus } from "../balanceRules";
 import { buildStaffInviteEmail, deliverEmail, sendDepositLinkEmail } from "../emails";
@@ -168,6 +169,9 @@ export const adminRouter = router({
             .regex(/^\d{2}:\d{2}$/)
             .optional(),
           address: z.string().min(1).max(255).optional(),
+          /** House verifies against county records; apartment/condo never does. */
+          propertyType: z.enum(PROPERTY_TYPES).default("house"),
+          unitNumber: z.string().max(20).optional(),
           city: z.string().min(1).max(100).optional(),
           zip: z.string().min(3).max(20).optional(),
           notes: z.string().max(2000).optional(),
@@ -202,7 +206,13 @@ export const adminRouter = router({
             time: input.time,
             customerName: input.firstName,
             customerEmail: input.email,
-            address: [input.address, input.city, input.zip].filter(Boolean).join(", ") || undefined,
+            address:
+              composeAddress({
+                addressLine: input.address,
+                unitNumber: input.unitNumber,
+                city: input.city,
+                zip: input.zip,
+              }) || undefined,
             basePrice: result.basePrice,
             deposit: result.depositEstimate,
             payUrl: result.payUrl,
@@ -287,7 +297,7 @@ export const adminRouter = router({
           time: booking.scheduledTime ?? undefined,
           customerName: customer.firstName,
           customerEmail: customer.email ?? "",
-          address: [booking.addressLine, booking.city, booking.zip].filter(Boolean).join(", ") || undefined,
+          address: composeAddress(booking) || undefined,
           // Zero is the unpriceable sentinel, never a price to promise.
           basePrice: booking.totalAmount > 0 ? booking.totalAmount : null,
           deposit: booking.totalAmount > 0 ? booking.depositAmount : null,

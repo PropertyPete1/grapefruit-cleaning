@@ -33,6 +33,7 @@ import { useSeo } from "@/hooks/useSeo";
 import { AnimatedPrice } from "@/components/AnimatedPrice";
 import { trpc } from "@/lib/trpc";
 import { todayInBookingZone } from "@shared/leadTime";
+import { plausibleVerifiedSqft } from "@shared/property";
 import {
   calculateQuote,
   EXTRA_IDS,
@@ -127,10 +128,17 @@ export default function Booking() {
     email: "",
     phone: "",
     address: params.get("address") ?? "",
+    unitNumber: "",
     city: params.get("city") ?? "",
     zip: params.get("zip") ?? "",
     notes: "",
   });
+  /**
+   * House or apartment/condo. Apartments skip county verification outright —
+   * parcels are building-level, and the complex's square footage must never
+   * reprice a unit upward.
+   */
+  const [propertyType, setPropertyType] = useState<"house" | "apartment">("house");
   const [errors, setErrors] = useState<Record<string, string>>({});
   // Debounced copy of the address line used for public-records sqft verification.
   const [debouncedAddress, setDebouncedAddress] = useState("");
@@ -164,10 +172,21 @@ export default function Booking() {
       city: debouncedCity.trim() || undefined,
       zip: debouncedZip.trim() || undefined,
     },
-    { enabled: debouncedAddress.trim().length >= 6, staleTime: 1000 * 60 * 10 }
+    {
+      // Apartments never verify: the parcel is the building, not the unit.
+      enabled: propertyType === "house" && debouncedAddress.trim().length >= 6,
+      staleTime: 1000 * 60 * 10,
+    }
   );
   const verifiedSqft =
-    propertyLookup.data?.verified && propertyLookup.data.sqft ? propertyLookup.data.sqft : null;
+    propertyType === "house" &&
+    propertyLookup.data?.verified &&
+    propertyLookup.data.sqft &&
+    // A record wildly larger than the entered size is a complex parcel or a
+    // mismatch — treated as a failed lookup, exactly as the server treats it.
+    plausibleVerifiedSqft(sqftParam ?? null, propertyLookup.data.sqft)
+      ? propertyLookup.data.sqft
+      : null;
   const addressVerifiedCounty =
     !verifiedSqft && propertyLookup.data?.addressVerified ? (propertyLookup.data.county ?? null) : null;
 
@@ -288,6 +307,8 @@ export default function Booking() {
         email: form.email.trim(),
         phone: form.phone.trim(),
         address: form.address.trim(),
+        propertyType,
+        unitNumber: propertyType === "apartment" ? form.unitNumber.trim() || undefined : undefined,
         city: form.city.trim(),
         zip: form.zip.trim(),
         notes: form.notes.trim() || undefined,
@@ -747,15 +768,53 @@ export default function Booking() {
                       {errors.phone && <p className="mt-1 text-xs text-destructive">{errors.phone}</p>}
                     </div>
                     <div className="sm:col-span-2">
+                      <Label className="flex items-center gap-1.5">
+                        <HomeIcon className="h-3.5 w-3.5 text-primary" /> {t.booking.propertyTypeLabel}
+                      </Label>
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        {(["house", "apartment"] as const).map(kind => (
+                          <button
+                            key={kind}
+                            type="button"
+                            aria-pressed={propertyType === kind}
+                            onClick={() => setPropertyType(kind)}
+                            className={`h-11 rounded-xl border-2 text-sm font-semibold transition-colors ${
+                              propertyType === kind
+                                ? "border-primary bg-primary/5 text-foreground"
+                                : "border-border bg-card text-muted-foreground hover:border-primary/40"
+                            }`}
+                          >
+                            {kind === "house" ? t.booking.propertyHouse : t.booking.propertyApartment}
+                          </button>
+                        ))}
+                      </div>
+                      {propertyType === "apartment" && (
+                        <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+                          {t.booking.apartmentNote}
+                        </p>
+                      )}
+                    </div>
+                    <div className="sm:col-span-2">
                       <Label htmlFor="address" className="flex items-center gap-1.5">
                         <MapPin className="h-3.5 w-3.5 text-primary" /> {t.booking.address}
                       </Label>
-                      <Input
-                        id="address"
-                        className="mt-2 h-12 rounded-xl"
-                        value={form.address}
-                        onChange={e => setForm(f => ({ ...f, address: e.target.value }))}
-                      />
+                      <div className="mt-2 flex gap-2">
+                        <Input
+                          id="address"
+                          className="h-12 flex-1 rounded-xl"
+                          value={form.address}
+                          onChange={e => setForm(f => ({ ...f, address: e.target.value }))}
+                        />
+                        {propertyType === "apartment" && (
+                          <Input
+                            id="unit"
+                            className="h-12 w-28 rounded-xl"
+                            placeholder={t.booking.unitPlaceholder}
+                            value={form.unitNumber}
+                            onChange={e => setForm(f => ({ ...f, unitNumber: e.target.value }))}
+                          />
+                        )}
+                      </div>
                       {errors.address && <p className="mt-1 text-xs text-destructive">{errors.address}</p>}
                       {debouncedAddress.trim().length >= 6 && propertyLookup.isFetching && (
                         <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -781,11 +840,13 @@ export default function Booking() {
                             : `Address verified in ${addressVerifiedCounty} County records. Square footage will be confirmed at your appointment.`}
                         </p>
                       )}
-                      <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
-                        {locale === "es"
-                          ? "Los precios se verifican con registros públicos de la propiedad; el total se ajusta si los pies cuadrados no coinciden."
-                          : "Quotes are verified against public property records; the total adjusts if the square footage doesn't match."}
-                      </p>
+                      {propertyType === "house" && (
+                        <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+                          {locale === "es"
+                            ? "Los precios se verifican con registros públicos de la propiedad; el total se ajusta si los pies cuadrados no coinciden."
+                            : "Quotes are verified against public property records; the total adjusts if the square footage doesn't match."}
+                        </p>
+                      )}
                     </div>
                     <div>
                       <Label htmlFor="city">{t.booking.city}</Label>

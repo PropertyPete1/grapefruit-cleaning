@@ -40,6 +40,7 @@ import {
   type ExtraId,
   type Frequency,
 } from "@shared/pricing";
+import { plausibleVerifiedSqft } from "@shared/property";
 import { usePricing } from "@/hooks/usePricing";
 import { formatPrice } from "@/lib/formatPrice";
 import { ENTRY_BATHROOMS, ENTRY_BEDROOMS, entrySqft } from "@/lib/quoteDefaults";
@@ -130,7 +131,13 @@ export default function Quote() {
     { enabled: debouncedAddress.trim().length >= 6, staleTime: 1000 * 60 * 10 }
   );
   const verifiedSqft =
-    propertyLookup.data?.verified && propertyLookup.data.sqft ? propertyLookup.data.sqft : null;
+    propertyLookup.data?.verified &&
+    propertyLookup.data.sqft &&
+    // A record wildly larger than what the customer set is a complex parcel or
+    // a mismatched record — ignored, exactly as the server ignores it.
+    plausibleVerifiedSqft(enteredSqft, propertyLookup.data.sqft)
+      ? propertyLookup.data.sqft
+      : null;
   // Auto-fill the slider from the verified record.
   useEffect(() => {
     if (verifiedSqft) setEnteredSqft(Math.min(10000, Math.max(200, verifiedSqft)));

@@ -27,6 +27,7 @@ import * as db from "../db";
 import { assertRateLimit, clientIp } from "../antiSpam";
 import { blocksSlot, STALE_DEPOSIT_MINUTES } from "../bookingRules";
 import { parseAdminProvided } from "../depositLinkRules";
+import { composeAddress, plausibleVerifiedSqft, PROPERTY_TYPES } from "@shared/property";
 import { sendBookingEmails } from "../emails";
 import { lookupPropertySqft } from "../property";
 import { publicOrigin } from "../publicOrigin";
@@ -238,6 +239,9 @@ export const bookingRouter = router({
         email: z.string().email().max(320),
         phone: z.string().min(7).max(40),
         address: z.string().min(1).max(255),
+        /** House verifies against county records; apartment/condo never does. */
+        propertyType: z.enum(PROPERTY_TYPES).default("house"),
+        unitNumber: z.string().max(20).optional(),
         city: z.string().min(1).max(100),
         zip: z.string().min(3).max(20),
         notes: z.string().max(2000).optional(),
@@ -287,11 +291,20 @@ export const bookingRouter = router({
       // If the county record prices into a higher tier than the entered sqft,
       // charge from the verified square footage so understated entries can't
       // lower the price.
+      //
+      // Apartments and condos skip the lookup outright: county parcels are
+      // building-level, and "the whole complex" is not this customer's home.
+      // Houses keep the plausibility guard for the same false positive
+      // arriving by another road — a record more than 4x the entered size is
+      // a failed lookup, not a reprice.
       const pricing = await loadPricingConfig();
-      const property = await lookupPropertySqft(input.address, input.city, input.zip);
+      const property =
+        input.propertyType === "apartment"
+          ? ({ verified: false, addressVerified: false } as Awaited<ReturnType<typeof lookupPropertySqft>>)
+          : await lookupPropertySqft(input.address, input.city, input.zip);
       let effectiveSqft = input.quote.sqft;
       let sqftMismatch = false;
-      if (property.verified && property.sqft) {
+      if (property.verified && property.sqft && plausibleVerifiedSqft(input.quote.sqft, property.sqft)) {
         const entered = calculateQuote(input.quote, pricing);
         const verified = calculateQuote({ ...input.quote, sqft: property.sqft }, pricing);
         if (verified.total > entered.total) {
@@ -377,6 +390,8 @@ export const bookingRouter = router({
           estimatedHours,
           extras: JSON.stringify(input.quote.extras),
           addressLine: input.address,
+          unitNumber: input.unitNumber,
+          propertyType: input.propertyType,
           city: input.city,
           zip: input.zip,
           notes: input.notes,
@@ -627,7 +642,7 @@ export async function finalizeBooking(bookingId: number, paymentIntentId: string
       customerName: customer.firstName,
       customerEmail: customer.email ?? "",
       customerPhone: customer.phone ?? undefined,
-      address: [booking.addressLine, booking.city, booking.zip].filter(Boolean).join(", "),
+      address: composeAddress(booking),
       notes: booking.notes ?? undefined,
       locale,
       bizPhone,

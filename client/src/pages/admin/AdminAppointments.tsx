@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { formatJobSpan } from "@shared/availability";
+import { composeAddress } from "@shared/property";
 import { trpc } from "@/lib/trpc";
 import { Skeleton } from "@/components/ui/skeleton";
 import { NewBookingDialog } from "./NewBookingDialog";
@@ -138,7 +139,7 @@ export default function AdminAppointments() {
                       )}
                     </td>
                     <td className="max-w-44 truncate px-5 py-3.5 text-xs text-muted-foreground">
-                      {b.addressLine}, {b.city}
+                      {composeAddress({ addressLine: b.addressLine, unitNumber: b.unitNumber, city: b.city })}
                       {b.sqftMismatch ? (
                         <span
                           className="mt-1 block w-fit rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800"
@@ -249,7 +250,7 @@ export default function AdminAppointments() {
                 amount={b.depositLink === "incomplete" ? "—" : fmtMoney(b.totalAmount)}
                 badge={<StatusBadge status={b.status} />}
                 details={[
-                  { label: "Address", value: `${b.addressLine}, ${b.city}` },
+                  { label: "Address", value: composeAddress({ addressLine: b.addressLine, unitNumber: b.unitNumber, city: b.city }) },
                   { label: "Deposit", value: fmtMoney(b.depositAmount) },
                   {
                     label: "Size",
