@@ -297,10 +297,11 @@ export function validateDurationConfig(raw: unknown): DurationValidation {
  * Commercial and office work has no size ladder and takes its flat block.
  */
 export function durationHoursFor(
-  type: CleaningType | string,
-  sqft: number,
+  type: CleaningType | string | null | undefined,
+  sqft: number | null | undefined,
   config: DurationConfig = DEFAULT_DURATIONS
 ): number {
+  if (type == null || sqft == null) return FALLBACK_DURATION_HOURS;
   const key = type === "airbnb" ? "residential" : type;
   const ladder =
     key === "residential" || key === "deep" || key === "moveinout" ? config.ladders[key] : null;

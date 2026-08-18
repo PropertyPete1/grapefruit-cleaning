@@ -12,6 +12,14 @@ import { notifyOwner } from "./_core/notification";
 import { renderBrandedEmail, renderBrandedEmailText, type BrandedEmail } from "./emailShell";
 
 export interface BookingEmailData {
+  /**
+   * Set when this booking came from a deposit link the owner sent by hand.
+   * The owner notification then leads with "your link was completed" — the
+   * link may have gone out hours ago, and "new booking" would read like a
+   * stranger from the website rather than the lead they already spoke to.
+   * Lists the facts the customer chose themselves (service, size, time).
+   */
+  completedLink?: { customerChose: string[] };
   reference: string;
   serviceName: string;
   date: string;
@@ -105,7 +113,20 @@ export function __resetTransporter(): void {
  * themselves out (see emailShell). `body` is still sent as the text part
  * either way, so every message has a plain-text alternative.
  */
-export async function deliverEmail(to: string, subject: string, body: string, html?: string): Promise<boolean> {
+export async function deliverEmail(
+  to: string | null | undefined,
+  subject: string,
+  body: string,
+  html?: string
+): Promise<boolean> {
+  // Phone-only leads exist now: a customer row may have no email at all. One
+  // guard here covers every flow — confirmation, reminders, balance, status —
+  // so "no address" degrades to "no email goes out" instead of a nodemailer
+  // error in whichever flow forgot to check.
+  if (!to) {
+    console.log(`[Email] Skipped (no address): ${subject}`);
+    return false;
+  }
   const transporter = getTransporter();
   if (!transporter) {
     console.log(`[Email fallback → ${to}] ${subject}\n${body}`);
@@ -283,12 +304,24 @@ export function buildReminderEmail(
 }
 
 export function buildOwnerNotification(data: BookingEmailData): { title: string; content: string } {
+  const headline = data.completedLink
+    ? `Deposit link completed ${data.reference} — ${data.serviceName} on ${data.date} at ${data.time}`
+    : `New booking ${data.reference} — ${data.serviceName} on ${data.date} at ${data.time}`;
   return {
-    title: `${data.slotConflict ? "⚠️ SCHEDULING CONFLICT — " : ""}New booking ${data.reference} — ${data.serviceName} on ${data.date} at ${data.time}`,
+    title: `${data.slotConflict ? "⚠️ SCHEDULING CONFLICT — " : ""}${headline}`,
     content: [
       ...(data.slotConflict
         ? [
             `⚠️ SCHEDULING CONFLICT: this booking was paid AFTER its checkout expired, and another booking now holds the same date and time. Both customers have paid — please contact one of them to reschedule.`,
+            ``,
+          ]
+        : []),
+      ...(data.completedLink
+        ? [
+            `${data.customerName} finished the booking link you sent and paid their deposit.`,
+            ...(data.completedLink.customerChose.length > 0
+              ? [`They chose: ${data.completedLink.customerChose.join(", ")}.`]
+              : []),
             ``,
           ]
         : []),
@@ -810,18 +843,23 @@ export async function sendContactNotification(data: ContactEmailData): Promise<v
 
 export interface DepositLinkEmailData {
   reference: string;
-  serviceName: string;
-  /** Scheduled date (YYYY-MM-DD). */
-  date: string;
-  /** Scheduled start time ("HH:MM"). */
-  time: string;
+  /** Absent when the owner left the service for the customer to choose. */
+  serviceName?: string;
+  /** Scheduled date (YYYY-MM-DD); absent when the customer picks the time. */
+  date?: string;
+  /** Scheduled start time ("HH:MM"); absent when the customer picks it. */
+  time?: string;
   customerName: string;
   customerEmail: string;
   address?: string;
-  /** Price before the customer's own extras, in whole dollars. */
-  basePrice: number;
+  /**
+   * Price before the customer's own extras, in whole dollars. Absent while
+   * the booking is missing a fact pricing depends on (service or size) — the
+   * email then promises a live price on the page instead of naming one.
+   */
+  basePrice?: number | null;
   /** Deposit due on the base price — it moves if they add extras. */
-  deposit: number;
+  deposit?: number | null;
   /** The personal pay page (/pay/deposit/:token). */
   payUrl: string;
   /** Last day the link works (YYYY-MM-DD). */
@@ -844,34 +882,77 @@ export function buildDepositLinkEmail(data: DepositLinkEmailData): {
   html: string;
 } {
   const spanish = data.locale === "es";
+  const priced = data.basePrice != null && data.deposit != null;
+  const scheduled = Boolean(data.date && data.time);
+  // Rows render only for the facts the owner actually locked; what is missing
+  // is exactly what the page will ask for, and promising "$0" or "date TBD"
+  // in an email reads like a mistake rather than an invitation.
+  const details: { label: string; value: string }[] = spanish
+    ? [
+        ...(data.serviceName ? [{ label: "Servicio", value: data.serviceName }] : []),
+        ...(scheduled
+          ? [
+              { label: "Fecha", value: data.date! },
+              { label: "Hora", value: data.time! },
+            ]
+          : []),
+        ...(data.address ? [{ label: "Dirección", value: data.address }] : []),
+        ...(priced
+          ? [
+              { label: "Precio base", value: fmtUsd(data.basePrice!) },
+              { label: "Depósito para confirmar", value: fmtUsd(data.deposit!) },
+            ]
+          : []),
+        { label: "Referencia", value: data.reference },
+      ]
+    : [
+        ...(data.serviceName ? [{ label: "Service", value: data.serviceName }] : []),
+        ...(scheduled
+          ? [
+              { label: "Date", value: data.date! },
+              { label: "Time", value: data.time! },
+            ]
+          : []),
+        ...(data.address ? [{ label: "Address", value: data.address }] : []),
+        ...(priced
+          ? [
+              { label: "Base price", value: fmtUsd(data.basePrice!) },
+              { label: "Deposit to confirm", value: fmtUsd(data.deposit!) },
+            ]
+          : []),
+        { label: "Reference", value: data.reference },
+      ];
+
   const email: BrandedEmail = spanish
     ? {
-        preheader: `Su horario está apartado — elija sus extras y confirme con su depósito.`,
+        preheader: scheduled
+          ? `Su horario está apartado — complete su reserva y pague su depósito.`
+          : `Complete su reserva en línea — elija lo que falta y pague su depósito.`,
         eyebrow: "Su reserva está lista",
-        headline: "¡Su horario está apartado! 🍊",
+        headline: scheduled ? "¡Su horario está apartado! 🍊" : "¡Empecemos su reserva! 🍊",
         intro: [
           `Hola ${data.customerName},`,
-          `Gracias por comunicarse con nosotros. Preparamos su reserva con lo que conversamos y le apartamos el horario.`,
-          `Solo falta un paso: abra su enlace, agregue los extras que desee y pague su depósito para confirmar.`,
+          `Gracias por comunicarse con nosotros. Preparamos su reserva con lo que conversamos.`,
+          scheduled
+            ? `Solo falta un paso: abra su enlace, agregue los extras que desee y pague su depósito para confirmar.`
+            : `Abra su enlace para completar lo que falta — toma un par de minutos y el precio se muestra al instante.`,
         ],
         detailsTitle: "Su reserva",
-        details: [
-          { label: "Servicio", value: data.serviceName },
-          { label: "Fecha", value: data.date },
-          { label: "Hora", value: data.time },
-          ...(data.address ? [{ label: "Dirección", value: data.address }] : []),
-          { label: "Precio base", value: fmtUsd(data.basePrice) },
-          { label: "Depósito para confirmar", value: fmtUsd(data.deposit) },
-          { label: "Referencia", value: data.reference },
-        ],
+        details,
         callout: {
-          text: "Elija sus extras y vea su precio actualizarse al instante. Usted decide qué incluir — nosotros nos encargamos del resto.",
-          ctaLabel: "Elegir extras y pagar depósito",
+          text: priced
+            ? "Elija sus extras y vea su precio actualizarse al instante. Usted decide qué incluir — nosotros nos encargamos del resto."
+            : "Complete los detalles a su ritmo y vea su precio en vivo antes de pagar. Sin sorpresas.",
+          ctaLabel: scheduled ? "Completar y pagar depósito" : "Completar mi reserva",
           ctaUrl: data.payUrl,
         },
         outro: [
-          `El precio base cubre su limpieza tal como la conversamos. Si agrega extras, el total y el depósito se actualizan antes de pagar — sin sorpresas.`,
-          `Su horario está apartado hasta el ${data.expiresOn}. Después de esa fecha podríamos ofrecerlo a otra persona.`,
+          priced
+            ? `El precio base cubre su limpieza tal como la conversamos. Si agrega extras, el total y el depósito se actualizan antes de pagar — sin sorpresas.`
+            : `Su precio se calcula mientras elige, y el total y el depósito se muestran antes de pagar — sin sorpresas.`,
+          scheduled
+            ? `Su horario está apartado hasta el ${data.expiresOn}. Después de esa fecha podríamos ofrecerlo a otra persona.`
+            : `Su enlace está disponible hasta el ${data.expiresOn}. Si expira, llámenos y le enviamos uno nuevo.`,
           data.bizPhone
             ? `¿Alguna pregunta? Llámenos al ${data.bizPhone} o responda a este correo.`
             : `¿Alguna pregunta? Simplemente responda a este correo.`,
@@ -882,32 +963,34 @@ export function buildDepositLinkEmail(data: DepositLinkEmailData): {
           : `Grapefruit Cleaning Co.`,
       }
     : {
-        preheader: `Your time is held — pick your extras and confirm with your deposit.`,
+        preheader: scheduled
+          ? `Your time is held — finish your booking and pay your deposit.`
+          : `Finish your booking online — choose what's missing and pay your deposit.`,
         eyebrow: "Your booking is ready",
-        headline: "Your time is held! 🍊",
+        headline: scheduled ? "Your time is held! 🍊" : "Let's get you booked! 🍊",
         intro: [
           `Hi ${data.customerName},`,
-          `Thanks for getting in touch. We've set up your booking from what we discussed and held your time slot.`,
-          `One step left: open your link, add any extras you'd like, and pay your deposit to confirm.`,
+          `Thanks for getting in touch. We've set up your booking from what we discussed.`,
+          scheduled
+            ? `One step left: open your link, add any extras you'd like, and pay your deposit to confirm.`
+            : `Open your link to fill in the rest — it takes a couple of minutes, and your price shows up as you go.`,
         ],
         detailsTitle: "Your booking",
-        details: [
-          { label: "Service", value: data.serviceName },
-          { label: "Date", value: data.date },
-          { label: "Time", value: data.time },
-          ...(data.address ? [{ label: "Address", value: data.address }] : []),
-          { label: "Base price", value: fmtUsd(data.basePrice) },
-          { label: "Deposit to confirm", value: fmtUsd(data.deposit) },
-          { label: "Reference", value: data.reference },
-        ],
+        details,
         callout: {
-          text: "Pick your extras and watch your price update instantly. You decide what's included — we'll handle the rest.",
-          ctaLabel: "Choose extras & pay deposit",
+          text: priced
+            ? "Pick your extras and watch your price update instantly. You decide what's included — we'll handle the rest."
+            : "Finish the details at your own pace and see your live price before you pay. No surprises.",
+          ctaLabel: scheduled ? "Finish & pay deposit" : "Finish my booking",
           ctaUrl: data.payUrl,
         },
         outro: [
-          `The base price covers your cleaning exactly as we discussed. If you add extras, your total and deposit update before you pay — no surprises.`,
-          `We're holding your time through ${data.expiresOn}. After that we may need to offer it to someone else.`,
+          priced
+            ? `The base price covers your cleaning exactly as we discussed. If you add extras, your total and deposit update before you pay — no surprises.`
+            : `Your price is worked out as you choose, and the total and deposit show before you pay — no surprises.`,
+          scheduled
+            ? `We're holding your time through ${data.expiresOn}. After that we may need to offer it to someone else.`
+            : `Your link is good through ${data.expiresOn}. If it expires, just call us and we'll send a fresh one.`,
           data.bizPhone
             ? `Any questions? Call us at ${data.bizPhone} or just reply to this email.`
             : `Any questions? Just reply to this email.`,

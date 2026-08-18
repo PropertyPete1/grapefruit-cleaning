@@ -75,16 +75,18 @@ function toBalanceEmailData(
   bizPhone?: string
 ): BalanceEmailData {
   const locale = booking.locale as "en" | "es";
+  // Balances exist for completed jobs, which paid their way past the
+  // completeness gate — the fallbacks are for the type system.
   return {
     reference: booking.reference,
     invoiceNumber: invoice.number,
-    serviceName: SERVICE_NAMES[booking.serviceType][locale],
-    date: booking.scheduledDate,
+    serviceName: SERVICE_NAMES[booking.serviceType ?? "residential"][locale],
+    date: booking.scheduledDate ?? "",
     total: booking.totalAmount,
     deposit: booking.stripePaymentIntentId ? booking.depositAmount : 0,
     balance: invoice.amount,
     customerName: customer.firstName,
-    customerEmail: customer.email,
+    customerEmail: customer.email ?? "",
     customerPhone: customer.phone ?? undefined,
     address: [booking.addressLine, booking.city, booking.zip].filter(Boolean).join(", "),
     payUrl,
@@ -105,7 +107,9 @@ export async function createBalanceCheckoutSession(args: {
   const { invoice, booking, customerEmail, origin } = args;
   const now = args.now ?? new Date();
   const locale = booking.locale as "en" | "es";
-  const serviceName = SERVICE_NAMES[booking.serviceType][locale];
+  // Balance work happens on completed jobs, which paid their way past the
+  // completeness gate — the fallback is for the type system.
+  const serviceName = SERVICE_NAMES[booking.serviceType ?? "residential"][locale];
   const payUrl = balancePayUrl(origin, invoice.payToken ?? "");
 
   return getStripe().checkout.sessions.create({
@@ -301,7 +305,7 @@ export async function approveBalanceInvoice(args: {
   const session = await createBalanceCheckoutSession({
     invoice: { id: invoiceId, number: invoice.number, amount, payToken },
     booking,
-    customerEmail: customer.email,
+    customerEmail: customer.email ?? "",
     origin,
     now,
   });
@@ -370,7 +374,7 @@ export async function resendBalanceLink(invoiceId: number, origin: string): Prom
   const session = await createBalanceCheckoutSession({
     invoice: { id: invoice.id, number: invoice.number, amount: invoice.amount, payToken },
     booking,
-    customerEmail: customer.email,
+    customerEmail: customer.email ?? "",
     origin,
     now,
   });

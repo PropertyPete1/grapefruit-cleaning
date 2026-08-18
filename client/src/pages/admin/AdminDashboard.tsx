@@ -72,7 +72,7 @@ export default function AdminDashboard() {
                 {recent.map(b => (
                   <tr key={b.id} className="border-b border-border/60 last:border-0 hover:bg-muted/40">
                     <td className="px-6 py-3.5 font-mono text-xs font-semibold text-primary">{b.reference}</td>
-                    <td className="px-6 py-3.5">{SERVICE_LABELS[b.serviceType] ?? b.serviceType}</td>
+                    <td className="px-6 py-3.5">{b.serviceType ? (SERVICE_LABELS[b.serviceType] ?? b.serviceType) : "Customer picks"}</td>
                     <td className="px-6 py-3.5">{fmtDate(b.scheduledDate)}</td>
                     <td className="px-6 py-3.5">{b.scheduledTime}</td>
                     <td className="px-6 py-3.5 font-semibold">{fmtMoney(b.totalAmount)}</td>

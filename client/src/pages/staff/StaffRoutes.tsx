@@ -39,12 +39,14 @@ type StaffBookingRow = {
   booking: {
     id: number;
     reference: string;
-    serviceType: string;
-    scheduledDate: string;
-    scheduledTime: string;
+    // Nullable in the row type since progressive links landed; the staff
+    // queries exclude slotless rows, so these are always present here.
+    serviceType: string | null;
+    scheduledDate: string | null;
+    scheduledTime: string | null;
     bedrooms: number;
     bathrooms: number;
-    sqft: number;
+    sqft: number | null;
     extras: string | null;
     addressLine: string | null;
     city: string | null;
@@ -57,7 +59,7 @@ type StaffBookingRow = {
     /** Hours on site — resolved server-side, so legacy rows still have one. */
     durationHours: number;
   };
-  customer: { firstName: string; lastName: string; phone: string | null; email: string } | null;
+  customer: { firstName: string; lastName: string; phone: string | null; email: string | null } | null;
 };
 
 function JobCard({ row, onStatusChange }: { row: StaffBookingRow; onStatusChange?: () => void }) {
@@ -78,7 +80,7 @@ function JobCard({ row, onStatusChange }: { row: StaffBookingRow; onStatusChange
         <div>
           <div className="flex items-center gap-2">
             <p className="font-display text-base font-bold text-foreground">
-              {SERVICE_LABELS[booking.serviceType] ?? booking.serviceType}
+              {booking.serviceType ? (SERVICE_LABELS[booking.serviceType] ?? booking.serviceType) : "Service TBD"}
             </p>
             <StatusBadge status={booking.status} />
           </div>
@@ -88,7 +90,7 @@ function JobCard({ row, onStatusChange }: { row: StaffBookingRow; onStatusChange
           {/* The whole span, not just the start: this is the block of the day
               the job actually takes, and what the calendar holds for it. */}
           <p className="mt-0.5 text-xs font-semibold text-foreground">
-            {formatJobSpan(booking.scheduledTime, booking.durationHours)}
+            {booking.scheduledTime ? formatJobSpan(booking.scheduledTime, booking.durationHours) : "—"}
           </p>
         </div>
         <p className="text-sm font-bold text-foreground">{money(booking.totalAmount)}</p>
@@ -111,7 +113,7 @@ function JobCard({ row, onStatusChange }: { row: StaffBookingRow; onStatusChange
           </p>
         )}
         <p className="sm:col-span-2">
-          {booking.bedrooms} bd · {booking.bathrooms} ba · {booking.sqft.toLocaleString()} sq ft
+          {booking.bedrooms} bd · {booking.bathrooms} ba · {booking.sqft != null ? `${booking.sqft.toLocaleString()} sq ft` : "size TBD"}
           {extras.length > 0 && <> · Extras: {extras.join(", ")}</>}
         </p>
         {booking.notes && <p className="rounded-xl bg-muted/60 p-2.5 text-xs sm:col-span-2">“{booking.notes}”</p>}
@@ -247,6 +249,7 @@ function StaffCalendar() {
   const byDate = useMemo(() => {
     const map: Record<string, StaffBookingRow[]> = {};
     (rows ?? []).forEach((r) => {
+      if (r.booking.scheduledDate == null) return; // slotless rows never reach staff queries
       (map[r.booking.scheduledDate] ??= []).push(r as StaffBookingRow);
     });
     return map;
@@ -321,10 +324,10 @@ function StaffCalendar() {
                       <div
                         key={j.booking.id}
                         className="truncate rounded-md bg-secondary/15 px-1.5 py-0.5 text-[10px] font-semibold text-secondary-foreground"
-                        title={`${formatJobSpan(j.booking.scheduledTime, j.booking.durationHours)} — ${SERVICE_LABELS[j.booking.serviceType] ?? j.booking.serviceType}${j.customer ? ` — ${j.customer.firstName} ${j.customer.lastName}` : ""}`}
+                        title={`${j.booking.scheduledTime ? formatJobSpan(j.booking.scheduledTime, j.booking.durationHours) : "—"} — ${j.booking.serviceType ? (SERVICE_LABELS[j.booking.serviceType] ?? j.booking.serviceType) : "Service TBD"}${j.customer ? ` — ${j.customer.firstName} ${j.customer.lastName}` : ""}`}
                       >
-                        {j.booking.scheduledTime}–{intervalEndTime(j.booking.scheduledTime, j.booking.durationHours)}{" "}
-                        {SERVICE_LABELS[j.booking.serviceType] ?? j.booking.serviceType}
+                        {j.booking.scheduledTime}–{j.booking.scheduledTime ? intervalEndTime(j.booking.scheduledTime, j.booking.durationHours) : ""}{" "}
+                        {j.booking.serviceType ? (SERVICE_LABELS[j.booking.serviceType] ?? j.booking.serviceType) : "Service TBD"}
                       </div>
                     ))}
                     {jobs.length > 3 && <p className="text-[10px] font-medium text-muted-foreground">+{jobs.length - 3} more</p>}

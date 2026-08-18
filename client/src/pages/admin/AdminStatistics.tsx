@@ -23,7 +23,7 @@ export default function AdminStatistics() {
 
   const revenueData = (revenue.data ?? []).map(r => ({ month: r.month, total: Number(r.total) }));
   const serviceData = (byService.data ?? []).map(s => ({
-    name: SERVICE_LABELS[s.serviceType] ?? s.serviceType,
+    name: s.serviceType ? (SERVICE_LABELS[s.serviceType] ?? s.serviceType) : "Not chosen yet",
     value: Number(s.count),
   }));
 

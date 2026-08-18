@@ -140,7 +140,7 @@ async function payBalanceHandler(req: Request, res: Response) {
     const session = await createBalanceCheckoutSession({
       invoice,
       booking,
-      customerEmail: customer.email,
+      customerEmail: customer.email ?? "",
       origin: requestOrigin(req),
     });
     await db.updateInvoice(invoice.id, { stripeSessionId: session.id });

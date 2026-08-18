@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, isNull, like, lte, notInArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, like, lte, notInArray, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
@@ -120,24 +120,43 @@ function affectedRows(result: unknown): number {
 }
 
 // ---------- Customers ----------
+/**
+ * Finds the customer this contact info belongs to, or creates them.
+ *
+ * Matched by email when there is one, by phone otherwise — a text lead the
+ * owner enters with just a number must land on the same customer row next
+ * time that number calls, not mint a duplicate. Callers guarantee at least
+ * one of the two (the public form requires email; the admin form refuses to
+ * submit without email or phone).
+ *
+ * Existing values are never clobbered by blanks: a phone-only re-entry of a
+ * known customer keeps their email, and a missing last name keeps the one on
+ * file.
+ */
 export async function findOrCreateCustomer(data: {
   firstName: string;
-  lastName: string;
-  email: string;
-  phone?: string;
+  lastName?: string;
+  email?: string | null;
+  phone?: string | null;
   address?: string;
   city?: string;
   zip?: string;
   preferredLocale?: "en" | "es";
 }) {
   const db = requireDb(await getDb());
-  const existing = await db.select().from(customers).where(eq(customers.email, data.email)).limit(1);
+  const match = data.email
+    ? eq(customers.email, data.email)
+    : data.phone
+      ? eq(customers.phone, data.phone)
+      : null;
+  const existing = match ? await db.select().from(customers).where(match).limit(1) : [];
   if (existing.length > 0) {
     await db
       .update(customers)
       .set({
         firstName: data.firstName,
-        lastName: data.lastName,
+        lastName: data.lastName || existing[0].lastName,
+        email: data.email ?? existing[0].email,
         phone: data.phone ?? existing[0].phone,
         address: data.address ?? existing[0].address,
         city: data.city ?? existing[0].city,
@@ -147,7 +166,7 @@ export async function findOrCreateCustomer(data: {
       .where(eq(customers.id, existing[0].id));
     return existing[0].id;
   }
-  const result = await db.insert(customers).values(data);
+  const result = await db.insert(customers).values({ ...data, lastName: data.lastName ?? "" });
   return Number(result[0].insertId);
 }
 
@@ -402,7 +421,11 @@ export async function getOccupiedBookings(date: string) {
     .from(bookings)
     .where(and(eq(bookings.scheduledDate, date), sql`${bookings.status} NOT IN ('cancelled', 'expired')`));
   const now = new Date();
-  return rows.filter(r => blocksSlot(r, now));
+  // The date filter can only match rows with a slot, and a slot is always
+  // both halves — the narrowing is for the types, the filter is a no-op.
+  return rows
+    .filter((r): r is typeof r & { time: string } => r.time != null)
+    .filter(r => blocksSlot(r, now));
 }
 
 /**
@@ -416,7 +439,19 @@ export async function expireStaleDepositBookings(now: Date = new Date()): Promis
   const result = await db
     .update(bookings)
     .set({ status: "expired" })
-    .where(and(eq(bookings.status, "pending_deposit"), bookingHoldElapsed(now)));
+    .where(
+      and(
+        eq(bookings.status, "pending_deposit"),
+        // A booking whose customer hasn't picked a time yet holds no slot, so
+        // there is nothing here to release. Its deposit link dies by its own
+        // token window instead (payTokenExpiresAt → depositLinkStatus
+        // "expired"), which a resend renews. The hold clock starts, from
+        // scratch, at the moment a slot is actually claimed.
+        isNotNull(bookings.scheduledDate),
+        isNotNull(bookings.scheduledTime),
+        bookingHoldElapsed(now)
+      )
+    );
   return affectedRows(result);
 }
 
@@ -526,6 +561,10 @@ export async function listBookingsForStaff(filter: { status?: string; date?: str
   const conditions = [];
   if (filter.status) conditions.push(eq(bookings.status, filter.status as never));
   if (filter.date) conditions.push(eq(bookings.scheduledDate, filter.date));
+  // Slotless admin-created bookings are excluded outright: a crew can act on
+  // a job with a time, and only the owner (Admin → Appointments) tracks links
+  // still waiting on the customer.
+  conditions.push(isNotNull(bookings.scheduledDate));
   const base = db
     .select({ booking: bookings, customer: customers })
     .from(bookings)

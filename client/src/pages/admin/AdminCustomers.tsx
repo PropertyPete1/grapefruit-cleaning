@@ -156,7 +156,7 @@ export default function AdminCustomers() {
                     <div key={b.id} className="flex items-center justify-between rounded-xl border border-border p-3 text-sm">
                       <div>
                         <span className="font-mono text-xs font-semibold text-primary">{b.reference}</span>
-                        <p className="font-medium">{SERVICE_LABELS[b.serviceType] ?? b.serviceType}</p>
+                        <p className="font-medium">{b.serviceType ? (SERVICE_LABELS[b.serviceType] ?? b.serviceType) : "Customer picks"}</p>
                         <p className="text-xs text-muted-foreground">
                           {fmtDate(b.scheduledDate)} · {b.scheduledTime}
                         </p>

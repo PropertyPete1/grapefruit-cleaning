@@ -10,7 +10,7 @@
  * money is recomputed server-side at that moment — the client sends extra IDs
  * and nothing else.
  */
-import type { DepositLinkStatus } from "@shared/depositLinkStatus";
+import type { BookingNeeds, DepositLinkStatus } from "@shared/depositLinkStatus";
 import { STALE_DEPOSIT_MINUTES } from "./bookingRules";
 
 /**
@@ -25,7 +25,56 @@ export function depositLinkExpiresAt(createdAt: Date, holdMinutes: number): Date
   return new Date(createdAt.getTime() + holdMinutes * 60_000);
 }
 
-export type { DepositLinkStatus };
+export type { BookingNeeds, DepositLinkStatus };
+
+/** The row fields completeness is judged from. */
+export interface CompletionFields {
+  serviceType?: string | null;
+  sqft?: number | null;
+  scheduledDate?: string | null;
+  scheduledTime?: string | null;
+}
+
+/**
+ * What a booking still needs before its deposit can be taken.
+ *
+ * Judged from the row alone: a NULL fact is a missing fact, whoever's turn it
+ * is to supply it. This is what the customer page's question list and the
+ * admin table's "incomplete" badge are both derived from, so they can never
+ * disagree about whether a link is finished.
+ */
+export function bookingNeeds(booking: CompletionFields): BookingNeeds {
+  return {
+    service: booking.serviceType == null,
+    size: booking.sqft == null,
+    slot: booking.scheduledDate == null || booking.scheduledTime == null,
+  };
+}
+
+/** True once every fact needed to price and schedule the job is present. */
+export function isBookingComplete(booking: CompletionFields): boolean {
+  const needs = bookingNeeds(booking);
+  return !needs.service && !needs.size && !needs.slot;
+}
+
+/** Facts the owner locked at creation, parsed from the adminProvided CSV. */
+export type ProvidedFact = "service" | "size" | "address" | "slot";
+
+export function parseAdminProvided(raw: string | null | undefined): Set<ProvidedFact> {
+  if (!raw) return new Set();
+  const valid: ProvidedFact[] = ["service", "size", "address", "slot"];
+  return new Set(
+    raw
+      .split(",")
+      .map(part => part.trim())
+      .filter((part): part is ProvidedFact => (valid as string[]).includes(part))
+  );
+}
+
+export function serializeAdminProvided(facts: Iterable<ProvidedFact>): string | undefined {
+  const list = Array.from(new Set(facts));
+  return list.length > 0 ? list.join(",") : undefined;
+}
 
 /**
  * Deposit-link state shown in Admin → Appointments.
@@ -35,7 +84,7 @@ export type { DepositLinkStatus };
  * - "awaiting_payment": link is live and payable.
  */
 export function depositLinkStatus(
-  booking: {
+  booking: CompletionFields & {
     status: string;
     /** The token itself server-side; list rows pass hasPayToken instead. */
     payToken?: string | null;
@@ -51,15 +100,19 @@ export function depositLinkStatus(
   if (booking.status !== "pending_deposit") {
     return booking.status === "cancelled" || booking.status === "expired" ? "expired" : "paid";
   }
-  if (!booking.payTokenExpiresAt) return "awaiting_payment";
-  const expires = new Date(booking.payTokenExpiresAt).getTime();
-  if (!Number.isFinite(expires)) return "awaiting_payment";
-  return expires <= now.getTime() ? "expired" : "awaiting_payment";
+  if (booking.payTokenExpiresAt) {
+    const expires = new Date(booking.payTokenExpiresAt).getTime();
+    // A dead link outranks an unfinished one: whatever is missing, the fix is
+    // the same — resend — and "incomplete" would suggest the customer can
+    // still open it.
+    if (Number.isFinite(expires) && expires <= now.getTime()) return "expired";
+  }
+  return isBookingComplete(booking) ? "awaiting_payment" : "incomplete";
 }
 
 /** True while the link may still mint a Checkout Session. */
 export function isDepositLinkPayable(
-  booking: {
+  booking: CompletionFields & {
     status: string;
     payToken?: string | null;
     hasPayToken?: boolean;
@@ -68,6 +121,20 @@ export function isDepositLinkPayable(
   now: Date = new Date()
 ): boolean {
   return depositLinkStatus(booking, now) === "awaiting_payment";
+}
+
+/** True while the customer may still open the link and work on it. */
+export function isDepositLinkOpen(
+  booking: CompletionFields & {
+    status: string;
+    payToken?: string | null;
+    hasPayToken?: boolean;
+    payTokenExpiresAt?: Date | string | null;
+  },
+  now: Date = new Date()
+): boolean {
+  const status = depositLinkStatus(booking, now);
+  return status === "awaiting_payment" || status === "incomplete";
 }
 
 /**

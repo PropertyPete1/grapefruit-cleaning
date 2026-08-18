@@ -32,6 +32,9 @@ export function dueReminderKind(
   today: string,
 ): ReminderKind | null {
   if (booking.status !== "confirmed" && booking.status !== "in_progress") return null;
+  // Slotless rows are pending-only, but the guard costs nothing: no date, no
+  // day to count down to, no reminder.
+  if (!booking.scheduledDate) return null;
   const daysUntil = daysBetween(today, booking.scheduledDate);
   if (daysUntil < 0) return null;
   if (!booking.dayReminderSentAt && daysUntil <= 1) return "day";
@@ -46,17 +49,19 @@ export function dueReminderKind(
 function toEmailData(booking: Booking, customer: Customer, bizPhone?: string): BookingEmailData {
   const locale = booking.locale as "en" | "es";
   const extras: string[] = JSON.parse(booking.extras ?? "[]");
+  // Reminders scan confirmed jobs, which paid their way past the completeness
+  // gate — the fallbacks are for the type system.
   return {
     reference: booking.reference,
-    serviceName: SERVICE_NAMES[booking.serviceType][locale],
-    date: booking.scheduledDate,
-    time: booking.scheduledTime,
+    serviceName: SERVICE_NAMES[booking.serviceType ?? "residential"][locale],
+    date: booking.scheduledDate ?? "",
+    time: booking.scheduledTime ?? "",
     frequencyLabel: FREQUENCY_NAMES[booking.frequency][locale],
     extras: extras.map(e => EXTRA_NAMES[e]?.[locale] ?? e),
     total: booking.totalAmount,
     deposit: booking.depositAmount,
     customerName: customer.firstName,
-    customerEmail: customer.email,
+    customerEmail: customer.email ?? "",
     customerPhone: customer.phone ?? undefined,
     address: [booking.addressLine, booking.city, booking.zip].filter(Boolean).join(", "),
     locale,

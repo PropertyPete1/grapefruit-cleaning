@@ -40,7 +40,12 @@ export const customers = mysqlTable("customers", {
   id: int("id").autoincrement().primaryKey(),
   firstName: varchar("firstName", { length: 100 }).notNull(),
   lastName: varchar("lastName", { length: 100 }).notNull(),
-  email: varchar("email", { length: 320 }).notNull(),
+  /**
+   * NULL for a phone-only lead the owner entered by hand. Every email send
+   * funnels through deliverEmail, which refuses an empty address, so a missing
+   * one degrades to "no email goes out" rather than an error anywhere.
+   */
+  email: varchar("email", { length: 320 }),
   phone: varchar("phone", { length: 40 }),
   address: varchar("address", { length: 255 }),
   city: varchar("city", { length: 100 }),
@@ -56,13 +61,26 @@ export const bookings = mysqlTable("bookings", {
   id: int("id").autoincrement().primaryKey(),
   reference: varchar("reference", { length: 20 }).notNull().unique(),
   customerId: int("customerId").notNull(),
-  serviceType: mysqlEnum("serviceType", ["residential", "commercial", "airbnb", "moveinout", "deep", "office"]).notNull(),
+  /**
+   * NULL on an admin-created booking whose customer hasn't chosen yet. A phone
+   * lead may be nothing but a name and a number; the missing facts are what
+   * the deposit link asks the customer for. Self-serve bookings always have
+   * one — the public form can't submit without it.
+   */
+  serviceType: mysqlEnum("serviceType", ["residential", "commercial", "airbnb", "moveinout", "deep", "office"]),
   frequency: mysqlEnum("frequency", ["onetime", "weekly", "biweekly", "monthly"]).default("onetime").notNull(),
-  scheduledDate: varchar("scheduledDate", { length: 10 }).notNull(),
-  scheduledTime: varchar("scheduledTime", { length: 5 }).notNull(),
+  /**
+   * Both NULL while an admin-created booking waits for the customer to pick a
+   * time on their link. A slotless booking holds no inventory: slotKey is
+   * generated from these via CONCAT, and CONCAT with a NULL argument is NULL,
+   * so the unique index ignores the row until a slot is actually claimed.
+   */
+  scheduledDate: varchar("scheduledDate", { length: 10 }),
+  scheduledTime: varchar("scheduledTime", { length: 5 }),
   bedrooms: int("bedrooms").default(2).notNull(),
   bathrooms: int("bathrooms").default(1).notNull(),
-  sqft: int("sqft").default(1000).notNull(),
+  /** NULL until a size is known — owner-entered, county-verified, or customer-chosen. */
+  sqft: int("sqft"),
   extras: text("extras"),
   addressLine: varchar("addressLine", { length: 255 }),
   city: varchar("city", { length: 100 }),
@@ -117,6 +135,21 @@ export const bookings = mysqlTable("bookings", {
    * had already been retaken by another booking — owner must reschedule one.
    */
   slotConflict: boolean("slotConflict").default(false).notNull(),
+  /**
+   * Which facts the OWNER supplied when creating a booking by hand, as a CSV
+   * subset of "service,size,address,slot".
+   *
+   * This is the completion-state provenance: a fact the owner locked is shown
+   * to the customer as settled and may not be changed through the deposit
+   * link, while anything absent from this list is the customer's to fill in —
+   * and to re-edit until they pay. Derivable from nothing else: once the
+   * customer picks a service, the row looks identical to one where the owner
+   * chose it, and the difference decides both what the page may edit and what
+   * the owner's completion email highlights.
+   *
+   * NULL on self-serve bookings, where the question never arises.
+   */
+  adminProvided: varchar("adminProvided", { length: 60 }),
   /**
    * Who created this booking. "self_serve" is the public booking flow;
    * "admin" is the owner entering a phone or text lead by hand, which then
