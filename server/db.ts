@@ -185,6 +185,13 @@ export async function listCustomers(search?: string) {
   return db.select().from(customers).orderBy(desc(customers.createdAt)).limit(200);
 }
 
+/** Customers by id, for attaching contact info to a bookings list in one query. */
+export async function getCustomersByIds(ids: number[]) {
+  if (ids.length === 0) return [];
+  const db = requireDb(await getDb());
+  return db.select().from(customers).where(inArray(customers.id, ids));
+}
+
 export async function getCustomerById(id: number) {
   const db = requireDb(await getDb());
   const rows = await db.select().from(customers).where(eq(customers.id, id)).limit(1);

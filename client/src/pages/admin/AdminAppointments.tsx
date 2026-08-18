@@ -2,9 +2,10 @@ import { useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { formatJobSpan } from "@shared/availability";
-import { composeAddress } from "@shared/property";
+import { composeAddressOr } from "@shared/property";
 import { trpc } from "@/lib/trpc";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { NewBookingDialog } from "./NewBookingDialog";
 import {
   Select,
@@ -15,6 +16,7 @@ import {
 } from "@/components/ui/select";
 import { DepositLinkCell } from "./DepositLinkCell";
 import { SetTimeDialog } from "./SetTimeDialog";
+import { BookingDetails, type BookingDetailsRow } from "./BookingDetails";
 import {
   NotesBlock,
   PageHeader,
@@ -30,6 +32,8 @@ const STATUSES = ["pending_deposit", "confirmed", "in_progress", "completed", "c
 
 export default function AdminAppointments() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  /** The row whose full details are open (desktop dialog). */
+  const [detailRow, setDetailRow] = useState<BookingDetailsRow | null>(null);
   const utils = trpc.useUtils();
   const bookings = trpc.admin.bookings.useQuery(
     statusFilter === "all" ? {} : { status: statusFilter as (typeof STATUSES)[number] }
@@ -110,7 +114,18 @@ export default function AdminAppointments() {
               <tbody>
                 {(bookings.data ?? []).map(b => (
                   <tr key={b.id} className="border-b border-border/60 last:border-0 hover:bg-muted/40">
-                    <td className="px-5 py-3.5 font-mono text-xs font-semibold text-primary">{b.reference}</td>
+                    <td className="px-5 py-3.5">
+                      {/* The reference doubles as the door to the full record —
+                          the desktop equivalent of the card's disclosure. */}
+                      <button
+                        type="button"
+                        onClick={() => setDetailRow(b as BookingDetailsRow)}
+                        className="font-mono text-xs font-semibold text-primary underline decoration-dotted underline-offset-2"
+                        title="Full details — customer, property, money"
+                      >
+                        {b.reference}
+                      </button>
+                    </td>
                     <td className="px-5 py-3.5">
                       {b.serviceType ? (SERVICE_LABELS[b.serviceType] ?? b.serviceType) : (
                         <span className="text-xs text-muted-foreground">Customer picks</span>
@@ -155,7 +170,10 @@ export default function AdminAppointments() {
                       )}
                     </td>
                     <td className="max-w-44 truncate px-5 py-3.5 text-xs text-muted-foreground">
-                      {composeAddress({ addressLine: b.addressLine, unitNumber: b.unitNumber, city: b.city })}
+                      {composeAddressOr(
+                        { addressLine: b.addressLine, unitNumber: b.unitNumber, city: b.city },
+                        "No address yet"
+                      )}
                       {b.sqftMismatch ? (
                         <span
                           className="mt-1 block w-fit rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800"
@@ -271,16 +289,6 @@ export default function AdminAppointments() {
                 amount={b.depositLink === "incomplete" ? "—" : fmtMoney(b.totalAmount)}
                 badge={<StatusBadge status={b.status} />}
                 details={[
-                  { label: "Address", value: composeAddress({ addressLine: b.addressLine, unitNumber: b.unitNumber, city: b.city }) },
-                  { label: "Deposit", value: fmtMoney(b.depositAmount) },
-                  {
-                    label: "Size",
-                    value: b.verifiedSqft
-                      ? `${b.verifiedSqft.toLocaleString()} ft² verified${b.sqftMismatch ? " (price corrected)" : ""}`
-                      : b.sqft != null
-                        ? `${b.sqft.toLocaleString()} ft²`
-                        : "Customer picks",
-                  },
                   ...(b.slotConflict ? [{ label: "Warning", value: "Slot conflict" }] : []),
                   ...(pendingByBooking.get(b.id) !== undefined
                     ? [
@@ -295,7 +303,7 @@ export default function AdminAppointments() {
                       ]
                     : []),
                 ]}
-                note={b.notes ? <NotesBlock notes={b.notes} /> : undefined}
+                note={<BookingDetails row={b as BookingDetailsRow} />}
                 actions={
                   <>
                     {b.depositLink !== "none" && (
@@ -354,6 +362,17 @@ export default function AdminAppointments() {
           />
         )}
       </div>
+
+      {detailRow && (
+        <Dialog open onOpenChange={open => !open && setDetailRow(null)}>
+          <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="font-mono text-sm">{detailRow.reference}</DialogTitle>
+            </DialogHeader>
+            <BookingDetails row={detailRow} />
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }

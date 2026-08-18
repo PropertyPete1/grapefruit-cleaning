@@ -105,14 +105,77 @@ export const adminRouter = router({
     .query(async ({ input }) => {
       const rows = await withDurationHours(await db.listBookings(input));
       const now = new Date();
+      // The owner's Details panel needs who to call — name, phone, email,
+      // language — so the customer rides along, fetched in one batch. Flat
+      // fields rather than a nested object, so every existing consumer of
+      // these rows keeps its shape.
+      const customerIds = Array.from(new Set(rows.map(row => row.customerId)));
+      const customerById = new Map(
+        (await db.getCustomersByIds(customerIds)).map(customer => [customer.id, customer])
+      );
       // Derived, never the token itself: db.listBookings strips payToken, and
       // the owner fetches the actual URL through depositLink below when they
       // ask for it. A list that carried the credential would put it in every
       // browser tab, every log, every screenshot of the appointments table.
-      return rows.map(row => ({
-        ...row,
-        depositLink: depositLinkStatus(row, now),
-      }));
+      return rows.map(row => {
+        const customer = customerById.get(row.customerId);
+        return {
+          ...row,
+          depositLink: depositLinkStatus(row, now),
+          customerName: customer ? `${customer.firstName} ${customer.lastName}`.trim() : "",
+          customerPhone: customer?.phone ?? null,
+          customerEmail: customer?.email ?? null,
+          customerLocale: (customer?.preferredLocale as "en" | "es") ?? "en",
+        };
+      });
+    }),
+
+  /**
+   * Fix a booking's contact info — the owner typo'd an email on a phone lead,
+   * the link bounced, the customer is waiting. Editable at ANY status: none of
+   * these fields bear on price or scheduling.
+   *
+   * The edit lands on the CUSTOMER record, not a per-booking copy: one person,
+   * one identity. Their other bookings see the correction too, which is what
+   * "fixing a typo" means — the alternative leaves the same wrong email
+   * waiting to bounce the next balance link. The booking itself carries only
+   * the language, which drives its emails and its pay page.
+   */
+  updateBookingContact: adminProcedure
+    .input(
+      z
+        .object({
+          bookingId: z.number().int(),
+          firstName: z.string().min(1, "A first name is required").max(100),
+          lastName: z.string().max(100).optional(),
+          email: z.string().email("That email doesn't look right").max(320).optional().or(z.literal("")),
+          phone: z
+            .string()
+            .regex(/^[\d\s()+.-]{7,40}$/, "That phone number doesn't look right")
+            .optional()
+            .or(z.literal("")),
+          locale: z.enum(["en", "es"]),
+        })
+        .refine(input => (input.email ?? "").trim() !== "" || (input.phone ?? "").trim() !== "", {
+          message: "Keep at least one way to reach them — an email or a phone number.",
+        })
+    )
+    .mutation(async ({ input }) => {
+      const booking = await db.getBookingById(input.bookingId);
+      if (!booking) throw new TRPCError({ code: "NOT_FOUND", message: "Booking not found" });
+      const customer = await db.getCustomerById(booking.customerId);
+      if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Customer not found" });
+      await db.updateCustomer(customer.id, {
+        firstName: input.firstName.trim(),
+        lastName: input.lastName?.trim() || customer.lastName,
+        email: input.email?.trim() ? input.email.trim() : null,
+        phone: input.phone?.trim() ? input.phone.trim() : null,
+        preferredLocale: input.locale,
+      });
+      if (booking.locale !== input.locale) {
+        await db.updateBooking(booking.id, { locale: input.locale });
+      }
+      return { success: true as const };
     }),
 
   /**

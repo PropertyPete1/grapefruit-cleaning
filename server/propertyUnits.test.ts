@@ -440,7 +440,9 @@ describe("the unit number reaches the crew", () => {
       fileURLToPath(new URL("../client/src/pages/staff/StaffRoutes.tsx", import.meta.url)),
       "utf-8"
     );
-    expect(admin).toContain("composeAddress({ addressLine: b.addressLine, unitNumber: b.unitNumber, city: b.city })");
+    // Now with the friendly fallback for slotless leads that have no address.
+    expect(admin).toContain('composeAddressOr(');
+    expect(admin).toContain('"No address yet"');
     expect(staff).toContain("composeAddress(booking)");
   });
 });

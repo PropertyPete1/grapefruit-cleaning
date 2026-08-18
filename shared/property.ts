@@ -49,20 +49,46 @@ export function plausibleVerifiedSqft(
  * A unit that already names its own designator ("Unit 5B", "#12", "Ste 300")
  * renders as typed; a bare number gets "Apt" in front.
  */
+/**
+ * A part that is genuinely absent — null, undefined, blank, or the literal
+ * strings "null"/"undefined" that a stringified nullable leaves behind. The
+ * last two should never reach the database, but an address that renders as
+ * "null, null" is embarrassing enough to guard against at the render boundary
+ * rather than trusting every writer forever.
+ */
+function presentPart(part: string | null | undefined): string | null {
+  if (typeof part !== "string") return null;
+  const trimmed = part.trim();
+  if (!trimmed || /^(null|undefined)$/i.test(trimmed)) return null;
+  return trimmed;
+}
+
 export function composeAddress(parts: {
   addressLine?: string | null;
   unitNumber?: string | null;
   city?: string | null;
   zip?: string | null;
 }): string {
-  const unit = parts.unitNumber?.trim();
+  const unit = presentPart(parts.unitNumber) ?? undefined;
   const unitLabel = unit
     ? /^(apt|unit|ste|suite|bldg|fl|floor|#|no\.?)\b/i.test(unit) || /^#/.test(unit)
       ? unit
       : `Apt ${unit}`
     : null;
-  return [parts.addressLine, unitLabel, parts.city, parts.zip]
-    .map(part => (typeof part === "string" ? part.trim() : part))
+  return [presentPart(parts.addressLine), unitLabel, presentPart(parts.city), presentPart(parts.zip)]
     .filter(Boolean)
     .join(", ");
+}
+
+/**
+ * The address as a display string, with a friendly fallback when no part of
+ * it exists yet — a slotless phone lead is a name and a number, and its card
+ * should say so rather than rendering an empty cell (or worse, "null, null",
+ * which is what a raw template literal once made of it).
+ */
+export function composeAddressOr(
+  parts: Parameters<typeof composeAddress>[0],
+  fallback: string
+): string {
+  return composeAddress(parts) || fallback;
 }

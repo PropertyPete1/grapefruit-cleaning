@@ -108,7 +108,11 @@ describe("Admin → Appointments shows the notes", () => {
   });
 
   it("puts them in the mobile card's details disclosure", () => {
-    expect(cards).toContain("note={b.notes ? <NotesBlock notes={b.notes} /> : undefined}");
+    // The disclosure now hosts the full BookingDetails panel, which renders
+    // the notes through the same NotesBlock.
+    expect(cards).toContain("note={<BookingDetails row={b as BookingDetailsRow} />}");
+    const panel = read(ADMIN_DIR, "BookingDetails.tsx");
+    expect(panel).toMatch(/\{row\.notes && <NotesBlock notes=\{row\.notes\} \/>\}/);
   });
 
   it("says so plainly when a booking has none", () => {
