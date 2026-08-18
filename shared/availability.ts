@@ -3,7 +3,8 @@
  * place.
  *
  * There are four of them, and they only ever subtract:
- *   1. the weekly schedule (open days, opening hours, the Sunday toggle)
+ *   1. the weekly schedule (open days, opening hours, the Sunday toggle, and
+ *      the optional lunch break)
  *   2. the minimum lead time
  *   3. the hours already occupied by live bookings, for their FULL duration
  *   4. whether the job being booked finishes before closing time
@@ -45,9 +46,12 @@ export function slotHour(time: string): number {
  * The hourly slots an interval covers, half-open: a job at 11:00 for 3 hours
  * covers 11:00, 12:00 and 13:00, and not 14:00.
  *
- * Slots the schedule never offers — the 12:00 lunch hour — are included here
- * anyway. They are hours the crew is genuinely working, and a caller filtering
- * against the schedule's own slot list drops them harmlessly.
+ * Slots the schedule never offers — the lunch hour, when that break is on —
+ * are included here anyway. They are hours the crew is genuinely working, and a
+ * caller filtering against the schedule's own slot list drops them harmlessly.
+ * This is also what makes the lunch break a start-time rule rather than dead
+ * time: a job spanning noon still occupies it, so nothing else can be booked
+ * across it.
  */
 export function slotsCoveredBy(time: string, hours: number): string[] {
   const start = slotHour(time);
@@ -106,6 +110,12 @@ export function fitsBeforeClose(
 export interface AvailabilityContext {
   date: string;
   schedule: WeeklySchedule;
+  /**
+   * Whether the crew's lunch hour is reserved. Carried in the context rather
+   * than read where it is needed, so the calendar and booking.create cannot
+   * end up asking two different questions about the same day.
+   */
+  lunchBreak: boolean;
   leadTimeHours: number;
   /** Spans already committed on this date, by live bookings. */
   occupied: OccupiedInterval[];
@@ -121,8 +131,8 @@ export interface AvailabilityContext {
 
 /** Whether one specific slot is bookable under every rule. */
 export function isSlotBookable(context: AvailabilityContext, time: string): boolean {
-  const { date, schedule, leadTimeHours, occupied, jobHours, now } = context;
-  if (!slotsForDate(date, schedule).includes(time)) return false;
+  const { date, schedule, lunchBreak, leadTimeHours, occupied, jobHours, now } = context;
+  if (!slotsForDate(date, schedule, lunchBreak).includes(time)) return false;
   if (!slotMeetsLeadTime(date, time, leadTimeHours, now)) return false;
   // The prospective job is one hour long at minimum, so even without a known
   // duration its own start hour must be free.
@@ -139,7 +149,7 @@ export function isSlotBookable(context: AvailabilityContext, time: string): bool
  * thing to say about a day that is open but fully committed.
  */
 export function slotAvailability(context: AvailabilityContext): { time: string; available: boolean }[] {
-  return slotsForDate(context.date, context.schedule).map(time => ({
+  return slotsForDate(context.date, context.schedule, context.lunchBreak).map(time => ({
     time,
     available: isSlotBookable(context, time),
   }));

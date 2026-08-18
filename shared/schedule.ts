@@ -8,8 +8,12 @@
  *
  * The admin can override any day via the `booking_schedule` site setting
  * (JSON). Slots are hourly, starting on the hour; the last slot starts one
- * hour before closing time. The legacy lunch-hour gap (no 12:00 slot) is
- * preserved for the default schedule via `skipHours`.
+ * hour before closing time.
+ *
+ * The 12:00 lunch gap the original site had is now the `booking_lunch_break`
+ * setting, and it is OFF by default — noon is bookable unless the owner says
+ * otherwise. It used to be hardcoded, which is a policy the code had no
+ * business deciding on its own.
  */
 
 export interface DaySchedule {
@@ -36,6 +40,38 @@ export const DEFAULT_SCHEDULE: WeeklySchedule = {
 
 /** Setting key that stores the admin-customized schedule as JSON. */
 export const SCHEDULE_SETTING_KEY = "booking_schedule";
+
+/** Setting key that stores whether the crew's lunch hour is reserved. */
+export const LUNCH_SETTING_KEY = "booking_lunch_break";
+
+/**
+ * The hour reserved when the lunch break is on. Noon, as it always was.
+ *
+ * A single hour rather than a configurable window: the owner asked for the old
+ * behaviour back as a switch, not for a lunch scheduler, and every extra knob
+ * here is one more way for the calendar and the validator to disagree.
+ */
+export const LUNCH_HOUR = 12;
+
+/**
+ * Whether the lunch break is reserved when the admin has not chosen.
+ *
+ * OFF. The hardcoded skip predates the setting, and the owner noticed noon had
+ * gone missing and asked where it went — so the shipped default is the answer
+ * to that question, not to what the code used to do.
+ */
+export const DEFAULT_LUNCH_BREAK = false;
+
+/**
+ * Parse the stored lunch-break setting. Anything other than a stored "true" —
+ * missing, blank, garbage — means no break, which is both the default and the
+ * more permissive reading: a corrupt setting must not quietly close a slot the
+ * owner never asked to close.
+ */
+export function parseLunchBreak(raw: string | null | undefined): boolean {
+  if (raw === null || raw === undefined) return DEFAULT_LUNCH_BREAK;
+  return raw.trim().toLowerCase() === "true";
+}
 
 function isValidDay(d: unknown): d is DaySchedule {
   if (typeof d !== "object" || d === null) return false;
@@ -75,14 +111,21 @@ export function parseSchedule(raw: string | null | undefined): WeeklySchedule {
 
 /**
  * Generate hourly slot strings ("HH:00") for a day schedule.
- * The 12:00 lunch hour is skipped to preserve the site's original
- * booking pattern (crew lunch break).
+ *
+ * `lunchBreak` reserves LUNCH_HOUR, and only as a START time. A job booked at
+ * 11:00 that runs three hours still works through noon — the break takes an
+ * hour out of the booking grid, it does not interrupt a cleaning already under
+ * way. Enforcing it as dead time inside a job would mean either stretching
+ * every span that crosses noon or refusing to book across it at all, and both
+ * cost the owner far more slots than the setting is worth. See the note on
+ * slotsCoveredBy in availability.ts, which deliberately counts the lunch hour
+ * as occupied when a job spans it.
  */
-export function slotsForDay(day: DaySchedule): string[] {
+export function slotsForDay(day: DaySchedule, lunchBreak: boolean = DEFAULT_LUNCH_BREAK): string[] {
   if (!day.open) return [];
   const slots: string[] = [];
   for (let h = day.start; h < day.end; h++) {
-    if (h === 12) continue; // lunch hour
+    if (lunchBreak && h === LUNCH_HOUR) continue;
     slots.push(`${String(h).padStart(2, "0")}:00`);
   }
   return slots;
@@ -95,6 +138,10 @@ export function dayOfWeek(dateStr: string): number {
 }
 
 /** Slots available for a specific date under a weekly schedule. */
-export function slotsForDate(dateStr: string, schedule: WeeklySchedule): string[] {
-  return slotsForDay(schedule[dayOfWeek(dateStr)]);
+export function slotsForDate(
+  dateStr: string,
+  schedule: WeeklySchedule,
+  lunchBreak: boolean = DEFAULT_LUNCH_BREAK
+): string[] {
+  return slotsForDay(schedule[dayOfWeek(dateStr)], lunchBreak);
 }

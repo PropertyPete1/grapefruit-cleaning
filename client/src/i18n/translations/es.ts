@@ -416,6 +416,7 @@ export const es: Dictionary = {
     morningSlots: "Mañana",
     afternoonSlots: "Tarde",
     closedDay: "No agendamos limpiezas este día. Por favor elija otra fecha.",
+    lunchBreakNote: "Nuestros equipos toman su hora de almuerzo, así que ninguna limpieza comienza a las 12:00 PM.",
     noTimesLeft: "No quedan horarios disponibles este día. Por favor elija otra fecha.",
     extrasTitle: "Agregue extras",
     contactTitle: "Su información de contacto",

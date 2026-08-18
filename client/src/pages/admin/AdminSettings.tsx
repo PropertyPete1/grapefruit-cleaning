@@ -13,7 +13,10 @@ import {
   parseLeadTimeHours,
 } from "@shared/leadTime";
 import {
+  DEFAULT_LUNCH_BREAK,
   DEFAULT_SCHEDULE,
+  LUNCH_SETTING_KEY,
+  parseLunchBreak,
   parseSchedule,
   SCHEDULE_SETTING_KEY,
   type WeeklySchedule,
@@ -73,18 +76,22 @@ function BookingHoursSection() {
     onSuccess: () => {
       utils.admin.settings.invalidate();
       utils.booking.schedule.invalidate();
+      utils.booking.availability.invalidate();
       toast.success("Booking hours saved — live on the booking calendar");
     },
     onError: () => toast.error("Failed to save booking hours"),
   });
 
   const [schedule, setSchedule] = useState<WeeklySchedule>(DEFAULT_SCHEDULE);
+  const [lunchBreak, setLunchBreak] = useState(DEFAULT_LUNCH_BREAK);
   const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
     if (settings.data && !dirty) {
       const raw = settings.data.find(s => s.settingKey === SCHEDULE_SETTING_KEY)?.settingValue ?? null;
       setSchedule(parseSchedule(raw));
+      const lunchRaw = settings.data.find(s => s.settingKey === LUNCH_SETTING_KEY)?.settingValue ?? null;
+      setLunchBreak(parseLunchBreak(lunchRaw));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.data]);
@@ -158,11 +165,31 @@ function BookingHoursSection() {
           );
         })}
       </div>
+      <div className="mt-4 flex flex-wrap items-start gap-3 rounded-xl border border-border px-4 py-3">
+        <Switch
+          checked={lunchBreak}
+          onCheckedChange={on => {
+            setDirty(true);
+            setLunchBreak(on);
+          }}
+          aria-label="Reserve the lunch hour"
+        />
+        <div className="flex-1">
+          <p className="text-sm font-semibold text-foreground">Reserve the lunch hour (12:00 PM)</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Off by default, so noon is bookable. Switch it on to stop offering 12:00 PM as a start time on every
+            open day — customers see a short note in English or Spanish explaining the gap. A job booked earlier
+            that runs through noon is unaffected: this reserves the hour as a starting time, it does not pause a
+            cleaning already under way.
+          </p>
+        </div>
+      </div>
       <Button
         className="mt-5 rounded-xl"
         disabled={save.isPending || !dirty}
         onClick={() => {
           save.mutate({ key: SCHEDULE_SETTING_KEY, value: JSON.stringify(schedule) });
+          save.mutate({ key: LUNCH_SETTING_KEY, value: String(lunchBreak) });
           setDirty(false);
         }}
       >
