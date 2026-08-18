@@ -193,7 +193,8 @@ describe("composition with the weekly schedule", () => {
     const now = hoursBefore(new Date(slotStartInstant(WEDNESDAY, "08:00")), 48);
     const offerable = bookableSlots({ date: WEDNESDAY, schedule: DEFAULT_SCHEDULE, leadTimeHours: 3, occupied: [], now: now });
     expect(offerable).toEqual(slotsForDate(WEDNESDAY, DEFAULT_SCHEDULE));
-    expect(offerable).not.toContain("12:00"); // the lunch gap survives
+    // Noon included: the lunch break is a setting now, and it is off here.
+    expect(offerable).toContain("12:00");
   });
 
   it("keeps a closed Sunday closed at every lead time", () => {
@@ -203,15 +204,31 @@ describe("composition with the weekly schedule", () => {
   });
 
   it("trims only the front of the day when the clock is already inside it", () => {
-    // 09:00 local, 3 hours' notice: 12:00 is the lunch gap, so 13:00 is first.
+    // 09:00 local, 3 hours' notice: 12:00 is the first slot far enough out.
     const now = new Date(slotStartInstant(WEDNESDAY, "09:00"));
     expect(bookableSlots({ date: WEDNESDAY, schedule: DEFAULT_SCHEDULE, leadTimeHours: 3, occupied: [], now: now })).toEqual([
+      "12:00",
       "13:00",
       "14:00",
       "15:00",
       "16:00",
       "17:00",
     ]);
+  });
+
+  it("drops the lunch hour from the front trim when the break is reserved", () => {
+    // Same clock and notice as above; with lunch on, 13:00 leads instead.
+    const now = new Date(slotStartInstant(WEDNESDAY, "09:00"));
+    expect(
+      bookableSlots({
+        date: WEDNESDAY,
+        schedule: DEFAULT_SCHEDULE,
+        lunchBreak: true,
+        leadTimeHours: 3,
+        occupied: [],
+        now,
+      })
+    ).toEqual(["13:00", "14:00", "15:00", "16:00", "17:00"]);
   });
 
   it("empties the day once every slot is inside the window", () => {
@@ -291,6 +308,7 @@ describe("booking.availability applies the lead time", () => {
     // calendar's "closed today" message and would be a lie here.
     expect(slots.map(s => s.time)).toEqual(slotsForDate(WEDNESDAY, DEFAULT_SCHEDULE));
     expect(slots.filter(s => s.available).map(s => s.time)).toEqual([
+      "12:00",
       "13:00",
       "14:00",
       "15:00",

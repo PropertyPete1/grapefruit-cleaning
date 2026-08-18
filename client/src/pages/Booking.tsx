@@ -35,6 +35,7 @@ import { trpc } from "@/lib/trpc";
 import { todayInBookingZone } from "@shared/leadTime";
 import {
   calculateQuote,
+  EXTRA_IDS,
   type CleaningType,
   type ExtraId,
   type Frequency,
@@ -52,17 +53,7 @@ const SERVICE_ICONS: Record<CleaningType, typeof HomeIcon> = {
   office: Briefcase,
 };
 
-const ALL_EXTRAS: ExtraId[] = [
-  "pets",
-  "deepClean",
-  "moveOut",
-  "oven",
-  "refrigerator",
-  "windows",
-  "laundry",
-  "garage",
-  "organization",
-];
+const ALL_EXTRAS: readonly ExtraId[] = EXTRA_IDS;
 
 const VALID_TYPES: CleaningType[] = ["residential", "commercial", "airbnb", "moveinout", "deep", "office"];
 const VALID_FREQ: Frequency[] = ["onetime", "weekly", "biweekly", "monthly"];
@@ -568,7 +559,7 @@ export default function Booking() {
                           // current San Antonio day hidden from them.
                           (d: Date) => toDateString(d) < todayInBookingZone(),
                           (d: Date) => {
-                            const day = scheduleQuery.data?.[d.getDay()];
+                            const day = scheduleQuery.data?.days?.[d.getDay()];
                             return day ? !day.open : false;
                           },
                         ]}
@@ -623,6 +614,9 @@ export default function Booking() {
                             <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
                               <Clock className="h-4 w-4 text-primary" /> {t.booking.afternoonSlots}
                             </p>
+                            {scheduleQuery.data?.lunchBreak && (
+                              <p className="mt-1 text-xs text-muted-foreground">{t.booking.lunchBreakNote}</p>
+                            )}
                             <div className="mt-2 grid grid-cols-2 gap-2">
                               {afternoon.map(slot => (
                                 <button

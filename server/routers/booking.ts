@@ -2,6 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import {
   calculateQuote,
+  EXTRA_IDS,
   generateBookingReference,
   parsePricingConfig,
   PRICING_SETTING_KEY,
@@ -21,7 +22,7 @@ import {
   type DurationConfig,
 } from "@shared/duration";
 import { LEAD_TIME_SETTING_KEY, parseLeadTimeHours } from "@shared/leadTime";
-import { parseSchedule, SCHEDULE_SETTING_KEY } from "@shared/schedule";
+import { LUNCH_SETTING_KEY, parseLunchBreak, parseSchedule, SCHEDULE_SETTING_KEY } from "@shared/schedule";
 import * as db from "../db";
 import { assertRateLimit, clientIp } from "../antiSpam";
 import { blocksSlot, STALE_DEPOSIT_MINUTES } from "../bookingRules";
@@ -36,9 +37,7 @@ const quoteInputSchema = z.object({
   bedrooms: z.number().int().min(0).max(10),
   bathrooms: z.number().int().min(1).max(10),
   sqft: z.number().min(200).max(10000),
-  extras: z.array(
-    z.enum(["pets", "deepClean", "moveOut", "oven", "refrigerator", "windows", "laundry", "garage", "organization"])
-  ),
+  extras: z.array(z.enum(EXTRA_IDS)),
   frequency: z.enum(["onetime", "weekly", "biweekly", "monthly"]),
 });
 
@@ -80,15 +79,23 @@ export async function loadDurationConfig(): Promise<DurationConfig> {
   return parseDurationConfig(await db.getSetting(DURATION_SETTING_KEY));
 }
 
-/** The three settings every scheduling decision reads, fetched together. */
-async function loadSchedulingRules() {
-  const [scheduleRaw, leadTimeRaw, durationRaw] = await Promise.all([
+/**
+ * Every setting a scheduling decision reads, fetched together.
+ *
+ * One loader for all of them, used by the public calendar, booking.create and
+ * the admin create form alike: a caller that assembles its own subset is a
+ * caller that can disagree with the calendar about what is bookable.
+ */
+export async function loadSchedulingRules() {
+  const [scheduleRaw, lunchRaw, leadTimeRaw, durationRaw] = await Promise.all([
     db.getSetting(SCHEDULE_SETTING_KEY),
+    db.getSetting(LUNCH_SETTING_KEY),
     db.getSetting(LEAD_TIME_SETTING_KEY),
     db.getSetting(DURATION_SETTING_KEY),
   ]);
   return {
     schedule: parseSchedule(scheduleRaw),
+    lunchBreak: parseLunchBreak(lunchRaw),
     leadTimeHours: parseLeadTimeHours(leadTimeRaw),
     durations: parseDurationConfig(durationRaw),
   };
@@ -175,11 +182,12 @@ export const bookingRouter = router({
       })
     )
     .query(async ({ input }) => {
-      const { schedule, leadTimeHours, durations } = await loadSchedulingRules();
+      const { schedule, lunchBreak, leadTimeHours, durations } = await loadSchedulingRules();
       const rows = await db.getOccupiedBookings(input.date);
       return slotAvailability({
         date: input.date,
         schedule,
+        lunchBreak,
         leadTimeHours,
         occupied: occupiedIntervals(rows, durations),
         jobHours:
@@ -189,10 +197,18 @@ export const bookingRouter = router({
       });
     }),
 
-  /** Weekly booking schedule (public) so the calendar can disable closed days. */
-  schedule: publicProcedure.query(async () =>
-    parseSchedule(await db.getSetting(SCHEDULE_SETTING_KEY))
-  ),
+  /**
+   * Weekly booking schedule (public) so the calendar can disable closed days,
+   * plus the lunch-break flag so it can explain the gap at noon rather than
+   * leaving a hole in the hours with no reason given.
+   */
+  schedule: publicProcedure.query(async () => {
+    const [scheduleRaw, lunchRaw] = await Promise.all([
+      db.getSetting(SCHEDULE_SETTING_KEY),
+      db.getSetting(LUNCH_SETTING_KEY),
+    ]);
+    return { days: parseSchedule(scheduleRaw), lunchBreak: parseLunchBreak(lunchRaw) };
+  }),
 
   /** Validate a coupon code and return the discount. */
   validateCoupon: publicProcedure.input(z.object({ code: z.string().min(1).max(40) })).query(async ({ input }) => {
@@ -236,7 +252,7 @@ export const bookingRouter = router({
       // bookings have already committed for their full duration, and whether
       // this job finishes before closing. The calendar hides all four, so this
       // is what stops a crafted request.
-      const { schedule, leadTimeHours, durations } = await loadSchedulingRules();
+      const { schedule, lunchBreak, leadTimeHours, durations } = await loadSchedulingRules();
       /** The one message a customer ever sees for an unavailable slot. */
       const slotUnavailable = () =>
         new TRPCError({
@@ -252,6 +268,7 @@ export const bookingRouter = router({
         const context: AvailabilityContext = {
           date: input.date,
           schedule,
+          lunchBreak,
           leadTimeHours,
           occupied: occupiedIntervals(rows, durations),
           jobHours,
@@ -533,9 +550,17 @@ export async function finalizeBooking(bookingId: number, paymentIntentId: string
   // job could have been booked earlier in the day and now runs across this
   // booking's hours without starting on them. That is just as much a clash for
   // the crew, and the owner needs the same warning.
+  //
+  // holdMinutes is passed along with the status and the clock: an admin-created
+  // booking holds its slot for a day, not the hour a public checkout gets, and
+  // asking without it would call a two-hour-old phone booking released — then
+  // flag a conflict against a slot it is still legitimately holding.
   const slotConflict =
-    !blocksSlot({ status: booking.status, createdAt: booking.createdAt ?? null }) &&
-    (await overlapsLiveBooking(booking));
+    !blocksSlot({
+      status: booking.status,
+      createdAt: booking.createdAt ?? null,
+      holdMinutes: booking.holdMinutes,
+    }) && (await overlapsLiveBooking(booking));
 
   // Claim the booking before doing anything with side effects. The status check
   // above is only a fast path — the webhook and the return-page confirmation

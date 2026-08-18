@@ -5,6 +5,7 @@ import { publicProcedure, router } from "./_core/trpc";
 import { adminRouter } from "./routers/admin";
 import { bookingRouter } from "./routers/booking";
 import { contactRouter } from "./routers/contact";
+import { depositLinkRouter } from "./routers/depositLink";
 import { publicContentRouter } from "./routers/publicContent";
 import { staffRouter } from "./routers/staff";
 
@@ -23,6 +24,7 @@ export const appRouter = router({
   }),
 
   booking: bookingRouter,
+  depositLink: depositLinkRouter,
   contact: contactRouter,
   content: publicContentRouter,
   admin: adminRouter,

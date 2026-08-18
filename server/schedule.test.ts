@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_LUNCH_BREAK,
   DEFAULT_SCHEDULE,
   dayOfWeek,
+  LUNCH_HOUR,
+  parseLunchBreak,
   parseSchedule,
   slotsForDate,
   slotsForDay,
@@ -13,13 +16,13 @@ describe("booking schedule defaults", () => {
     expect(slotsForDay(DEFAULT_SCHEDULE[0])).toEqual([]);
   });
 
-  it("Monday–Friday run 8 AM to 6 PM (last slot 5 PM), skipping the 12 PM lunch hour", () => {
+  it("Monday–Friday run 8 AM to 6 PM (last slot 5 PM), noon included by default", () => {
     for (const day of [1, 2, 3, 4, 5]) {
       const slots = slotsForDay(DEFAULT_SCHEDULE[day]);
       expect(slots[0]).toBe("08:00");
       expect(slots[slots.length - 1]).toBe("17:00");
-      expect(slots).not.toContain("12:00");
-      expect(slots).toHaveLength(9); // 8..17 minus 12
+      expect(slots).toContain("12:00");
+      expect(slots).toHaveLength(10); // 8..17 inclusive
     }
   });
 
@@ -27,7 +30,66 @@ describe("booking schedule defaults", () => {
     const slots = slotsForDay(DEFAULT_SCHEDULE[6]);
     expect(slots[0]).toBe("08:00");
     expect(slots[slots.length - 1]).toBe("15:00");
-    expect(slots).not.toContain("12:00");
+    expect(slots).toContain("12:00");
+  });
+});
+
+describe("the lunch break", () => {
+  it("is off unless the admin turns it on", () => {
+    expect(DEFAULT_LUNCH_BREAK).toBe(false);
+    expect(slotsForDay(DEFAULT_SCHEDULE[1])).toContain("12:00");
+  });
+
+  it("removes only the noon slot when on, leaving the rest of the day intact", () => {
+    const open = slotsForDay(DEFAULT_SCHEDULE[1], false);
+    const withLunch = slotsForDay(DEFAULT_SCHEDULE[1], true);
+    expect(withLunch).not.toContain("12:00");
+    expect(withLunch).toHaveLength(open.length - 1);
+    expect(withLunch).toEqual(open.filter(t => t !== "12:00"));
+  });
+
+  it("reserves LUNCH_HOUR rather than a hardcoded 12", () => {
+    expect(LUNCH_HOUR).toBe(12);
+    const slots = slotsForDay({ open: true, start: 8, end: 18 }, true);
+    expect(slots).not.toContain(`${String(LUNCH_HOUR).padStart(2, "0")}:00`);
+  });
+
+  it("does nothing on a day that never reaches noon", () => {
+    const morning = { open: true, start: 8, end: 11 };
+    expect(slotsForDay(morning, true)).toEqual(slotsForDay(morning, false));
+  });
+
+  it("keeps a closed day closed", () => {
+    expect(slotsForDay(DEFAULT_SCHEDULE[0], true)).toEqual([]);
+  });
+
+  it("applies per date through slotsForDate", () => {
+    // 2026-07-22 is a Wednesday.
+    expect(slotsForDate("2026-07-22", DEFAULT_SCHEDULE)).toContain("12:00");
+    expect(slotsForDate("2026-07-22", DEFAULT_SCHEDULE, true)).not.toContain("12:00");
+  });
+});
+
+describe("parseLunchBreak", () => {
+  it("reads a stored true", () => {
+    expect(parseLunchBreak("true")).toBe(true);
+    expect(parseLunchBreak("TRUE")).toBe(true);
+    expect(parseLunchBreak("  true  ")).toBe(true);
+  });
+
+  it("treats missing, blank and garbage as no break", () => {
+    // The permissive direction on purpose: a corrupt setting must not close a
+    // slot the owner never asked to close.
+    expect(parseLunchBreak(null)).toBe(false);
+    expect(parseLunchBreak(undefined)).toBe(false);
+    expect(parseLunchBreak("")).toBe(false);
+    expect(parseLunchBreak("yes")).toBe(false);
+    expect(parseLunchBreak("1")).toBe(false);
+    expect(parseLunchBreak("{}")).toBe(false);
+  });
+
+  it("reads a stored false", () => {
+    expect(parseLunchBreak("false")).toBe(false);
   });
 });
 
@@ -45,7 +107,8 @@ describe("parseSchedule", () => {
     expect(schedule[0]).toEqual({ open: true, start: 10, end: 14 });
     // untouched days keep defaults
     expect(schedule[1]).toEqual(DEFAULT_SCHEDULE[1]);
-    expect(slotsForDay(schedule[0])).toEqual(["10:00", "11:00", "13:00"]);
+    expect(slotsForDay(schedule[0])).toEqual(["10:00", "11:00", "12:00", "13:00"]);
+    expect(slotsForDay(schedule[0], true)).toEqual(["10:00", "11:00", "13:00"]);
   });
 
   it("ignores partially invalid days while keeping valid ones", () => {

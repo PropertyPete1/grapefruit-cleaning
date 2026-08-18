@@ -118,6 +118,43 @@ export const bookings = mysqlTable("bookings", {
    */
   slotConflict: boolean("slotConflict").default(false).notNull(),
   /**
+   * Who created this booking. "self_serve" is the public booking flow;
+   * "admin" is the owner entering a phone or text lead by hand, which then
+   * gets a personal deposit link the customer completes themselves.
+   *
+   * Not derivable from anything else on the row: an admin-created booking that
+   * has been paid looks exactly like a self-serve one afterwards, and the
+   * difference is what justifies its longer slot hold.
+   */
+  kind: mysqlEnum("kind", ["self_serve", "admin"]).default("self_serve").notNull(),
+  /**
+   * Minutes this booking may hold its slot while the deposit is unpaid,
+   * pinned at creation.
+   *
+   * A phone lead needs the evening to decide, so admin-created bookings hold
+   * for 24 hours where the public flow holds for one. Stored per booking
+   * rather than read from the setting at expiry time for the same reason
+   * estimatedHours and totalAmount are: raising the window later must not
+   * retroactively resurrect a slot that has already been released and rebooked.
+   *
+   * NULL on rows written before this existed; the rules fall back to
+   * STALE_DEPOSIT_MINUTES for those, which is exactly what they used to do.
+   */
+  holdMinutes: int("holdMinutes"),
+  /**
+   * Secret token behind an admin-created booking's deposit link
+   * (/pay/deposit/:token), where the customer picks their own extras and pays.
+   *
+   * Same shape as invoices.payToken: the page mints a fresh Stripe Checkout
+   * Session per attempt, so the link outlives any single session and survives
+   * the customer changing their mind about extras.
+   *
+   * Never returned by a list API — see stripPayToken in server/db.ts.
+   */
+  payToken: varchar("payToken", { length: 64 }),
+  /** End of the deposit link's validity window (null = no link issued). */
+  payTokenExpiresAt: timestamp("payTokenExpiresAt"),
+  /**
    * The calendar slot this booking occupies, or NULL when it occupies none.
    *
    * MySQL has no partial unique indexes, but it does allow unlimited NULLs in a

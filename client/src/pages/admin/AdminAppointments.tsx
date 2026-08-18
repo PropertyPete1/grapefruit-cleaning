@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { formatJobSpan } from "@shared/availability";
 import { trpc } from "@/lib/trpc";
 import { Skeleton } from "@/components/ui/skeleton";
+import { NewBookingDialog } from "./NewBookingDialog";
 import {
   Select,
   SelectContent,
@@ -11,6 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { DepositLinkCell } from "./DepositLinkCell";
 import {
   NotesBlock,
   PageHeader,
@@ -58,7 +60,9 @@ export default function AdminAppointments() {
         title="Appointments"
         subtitle="Manage every booking from deposit to completion"
         action={
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
+          <div className="flex flex-wrap items-center gap-2">
+            <NewBookingDialog />
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
             <SelectTrigger className="w-44 rounded-xl bg-card">
               <SelectValue />
             </SelectTrigger>
@@ -69,8 +73,9 @@ export default function AdminAppointments() {
                   {s.replace(/_/g, " ")}
                 </SelectItem>
               ))}
-            </SelectContent>
-          </Select>
+              </SelectContent>
+            </Select>
+          </div>
         }
       />
 
@@ -95,6 +100,7 @@ export default function AdminAppointments() {
                   <th className="px-5 py-3 font-medium">Address</th>
                   <th className="px-5 py-3 font-medium">Customer notes</th>
                   <th className="px-5 py-3 font-medium">Total / Deposit</th>
+                  <th className="px-5 py-3 font-medium">Deposit link</th>
                   <th className="px-5 py-3 font-medium">Cleaner</th>
                   <th className="px-5 py-3 font-medium">Status</th>
                 </tr>
@@ -162,6 +168,9 @@ export default function AdminAppointments() {
                           Balance {fmtMoney(pendingByBooking.get(b.id)!)} awaiting approval
                         </Link>
                       )}
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <DepositLinkCell bookingId={b.id} status={b.depositLink} />
                     </td>
                     <td className="px-5 py-3.5">
                       <Select
@@ -245,6 +254,11 @@ export default function AdminAppointments() {
                 note={b.notes ? <NotesBlock notes={b.notes} /> : undefined}
                 actions={
                   <>
+                    {b.depositLink !== "none" && (
+                      <div className="w-full">
+                        <DepositLinkCell bookingId={b.id} status={b.depositLink} />
+                      </div>
+                    )}
                     <Select
                       value={b.status}
                       onValueChange={v => updateStatus.mutate({ id: b.id, status: v as (typeof STATUSES)[number] })}
