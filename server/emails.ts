@@ -353,23 +353,33 @@ export function buildOwnerNotification(data: BookingEmailData): { title: string;
  * language) and notify the business owner via built-in notifications plus an
  * email copy when OWNER_EMAIL is configured.
  */
-export async function sendBookingEmails(data: BookingEmailData): Promise<void> {
-  const customerEmail = buildCustomerConfirmation(data);
-  await deliverEmail(data.customerEmail, customerEmail.subject, customerEmail.body);
-
-  const ownerNote = buildOwnerNotification(data);
+/**
+ * Every channel the owner has: the platform notification (best-effort) plus
+ * an email to OWNER_EMAIL, falling back to the business Gmail inbox itself.
+ * One helper so booking confirmations, unplaceable-clean alerts and feed
+ * failures all reach the owner the same way.
+ */
+export async function sendOwnerAlert(title: string, content: string): Promise<void> {
   try {
-    await notifyOwner({ title: ownerNote.title, content: ownerNote.content });
+    await notifyOwner({ title, content });
   } catch (error) {
     console.error("[Email] Failed to notify owner:", error);
   }
   const ownerEmail = process.env.OWNER_EMAIL;
   if (ownerEmail) {
-    await deliverEmail(ownerEmail, ownerNote.title, ownerNote.content);
+    await deliverEmail(ownerEmail, title, content);
   } else if (process.env.GMAIL_USER) {
     // Default: send the owner copy to the business Gmail inbox itself.
-    await deliverEmail(process.env.GMAIL_USER, ownerNote.title, ownerNote.content);
+    await deliverEmail(process.env.GMAIL_USER, title, content);
   }
+}
+
+export async function sendBookingEmails(data: BookingEmailData): Promise<void> {
+  const customerEmail = buildCustomerConfirmation(data);
+  await deliverEmail(data.customerEmail, customerEmail.subject, customerEmail.body);
+
+  const ownerNote = buildOwnerNotification(data);
+  await sendOwnerAlert(ownerNote.title, ownerNote.content);
 }
 
 export interface BalanceEmailData {
@@ -1014,4 +1024,152 @@ export function buildDepositLinkEmail(data: DepositLinkEmailData): {
 export async function sendDepositLinkEmail(data: DepositLinkEmailData): Promise<boolean> {
   const { subject, body, html } = buildDepositLinkEmail(data);
   return deliverEmail(data.customerEmail, subject, body, html);
+}
+
+// ---------- Connected-property (Airbnb auto-booking) emails ----------
+
+export interface PropertyEmailData {
+  label: string;
+  address: string;
+  customerName: string;
+  customerEmail: string | null;
+  serviceName: string;
+  defaultTime: string;
+  reservationCount: number;
+  locale: "en" | "es";
+  bizPhone?: string;
+}
+
+/**
+ * The one email a host gets at setup — after this, silence until each clean's
+ * balance link, unless they asked for per-clean notices. Hosts running every
+ * turnover through us must not get a marketing-sized inbox out of it.
+ */
+export function buildPropertyConnectedEmail(data: PropertyEmailData): {
+  subject: string;
+  body: string;
+  html: string;
+} {
+  const spanish = data.locale === "es";
+  const email: BrandedEmail = spanish
+    ? {
+        preheader: `Su calendario está conectado — cada salida se agenda sola.`,
+        eyebrow: "Calendario conectado",
+        headline: "¡Sus limpiezas ahora son automáticas! 🍊",
+        intro: [
+          `Hola ${data.customerName},`,
+          `Conectamos el calendario de ${data.label}. De ahora en adelante, cada salida de huéspedes se convierte en una limpieza agendada — sin formularios, sin llamadas.`,
+        ],
+        detailsTitle: "Su propiedad",
+        details: [
+          { label: "Propiedad", value: data.label },
+          { label: "Dirección", value: data.address },
+          { label: "Servicio", value: data.serviceName },
+          { label: "Hora preferida", value: data.defaultTime },
+          { label: "Reservas encontradas", value: String(data.reservationCount) },
+        ],
+        outro: [
+          `Revisamos su calendario cada hora. Después de cada limpieza le llegará su enlace de pago, como siempre.`,
+          data.bizPhone
+            ? `¿Cambios o preguntas? Llámenos al ${data.bizPhone} o responda a este correo.`
+            : `¿Cambios o preguntas? Simplemente responda a este correo.`,
+        ],
+        signOff: ["Con aprecio,", "El equipo de Grapefruit Cleaning Co."],
+        footerNote: data.bizPhone ? `Grapefruit Cleaning Co. · ${data.bizPhone}` : `Grapefruit Cleaning Co.`,
+      }
+    : {
+        preheader: `Your calendar is connected — every checkout books itself.`,
+        eyebrow: "Calendar connected",
+        headline: "Your cleanings are now automatic! 🍊",
+        intro: [
+          `Hi ${data.customerName},`,
+          `We've connected the calendar for ${data.label}. From here on, every guest checkout becomes a scheduled cleaning — no forms, no calls.`,
+        ],
+        detailsTitle: "Your property",
+        details: [
+          { label: "Property", value: data.label },
+          { label: "Address", value: data.address },
+          { label: "Service", value: data.serviceName },
+          { label: "Preferred time", value: data.defaultTime },
+          { label: "Reservations found", value: String(data.reservationCount) },
+        ],
+        outro: [
+          `We check your calendar every hour. After each clean you'll get your payment link, same as always.`,
+          data.bizPhone
+            ? `Changes or questions? Call us at ${data.bizPhone} or just reply to this email.`
+            : `Changes or questions? Just reply to this email.`,
+        ],
+        signOff: ["Warmly,", "The Grapefruit Cleaning Co. Team"],
+        footerNote: data.bizPhone ? `Grapefruit Cleaning Co. · ${data.bizPhone}` : `Grapefruit Cleaning Co.`,
+      };
+  return {
+    subject: spanish
+      ? `Su calendario está conectado — limpiezas automáticas | Grapefruit Cleaning Co.`
+      : `Your calendar is connected — automatic cleanings | Grapefruit Cleaning Co.`,
+    body: renderBrandedEmailText(email),
+    html: renderBrandedEmail(email),
+  };
+}
+
+export async function sendPropertyConnectedEmail(data: PropertyEmailData): Promise<boolean> {
+  const { subject, body, html } = buildPropertyConnectedEmail(data);
+  return deliverEmail(data.customerEmail, subject, body, html);
+}
+
+/** [ACTION NEEDED] — a turnover exists that the calendar could not place. */
+export function buildUnplacedCleanAlert(args: {
+  label: string;
+  reference: string;
+  checkoutDate: string;
+  reason: string;
+}): { title: string; content: string } {
+  return {
+    title: `[ACTION NEEDED] Unscheduled turnover ${args.reference} — ${args.label} checkout ${args.checkoutDate}`,
+    content: [
+      `A guest checkout on ${args.checkoutDate} at ${args.label} needs a cleaning, but no slot could be placed automatically.`,
+      ``,
+      `Why: ${args.reason}`,
+      ``,
+      `The booking exists (${args.reference}) with no time. Open Admin → Appointments and use "Set time" to place it — the turnover is NOT covered until you do.`,
+    ].join("\n"),
+  };
+}
+
+/** The feed has failed enough times in a row that it's a problem, not a blip. */
+export function buildFeedFailureAlert(args: {
+  label: string;
+  failures: number;
+  lastError: string;
+}): { title: string; content: string } {
+  return {
+    title: `Airbnb calendar for ${args.label} has stopped syncing`,
+    content: [
+      `The calendar feed for ${args.label} has failed ${args.failures} times in a row.`,
+      ``,
+      `Last error: ${args.lastError}`,
+      ``,
+      `Until it recovers, NEW reservations will not create cleanings. The usual causes: the host regenerated or revoked the calendar link, or the listing was unpublished. Ask them for a fresh iCal URL and update it in Admin → Properties.`,
+    ].join("\n"),
+  };
+}
+
+/** Optional per-clean notice for hosts who asked for one. */
+export function buildAutoCleanScheduledEmail(args: {
+  label: string;
+  date: string;
+  time: string | null;
+  customerName: string;
+  locale: "en" | "es";
+}): { subject: string; body: string } {
+  const spanish = args.locale === "es";
+  const when = args.time ? `${args.date} · ${args.time}` : args.date;
+  return spanish
+    ? {
+        subject: `Limpieza agendada — ${args.label} el ${args.date} | Grapefruit Cleaning Co.`,
+        body: `Hola ${args.customerName},\n\nSu calendario marcó una salida y agendamos la limpieza de ${args.label}: ${when}.\n\nNo necesita hacer nada — este es el aviso por limpieza que usted pidió.\n\nEl equipo de Grapefruit Cleaning Co.`,
+      }
+    : {
+        subject: `Cleaning scheduled — ${args.label} on ${args.date} | Grapefruit Cleaning Co.`,
+        body: `Hi ${args.customerName},\n\nYour calendar showed a checkout, so we've scheduled the ${args.label} clean: ${when}.\n\nNothing to do — this is the per-clean notice you asked for.\n\nThe Grapefruit Cleaning Co. Team`,
+      };
 }

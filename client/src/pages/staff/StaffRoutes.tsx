@@ -58,6 +58,7 @@ type StaffBookingRow = {
     depositAmount: number;
     status: string;
     employeeId: number | null;
+    kind: string;
     /** Hours on site — resolved server-side, so legacy rows still have one. */
     durationHours: number;
   };
@@ -85,6 +86,11 @@ function JobCard({ row, onStatusChange }: { row: StaffBookingRow; onStatusChange
               {booking.serviceType ? (SERVICE_LABELS[booking.serviceType] ?? booking.serviceType) : "Service TBD"}
             </p>
             <StatusBadge status={booking.status} />
+            {booking.kind === "ical_auto" && (
+              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-accent-foreground">
+                Auto · Airbnb
+              </span>
+            )}
           </div>
           <p className="mt-0.5 text-xs font-medium text-muted-foreground">
             {booking.reference} · {fmtDate(booking.scheduledDate)}

@@ -4,6 +4,7 @@ import {
   InsertUser,
   blogPosts,
   bookings,
+  connectedProperties,
   contactMessages,
   coupons,
   customers,
@@ -362,6 +363,26 @@ export function stripPayToken<T extends { payToken?: string | null }>(
 /** The same, for the {booking, customer} shape the staff views select. */
 function stripJoinedPayToken<T extends { booking: { payToken?: string | null } }>(row: T) {
   return { ...row, booking: stripPayToken(row.booking) };
+}
+
+/**
+ * True when an insert failed because this reservation UID already has its
+ * booking — two syncs racing on the same new reservation. The loser treats it
+ * as "already created", which is the truth.
+ */
+export function isDuplicateUidError(error: unknown): boolean {
+  const seen = new Set<object>();
+  let current: unknown = error;
+  while (current !== null && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const candidate = current as { code?: unknown; errno?: unknown; message?: unknown; cause?: unknown };
+    const isDuplicate = candidate.code === "ER_DUP_ENTRY" || candidate.errno === 1062;
+    if (isDuplicate && typeof candidate.message === "string" && candidate.message.includes("bookings_property_uid_unique")) {
+      return true;
+    }
+    current = candidate.cause;
+  }
+  return false;
 }
 
 export async function listBookings(filter?: { status?: string; from?: string; to?: string }) {
@@ -837,6 +858,79 @@ export async function incrementCouponRedemptions(id: number) {
 }
 
 // ---------- Settings ----------
+// ---------- Connected properties (Airbnb/VRBO auto-booking) ----------
+
+export async function listConnectedProperties() {
+  const db = requireDb(await getDb());
+  return db
+    .select({ property: connectedProperties, customer: customers })
+    .from(connectedProperties)
+    .leftJoin(customers, eq(connectedProperties.customerId, customers.id))
+    .orderBy(desc(connectedProperties.createdAt));
+}
+
+export async function getConnectedPropertyById(id: number) {
+  const db = requireDb(await getDb());
+  const rows = await db.select().from(connectedProperties).where(eq(connectedProperties.id, id)).limit(1);
+  return rows[0];
+}
+
+export async function createConnectedProperty(data: typeof connectedProperties.$inferInsert) {
+  const db = requireDb(await getDb());
+  const result = await db.insert(connectedProperties).values(data);
+  return Number(result[0].insertId);
+}
+
+export async function updateConnectedProperty(
+  id: number,
+  data: Partial<typeof connectedProperties.$inferInsert>
+) {
+  const db = requireDb(await getDb());
+  await db.update(connectedProperties).set(data).where(eq(connectedProperties.id, id));
+}
+
+/** Every feed the hourly sync should poll. */
+export async function listActiveSyncProperties() {
+  const db = requireDb(await getDb());
+  return db.select().from(connectedProperties).where(eq(connectedProperties.active, true));
+}
+
+/**
+ * Every auto-created booking for one property, whatever its status — the sync
+ * decides per row what may be touched (never in_progress/completed, never
+ * resurrect cancelled).
+ */
+export async function listAutoBookingsForProperty(propertyId: number) {
+  const db = requireDb(await getDb());
+  return db
+    .select()
+    .from(bookings)
+    .where(and(eq(bookings.propertyId, propertyId), eq(bookings.kind, "ical_auto")));
+}
+
+/** The next synced cleans shown on the property card. */
+export async function listUpcomingAutoBookings(propertyId: number, today: string, limit = 3) {
+  const db = requireDb(await getDb());
+  return db
+    .select({
+      id: bookings.id,
+      scheduledDate: bookings.scheduledDate,
+      scheduledTime: bookings.scheduledTime,
+      status: bookings.status,
+    })
+    .from(bookings)
+    .where(
+      and(
+        eq(bookings.propertyId, propertyId),
+        eq(bookings.kind, "ical_auto"),
+        notInArray(bookings.status, ["cancelled", "expired", "completed"]),
+        or(isNull(bookings.scheduledDate), gte(bookings.scheduledDate, today))
+      )
+    )
+    .orderBy(bookings.scheduledDate, bookings.scheduledTime)
+    .limit(limit);
+}
+
 export async function getSetting(key: string) {
   const db = requireDb(await getDb());
   const rows = await db.select().from(siteSettings).where(eq(siteSettings.settingKey, key)).limit(1);

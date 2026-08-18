@@ -87,6 +87,16 @@ export async function sendDueReminders(
   for (const booking of bookings) {
     const kind = dueReminderKind(booking, todayStr);
     if (!kind) continue;
+    // Auto-booked turnovers are the host's own calendar — reminding them of
+    // their own guests is spam. Only hosts who opted into per-clean notices
+    // get these.
+    if (booking.kind === "ical_auto") {
+      const property = booking.propertyId ? await db.getConnectedPropertyById(booking.propertyId) : undefined;
+      if (!property?.perCleanEmails) {
+        await db.markReminderSent(booking.id, kind);
+        continue;
+      }
+    }
     const customer = await db.getCustomerById(booking.customerId);
     if (!customer) continue;
     const email = buildReminderEmail(toEmailData(booking, customer, bizPhone), kind);
