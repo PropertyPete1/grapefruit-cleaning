@@ -11,7 +11,7 @@ import { protectedProcedure, router } from "../_core/trpc";
  * customer, so the duration is resolved on the inner row and lifted back out.
  */
 async function withJobDuration<
-  T extends { booking: { serviceType: string; sqft: number; estimatedHours: number | null } },
+  T extends { booking: { serviceType: string | null; sqft: number | null; estimatedHours: number | null } },
 >(rows: T[]): Promise<(T & { booking: T["booking"] & { durationHours: number } })[]> {
   const resolved = await withDurationHours(rows.map(r => r.booking));
   return rows.map((row, index) => ({ ...row, booking: resolved[index]! }));
@@ -64,8 +64,8 @@ export const staffRouter = router({
     return {
       employee,
       todayCount: all.filter((b) => b.booking.scheduledDate === today && b.booking.status !== "cancelled").length,
-      upcomingCount: all.filter((b) => b.booking.scheduledDate >= today && (b.booking.status === "confirmed" || b.booking.status === "pending_deposit")).length,
-      myUpcomingCount: mine.filter((b) => b.booking.scheduledDate >= today && b.booking.status !== "cancelled" && b.booking.status !== "completed").length,
+      upcomingCount: all.filter((b) => b.booking.scheduledDate != null && b.booking.scheduledDate >= today && (b.booking.status === "confirmed" || b.booking.status === "pending_deposit")).length,
+      myUpcomingCount: mine.filter((b) => b.booking.scheduledDate != null && b.booking.scheduledDate >= today && b.booking.status !== "cancelled" && b.booking.status !== "completed").length,
     };
   }),
 

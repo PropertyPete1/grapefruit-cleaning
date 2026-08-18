@@ -158,8 +158,8 @@ describe("the admin form takes no money", () => {
 describe("the pay page sends ids, not prices", () => {
   const source = readFileSync(PAY_PAGE, "utf-8");
 
-  it("posts only the token and the chosen extra ids", () => {
-    expect(source).toMatch(/pay\.mutate\(\s*\{ token, extras: chosen \}/);
+  it("posts only the token, the chosen extra ids, and their notes", () => {
+    expect(source).toMatch(/pay\.mutate\(\s*\{ token, extras: chosen, notes: noteText \}/);
   });
 
   it("sends no computed amount with the payment", () => {

@@ -22,13 +22,28 @@ export default function AdminCalendar() {
 
   const bookings = trpc.admin.bookings.useQuery({ from, to });
 
+  /**
+   * Only rows with a slot can sit on a calendar. The date-range filter already
+   * excludes slotless links server-side (a NULL date matches no range), so
+   * this narrowing changes nothing at runtime — it makes the types tell the
+   * same story.
+   */
+  const scheduled = useMemo(
+    () =>
+      (bookings.data ?? []).filter(
+        (b): b is typeof b & { scheduledDate: string; scheduledTime: string } =>
+          b.scheduledDate != null && b.scheduledTime != null
+      ),
+    [bookings.data]
+  );
+
   const byDate = useMemo(() => {
-    const map: Record<string, NonNullable<typeof bookings.data>> = {};
-    for (const b of bookings.data ?? []) {
+    const map: Record<string, typeof scheduled> = {};
+    for (const b of scheduled) {
       (map[b.scheduledDate] ||= []).push(b);
     }
     return map;
-  }, [bookings.data]);
+  }, [scheduled]);
 
   const firstWeekday = new Date(month.getFullYear(), month.getMonth(), 1).getDay();
   const cells: (number | null)[] = [
@@ -108,10 +123,10 @@ export default function AdminCalendar() {
                           <div
                             key={b.id}
                             className="truncate rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-accent-foreground"
-                            title={`${b.reference} · ${SERVICE_LABELS[b.serviceType]} · ${formatJobSpan(b.scheduledTime, b.durationHours)}`}
+                            title={`${b.reference} · ${b.serviceType ? SERVICE_LABELS[b.serviceType] : "Service TBD"} · ${formatJobSpan(b.scheduledTime, b.durationHours)}`}
                           >
                             {b.scheduledTime}–{intervalEndTime(b.scheduledTime, b.durationHours)}{" "}
-                            {SERVICE_LABELS[b.serviceType]}
+                            {b.serviceType ? SERVICE_LABELS[b.serviceType] : "Service TBD"}
                           </div>
                         ))}
                         {dayBookings.length > 3 && (
@@ -130,18 +145,18 @@ export default function AdminCalendar() {
       {/* Upcoming list */}
       <div className="mt-6 rounded-2xl bg-card p-6 shadow-sm ring-1 ring-border">
         <h2 className="font-semibold text-foreground">This month's appointments</h2>
-        {(bookings.data ?? []).length === 0 ? (
+        {scheduled.length === 0 ? (
           <p className="mt-3 text-sm text-muted-foreground">No appointments scheduled this month.</p>
         ) : (
           <div className="mt-3 space-y-2">
-            {(bookings.data ?? [])
+            {scheduled
               .slice()
               .sort((a, b) => (a.scheduledDate + a.scheduledTime).localeCompare(b.scheduledDate + b.scheduledTime))
               .map(b => (
                 <div key={b.id} className="flex items-center justify-between rounded-xl border border-border p-3 text-sm">
                   <div>
                     <span className="font-mono text-xs font-semibold text-primary">{b.reference}</span>
-                    <p className="font-medium text-foreground">{SERVICE_LABELS[b.serviceType]}</p>
+                    <p className="font-medium text-foreground">{b.serviceType ? SERVICE_LABELS[b.serviceType] : "Service TBD"}</p>
                   </div>
                   <div className="text-right">
                     <p className="text-muted-foreground">

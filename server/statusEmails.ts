@@ -38,12 +38,14 @@ async function loadJobStatusEmailData(
   const customer = await db.getCustomerById(booking.customerId);
   if (!customer) return null;
   const locale = booking.locale as "en" | "es";
+  // Status emails fire on confirmed-and-beyond jobs, which paid their way
+  // past the completeness gate — the fallbacks are for the type system.
   return {
     reference: booking.reference,
-    serviceName: SERVICE_NAMES[booking.serviceType][locale],
-    date: booking.scheduledDate,
+    serviceName: SERVICE_NAMES[booking.serviceType ?? "residential"][locale],
+    date: booking.scheduledDate ?? "",
     customerName: customer.firstName,
-    customerEmail: customer.email,
+    customerEmail: customer.email ?? "",
     locale,
     bizPhone: (await db.getSetting("business_phone"))?.trim() || undefined,
   };

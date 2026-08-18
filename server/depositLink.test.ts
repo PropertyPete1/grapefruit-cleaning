@@ -391,26 +391,50 @@ describe("link status", () => {
   const now = new Date("2026-07-16T12:00:00Z");
   const future = new Date(now.getTime() + 3_600_000);
   const past = new Date(now.getTime() - 3_600_000);
+  /** A row with every fact settled — status questions only, no completeness noise. */
+  const complete = {
+    serviceType: "residential",
+    sqft: 1200,
+    scheduledDate: OPEN_MONDAY,
+    scheduledTime: "10:00",
+  };
 
   it("is none for a self-serve booking that never had a link", () => {
-    expect(depositLinkStatus({ status: "pending_deposit", hasPayToken: false }, now)).toBe("none");
+    expect(depositLinkStatus({ ...complete, status: "pending_deposit", hasPayToken: false }, now)).toBe("none");
   });
 
-  it("is awaiting payment while the window is open", () => {
+  it("is awaiting payment while the window is open and every fact is settled", () => {
     expect(
-      depositLinkStatus({ status: "pending_deposit", hasPayToken: true, payTokenExpiresAt: future }, now)
+      depositLinkStatus({ ...complete, status: "pending_deposit", hasPayToken: true, payTokenExpiresAt: future }, now)
     ).toBe("awaiting_payment");
   });
 
-  it("is expired once it closes unpaid", () => {
+  it("is incomplete while a fact is still the customer's to choose", () => {
     expect(
-      depositLinkStatus({ status: "pending_deposit", hasPayToken: true, payTokenExpiresAt: past }, now)
+      depositLinkStatus(
+        { ...complete, scheduledDate: null, scheduledTime: null, status: "pending_deposit", hasPayToken: true, payTokenExpiresAt: future },
+        now
+      )
+    ).toBe("incomplete");
+  });
+
+  it("is expired once it closes unpaid — even when also incomplete", () => {
+    expect(
+      depositLinkStatus({ ...complete, status: "pending_deposit", hasPayToken: true, payTokenExpiresAt: past }, now)
+    ).toBe("expired");
+    // A dead link outranks an unfinished one: whatever is missing, the fix is
+    // the same — resend.
+    expect(
+      depositLinkStatus(
+        { ...complete, serviceType: null, status: "pending_deposit", hasPayToken: true, payTokenExpiresAt: past },
+        now
+      )
     ).toBe("expired");
   });
 
   it("is paid once the booking is confirmed, however long ago the window closed", () => {
     expect(
-      depositLinkStatus({ status: "confirmed", hasPayToken: true, payTokenExpiresAt: past }, now)
+      depositLinkStatus({ ...complete, status: "confirmed", hasPayToken: true, payTokenExpiresAt: past }, now)
     ).toBe("paid");
   });
 

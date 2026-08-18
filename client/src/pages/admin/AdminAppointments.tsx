@@ -110,15 +110,24 @@ export default function AdminAppointments() {
                   <tr key={b.id} className="border-b border-border/60 last:border-0 hover:bg-muted/40">
                     <td className="px-5 py-3.5 font-mono text-xs font-semibold text-primary">{b.reference}</td>
                     <td className="px-5 py-3.5">
-                      {SERVICE_LABELS[b.serviceType] ?? b.serviceType}
+                      {b.serviceType ? (SERVICE_LABELS[b.serviceType] ?? b.serviceType) : (
+                        <span className="text-xs text-muted-foreground">Customer picks</span>
+                      )}
                       <span className="block text-xs text-muted-foreground">{b.frequency}</span>
                     </td>
                     <td className="px-5 py-3.5">
-                      {fmtDate(b.scheduledDate)}
-                      {/* The span, not the start: this is what the calendar holds. */}
-                      <span className="block text-xs text-muted-foreground">
-                        {formatJobSpan(b.scheduledTime, b.durationHours)}
-                      </span>
+                      {b.scheduledDate && b.scheduledTime ? (
+                        <>
+                          {fmtDate(b.scheduledDate)}
+                          {/* The span, not the start: this is what the calendar holds. */}
+                          <span className="block text-xs text-muted-foreground">
+                            {formatJobSpan(b.scheduledTime, b.durationHours)}
+                          </span>
+                        </>
+                      ) : (
+                        /* No slot yet — and no inventory held, so nothing can go stale. */
+                        <span className="text-xs text-muted-foreground">Customer picks a time</span>
+                      )}
                       {b.slotConflict && (
                         <span
                           className="mt-1 block w-fit rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-700"
@@ -157,8 +166,15 @@ export default function AdminAppointments() {
                       )}
                     </td>
                     <td className="px-5 py-3.5">
-                      <span className="font-semibold">{fmtMoney(b.totalAmount)}</span>
-                      <span className="block text-xs text-muted-foreground">dep. {fmtMoney(b.depositAmount)}</span>
+                      {b.depositLink === "incomplete" ? (
+                        /* Zero is the unpriceable sentinel, not a price. */
+                        <span className="text-xs text-muted-foreground">Priced as they choose</span>
+                      ) : (
+                        <>
+                          <span className="font-semibold">{fmtMoney(b.totalAmount)}</span>
+                          <span className="block text-xs text-muted-foreground">dep. {fmtMoney(b.depositAmount)}</span>
+                        </>
+                      )}
                       {pendingByBooking.get(b.id) !== undefined && (
                         <Link
                           href="/admin/invoices"
@@ -222,11 +238,15 @@ export default function AdminAppointments() {
                 title={
                   <span className="flex flex-wrap items-center gap-x-2">
                     <span className="font-mono text-xs font-semibold text-primary">{b.reference}</span>
-                    <span>{SERVICE_LABELS[b.serviceType] ?? b.serviceType}</span>
+                    <span>{b.serviceType ? (SERVICE_LABELS[b.serviceType] ?? b.serviceType) : "Customer picks service"}</span>
                   </span>
                 }
-                subtitle={`${fmtDate(b.scheduledDate)} · ${formatJobSpan(b.scheduledTime, b.durationHours)}`}
-                amount={fmtMoney(b.totalAmount)}
+                subtitle={
+                  b.scheduledDate && b.scheduledTime
+                    ? `${fmtDate(b.scheduledDate)} · ${formatJobSpan(b.scheduledTime, b.durationHours)}`
+                    : "Customer picks a time"
+                }
+                amount={b.depositLink === "incomplete" ? "—" : fmtMoney(b.totalAmount)}
                 badge={<StatusBadge status={b.status} />}
                 details={[
                   { label: "Address", value: `${b.addressLine}, ${b.city}` },
@@ -235,7 +255,9 @@ export default function AdminAppointments() {
                     label: "Size",
                     value: b.verifiedSqft
                       ? `${b.verifiedSqft.toLocaleString()} ft² verified${b.sqftMismatch ? " (price corrected)" : ""}`
-                      : `${b.sqft.toLocaleString()} ft²`,
+                      : b.sqft != null
+                        ? `${b.sqft.toLocaleString()} ft²`
+                        : "Customer picks",
                   },
                   ...(b.slotConflict ? [{ label: "Warning", value: "Slot conflict" }] : []),
                   ...(pendingByBooking.get(b.id) !== undefined

@@ -143,35 +143,53 @@ export const adminRouter = router({
    */
   createBooking: adminProcedure
     .input(
-      z.object({
-        serviceType: z.enum(CLEANING_TYPES),
-        frequency: z.enum(FREQUENCIES).default("onetime"),
-        bedrooms: z.number().int().min(0).max(10),
-        bathrooms: z.number().int().min(1).max(10),
-        sqft: z.number().min(200).max(20000),
-        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-        time: z.string().regex(/^\d{2}:\d{2}$/),
-        firstName: z.string().min(1).max(100),
-        lastName: z.string().min(1).max(100),
-        email: z.string().email().max(320),
-        phone: z.string().min(7).max(40),
-        address: z.string().min(1).max(255),
-        city: z.string().min(1).max(100),
-        zip: z.string().min(3).max(20),
-        notes: z.string().max(2000).optional(),
-        locale: z.enum(["en", "es"]),
-        couponCode: z.string().max(40).optional(),
-        overrideNotice: z.boolean().optional(),
-        /** Owner's choice: email the link, or copy it for a text message. */
-        sendEmail: z.boolean().default(true),
-      })
+      z
+        .object({
+          // The hard floor: someone to greet and a way to reach them. A lead
+          // typed with a thumb between calls is a first name and a number.
+          firstName: z.string().min(1).max(100),
+          lastName: z.string().max(100).optional(),
+          email: z.string().email().max(320).optional(),
+          phone: z.string().min(7).max(40).optional(),
+          // Everything below is optional — whatever the owner locks here is
+          // settled; whatever he leaves blank, the customer chooses on the
+          // link. Note the continued absence of any price field.
+          serviceType: z.enum(CLEANING_TYPES).optional(),
+          frequency: z.enum(FREQUENCIES).default("onetime"),
+          bedrooms: z.number().int().min(0).max(10).optional(),
+          bathrooms: z.number().int().min(1).max(10).optional(),
+          sqft: z.number().min(200).max(20000).optional(),
+          date: z
+            .string()
+            .regex(/^\d{4}-\d{2}-\d{2}$/)
+            .optional(),
+          time: z
+            .string()
+            .regex(/^\d{2}:\d{2}$/)
+            .optional(),
+          address: z.string().min(1).max(255).optional(),
+          city: z.string().min(1).max(100).optional(),
+          zip: z.string().min(3).max(20).optional(),
+          notes: z.string().max(2000).optional(),
+          locale: z.enum(["en", "es"]).default("en"),
+          couponCode: z.string().max(40).optional(),
+          overrideNotice: z.boolean().optional(),
+          /** Owner's choice: email the link, or copy it for a text message. */
+          sendEmail: z.boolean().default(true),
+        })
+        .refine(input => input.email || input.phone, {
+          message: "Enter an email or a phone number — the link needs a way to reach them.",
+        })
+        .refine(input => Boolean(input.date) === Boolean(input.time), {
+          message: "A held time needs both a date and a time — or leave both blank and let them pick.",
+        })
     )
     .mutation(async ({ ctx, input }) => {
       const origin = originFromRequest(ctx.req);
       const result = await createAdminBooking(input, origin);
 
       let emailSent = false;
-      if (input.sendEmail) {
+      if (input.sendEmail && input.email) {
         const bizPhone = (await db.getSetting("business_phone"))?.trim() || undefined;
         // Best-effort, like every other transactional send: the booking exists
         // and holds its slot whether or not the mail server cooperates, and the
@@ -179,12 +197,12 @@ export const adminRouter = router({
         try {
           emailSent = await sendDepositLinkEmail({
             reference: result.reference,
-            serviceName: SERVICE_NAMES[input.serviceType][input.locale],
+            serviceName: input.serviceType ? SERVICE_NAMES[input.serviceType][input.locale] : undefined,
             date: input.date,
             time: input.time,
             customerName: input.firstName,
             customerEmail: input.email,
-            address: [input.address, input.city, input.zip].filter(Boolean).join(", "),
+            address: [input.address, input.city, input.zip].filter(Boolean).join(", ") || undefined,
             basePrice: result.basePrice,
             deposit: result.depositEstimate,
             payUrl: result.payUrl,
@@ -206,6 +224,7 @@ export const adminRouter = router({
         expiresAt: result.expiresAt,
         sqft: result.sqft,
         sqftCorrected: result.sqftCorrected,
+        customerWillChoose: result.customerWillChoose,
         emailSent,
       };
     }),
@@ -263,14 +282,15 @@ export const adminRouter = router({
       try {
         emailSent = await sendDepositLinkEmail({
           reference: booking.reference,
-          serviceName: SERVICE_NAMES[booking.serviceType][locale],
-          date: booking.scheduledDate,
-          time: booking.scheduledTime,
+          serviceName: booking.serviceType ? SERVICE_NAMES[booking.serviceType][locale] : undefined,
+          date: booking.scheduledDate ?? undefined,
+          time: booking.scheduledTime ?? undefined,
           customerName: customer.firstName,
-          customerEmail: customer.email,
-          address: [booking.addressLine, booking.city, booking.zip].filter(Boolean).join(", "),
-          basePrice: booking.totalAmount,
-          deposit: booking.depositAmount,
+          customerEmail: customer.email ?? "",
+          address: [booking.addressLine, booking.city, booking.zip].filter(Boolean).join(", ") || undefined,
+          // Zero is the unpriceable sentinel, never a price to promise.
+          basePrice: booking.totalAmount > 0 ? booking.totalAmount : null,
+          deposit: booking.totalAmount > 0 ? booking.depositAmount : null,
           payUrl,
           expiresOn: expiresAt.toISOString().slice(0, 10),
           locale,
@@ -287,6 +307,19 @@ export const adminRouter = router({
       // Read first: only an actual confirmed → in progress move is a job
       // starting, and that is what the customer gets told about.
       const before = await db.getBookingById(input.id);
+      // A booking whose customer hasn't picked a time yet isn't schedulable:
+      // confirming it would put a job with no hours on the calendar, and the
+      // crew nowhere. Cancelling is fine — that's how a dead lead is retired.
+      if (
+        before &&
+        (before.scheduledDate == null || before.scheduledTime == null) &&
+        (input.status === "confirmed" || input.status === "in_progress" || input.status === "completed")
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "This booking has no time yet — the customer picks one on their link before it can be confirmed.",
+        });
+      }
       try {
         await db.updateBooking(input.id, { status: input.status });
       } catch (error) {

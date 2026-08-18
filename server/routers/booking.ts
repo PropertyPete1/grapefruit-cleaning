@@ -26,6 +26,7 @@ import { LUNCH_SETTING_KEY, parseLunchBreak, parseSchedule, SCHEDULE_SETTING_KEY
 import * as db from "../db";
 import { assertRateLimit, clientIp } from "../antiSpam";
 import { blocksSlot, STALE_DEPOSIT_MINUTES } from "../bookingRules";
+import { parseAdminProvided } from "../depositLinkRules";
 import { sendBookingEmails } from "../emails";
 import { lookupPropertySqft } from "../property";
 import { publicOrigin } from "../publicOrigin";
@@ -118,7 +119,7 @@ export async function loadSchedulingRules() {
  * The raw column is left untouched beside it.
  */
 export async function withDurationHours<
-  T extends { serviceType: string; sqft: number; estimatedHours: number | null },
+  T extends { serviceType: string | null; sqft: number | null; estimatedHours: number | null },
 >(rows: T[]): Promise<(T & { durationHours: number })[]> {
   if (rows.length === 0) return [];
   const durations = await loadDurationConfig();
@@ -129,7 +130,7 @@ export async function withDurationHours<
 }
 
 export function occupiedIntervals(
-  rows: { time: string; serviceType: string; sqft: number; estimatedHours: number | null }[],
+  rows: { time: string; serviceType: string | null; sqft: number | null; estimatedHours: number | null }[],
   durations: DurationConfig
 ): OccupiedInterval[] {
   return rows.map(row => ({
@@ -476,9 +477,9 @@ export const bookingRouter = router({
         confirmed: true as const,
         booking: {
           reference: updated.reference,
-          serviceType: updated.serviceType,
-          date: updated.scheduledDate,
-          time: updated.scheduledTime,
+          serviceType: updated.serviceType ?? "residential",
+          date: updated.scheduledDate ?? "",
+          time: updated.scheduledTime ?? "",
           total: updated.totalAmount,
           deposit: updated.depositAmount,
           customerFirstName: customer?.firstName ?? "",
@@ -516,12 +517,14 @@ export const bookingRouter = router({
  */
 async function overlapsLiveBooking(booking: {
   id: number;
-  scheduledDate: string;
-  scheduledTime: string;
-  serviceType: string;
-  sqft: number;
+  scheduledDate: string | null;
+  scheduledTime: string | null;
+  serviceType: string | null;
+  sqft: number | null;
   estimatedHours: number | null;
 }): Promise<boolean> {
+  // No slot, no conflict: a booking that holds no hours cannot cross anyone's.
+  if (!booking.scheduledDate || !booking.scheduledTime) return false;
   const durations = await loadDurationConfig();
   const others = (await db.getOccupiedBookings(booking.scheduledDate)).filter(row => row.id !== booking.id);
   const mine = {
@@ -594,17 +597,35 @@ export async function finalizeBooking(bookingId: number, paymentIntentId: string
     const locale = booking.locale as "en" | "es";
     const extras: string[] = JSON.parse(booking.extras ?? "[]");
     const bizPhone = (await db.getSetting("business_phone"))?.trim() || undefined;
+    // Payment is gated on completeness (createSession refuses an unfinished
+    // link, and the public flow never writes gaps), so a paid booking always
+    // has these facts — the fallbacks are for the type system, not for life.
+    const serviceType = booking.serviceType ?? "residential";
+    // For a deposit link the owner sent by hand, the notification leads with
+    // "your link was completed" and names what the CUSTOMER chose — the facts
+    // the owner didn't lock at creation. He may have sent the link hours ago;
+    // this is the moment he learns how the lead landed.
+    let completedLink: { customerChose: string[] } | undefined;
+    if (booking.kind === "admin") {
+      const locked = parseAdminProvided(booking.adminProvided);
+      const chose: string[] = [];
+      if (!locked.has("service")) chose.push(`service: ${SERVICE_NAMES[serviceType].en}`);
+      if (!locked.has("size") && booking.sqft != null) chose.push(`size: ${booking.sqft.toLocaleString()} sq ft`);
+      if (!locked.has("slot")) chose.push(`time: ${booking.scheduledDate} at ${booking.scheduledTime}`);
+      completedLink = { customerChose: chose };
+    }
     await sendBookingEmails({
+      completedLink,
       reference: booking.reference,
-      serviceName: SERVICE_NAMES[booking.serviceType][locale],
-      date: booking.scheduledDate,
-      time: booking.scheduledTime,
+      serviceName: SERVICE_NAMES[serviceType][locale],
+      date: booking.scheduledDate ?? "",
+      time: booking.scheduledTime ?? "",
       frequencyLabel: FREQUENCY_NAMES[booking.frequency][locale],
       extras: extras.map(e => EXTRA_NAMES[e]?.[locale] ?? e),
       total: booking.totalAmount,
       deposit: booking.depositAmount,
       customerName: customer.firstName,
-      customerEmail: customer.email,
+      customerEmail: customer.email ?? "",
       customerPhone: customer.phone ?? undefined,
       address: [booking.addressLine, booking.city, booking.zip].filter(Boolean).join(", "),
       notes: booking.notes ?? undefined,

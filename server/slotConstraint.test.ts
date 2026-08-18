@@ -57,14 +57,23 @@ import type { TrpcContext } from "./_core/context";
 
 const DRIZZLE_DIR = path.resolve(import.meta.dirname, "..", "drizzle");
 
-/** The migration that installs the constraint, found by content so renumbering can't break this. */
-function slotMigrationSql(): string {
+/**
+ * The migrations that install the constraint, found by content so renumbering
+ * can't break this. There are two on purpose: 0011 created it, and the
+ * progressive-links migration had to drop and re-install it to make the base
+ * columns nullable (MySQL refuses ALTERs under a generated column). What must
+ * hold is that every installer carries the IDENTICAL expression — the tests
+ * below run against each one, so the re-install cannot quietly change what
+ * the constraint means.
+ */
+function slotMigrationSqls(): string[] {
   const files = readdirSync(DRIZZLE_DIR).filter(f => f.endsWith(".sql"));
   const matches = files
+    .sort()
     .map(f => readFileSync(path.join(DRIZZLE_DIR, f), "utf8"))
-    .filter(sql => sql.includes("slotKey"));
-  expect(matches, "no migration installs slotKey").toHaveLength(1);
-  return matches[0]!;
+    .filter(sql => sql.includes("ADD `slotKey`"));
+  expect(matches.length, "no migration installs slotKey").toBeGreaterThanOrEqual(1);
+  return matches;
 }
 
 /** MySQL duplicate-key error as mysql2 raises it. */
@@ -74,32 +83,70 @@ const dupError = (key: string, entry = "2026-07-20T10:00") =>
     errno: 1062,
   });
 
-describe("the slot constraint's migration", () => {
-  const sql = slotMigrationSql();
+describe("the slot constraint's migrations", () => {
+  const sqls = slotMigrationSqls();
 
   it("adds slotKey as a generated column, so no code path can leave it stale", () => {
-    expect(sql).toMatch(/ADD `slotKey`/);
-    expect(sql).toMatch(/GENERATED ALWAYS AS/);
+    for (const sql of sqls) {
+      expect(sql).toMatch(/ADD `slotKey`/);
+      expect(sql).toMatch(/GENERATED ALWAYS AS/);
+    }
   });
 
   it("nulls the key out for exactly the statuses that release the slot", () => {
-    expect(sql).toContain("'cancelled'");
-    expect(sql).toContain("'expired'");
-    // NULLs are what let a released slot be reused: MySQL allows many of them
-    // in a unique index, which is how this stands in for a partial index.
-    expect(sql).toMatch(/then null/i);
-    for (const status of SLOT_HOLDING_STATUSES) {
-      expect(sql, `${status} must not be excluded from the constraint`).not.toContain(`'${status}'`);
+    for (const sql of sqls) {
+      expect(sql).toContain("'cancelled'");
+      expect(sql).toContain("'expired'");
+      // NULLs are what let a released slot be reused: MySQL allows many of
+      // them in a unique index, which is how this stands in for a partial
+      // index. Since the progressive-links migration they also cover the
+      // slotless state: CONCAT over a NULL date is NULL, so a booking whose
+      // customer hasn't picked a time holds nothing.
+      expect(sql).toMatch(/then null/i);
+      for (const status of SLOT_HOLDING_STATUSES) {
+        expect(sql, `${status} must not be excluded from the constraint`).not.toContain(`'${status}'`);
+      }
     }
   });
 
   it("keys on the date and time together", () => {
-    expect(sql).toMatch(/concat\(`scheduledDate`, 'T', `scheduledTime`\)/);
+    for (const sql of sqls) {
+      expect(sql).toMatch(/concat\(`scheduledDate`, 'T', `scheduledTime`\)/);
+    }
   });
 
   it("puts a unique index on it under the name the error check looks for", () => {
-    expect(sql).toContain(SLOT_UNIQUE_INDEX);
-    expect(sql).toMatch(/UNIQUE\(`slotKey`\)/);
+    for (const sql of sqls) {
+      expect(sql).toContain(SLOT_UNIQUE_INDEX);
+      expect(sql).toMatch(/UNIQUE\(`slotKey`\)/);
+    }
+  });
+
+  it("re-installs carry the identical generated expression", () => {
+    // The whole safety argument of the drop/re-add sandwich: the constraint
+    // that comes back is the constraint that left.
+    const expressions = sqls.map(sql => sql.match(/GENERATED ALWAYS AS \(([\s\S]*?)\) VIRTUAL/)?.[1]);
+    for (const expression of expressions) {
+      expect(expression).toBeDefined();
+      expect(expression).toBe(expressions[0]);
+    }
+  });
+
+  it("never leaves the base columns modified while the constraint is off", () => {
+    // The re-install migration must drop the index+column, alter, and put
+    // both back in that order — a file that alters after re-adding would hit
+    // the same MySQL refusal the sandwich exists to avoid.
+    for (const sql of sqls) {
+      if (!sql.includes("DROP COLUMN `slotKey`")) continue;
+      const drop = sql.indexOf("DROP COLUMN `slotKey`");
+      const modifies = [...sql.matchAll(/MODIFY COLUMN `scheduled(?:Date|Time)`/g)].map(m => m.index!);
+      const readd = sql.indexOf("ADD `slotKey`");
+      expect(modifies.length).toBeGreaterThan(0);
+      for (const at of modifies) {
+        expect(at).toBeGreaterThan(drop);
+        expect(at).toBeLessThan(readd);
+      }
+    }
   });
 });
 

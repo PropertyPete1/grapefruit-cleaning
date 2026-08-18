@@ -1,22 +1,25 @@
 /**
  * Admin-created bookings and their deposit links.
  *
- * Many customers ask for pricing by phone or text and never touch the website.
- * The owner enters the basics here, and the CUSTOMER finishes the job on a
- * personal link: they pick their own extras, watch the price move, and pay the
- * deposit. That split is the whole point — the owner should not have to
- * interrogate someone about oven cleaning while writing down their address.
+ * Real phone leads arrive in every state of completeness: sometimes the owner
+ * has the whole job scoped, sometimes he has a first name and a number typed
+ * with his thumb between calls. The form requires exactly what a link cannot
+ * work without — a name and a way to reach them — and everything else is
+ * optional. Whatever the owner locks is settled; whatever he leaves blank, the
+ * CUSTOMER fills in on the link, watching the price assemble as they go.
  *
- * Two rules hold this together:
+ * Two rules hold this together, unchanged from the first version:
  *
- *   1. Money is never taken from the client. The admin form sends no prices,
- *      and the pay page sends only extra IDs. Every dollar figure is computed
- *      here from the live pricing config, at creation and again at payment.
+ *   1. Money is never taken from a client. Neither form sends a price; the pay
+ *      page sends selections. Every dollar figure is computed here from the
+ *      live pricing config — at creation when possible, at each step, and
+ *      finally at payment.
  *
- *   2. The booking is a real booking from the moment it is created. It holds
- *      its slot as pending_deposit against the same unique index and the same
- *      overlap rules as a self-serve one, so the owner can promise the
- *      appointment on the phone and have that promise mean something.
+ *   2. Holding a slot means holding it for real. A booking created WITH a time
+ *      occupies it under the same unique index and overlap rules as a
+ *      self-serve one. A booking created WITHOUT one holds nothing — inventory
+ *      is claimed the moment the customer picks, not the moment the owner
+ *      guesses.
  */
 import { TRPCError } from "@trpc/server";
 import { randomBytes } from "node:crypto";
@@ -32,7 +35,12 @@ import { durationHoursFor, type DurationConfig } from "@shared/duration";
 import { ADMIN_HOLD_SETTING_KEY, adminHoldMinutes } from "@shared/holdWindow";
 import type { CleaningType, ExtraId, Frequency } from "@shared/pricing";
 import * as db from "./db";
-import { depositLinkExpiresAt, depositPayUrl } from "./depositLinkRules";
+import {
+  depositLinkExpiresAt,
+  depositPayUrl,
+  serializeAdminProvided,
+  type ProvidedFact,
+} from "./depositLinkRules";
 import { lookupPropertySqft } from "./property";
 import { loadPricingConfig, loadSchedulingRules, occupiedIntervals } from "./routers/booking";
 
@@ -41,35 +49,39 @@ export function generateDepositToken(): string {
   return randomBytes(24).toString("hex");
 }
 
-/** What the owner fills in. Note the absence of extras and of any price. */
+/**
+ * What the owner fills in. Required: a name and one way to reach the
+ * customer. Everything else is what he happens to know — note the continued
+ * absence of extras and of any price.
+ */
 export interface AdminBookingInput {
-  serviceType: CleaningType;
-  frequency: Frequency;
-  bedrooms: number;
-  bathrooms: number;
-  sqft: number;
-  date: string;
-  time: string;
   firstName: string;
-  lastName: string;
-  email: string;
-  phone: string;
-  address: string;
-  city: string;
-  zip: string;
+  lastName?: string;
+  email?: string;
+  phone?: string;
+  serviceType?: CleaningType;
+  frequency?: Frequency;
+  bedrooms?: number;
+  bathrooms?: number;
+  sqft?: number;
+  date?: string;
+  time?: string;
+  address?: string;
+  city?: string;
+  zip?: string;
   notes?: string;
   /** Drives the language of their email and their pay page. */
-  locale: "en" | "es";
+  locale?: "en" | "es";
   couponCode?: string;
   /**
    * Admin-only escape from the minimum-notice rule, for the customer standing
    * in the kitchen asking for tomorrow morning when the rule says three days.
+   * Only meaningful when the owner picks the time himself; a customer claiming
+   * a slot through the link always gets the public rules.
    *
-   * It relaxes the notice requirement to zero — it does not open the past. A
-   * slot that has already begun is still refused, because booking a cleaning
-   * for nine this morning at half past four is a mistake however it is entered.
-   * Every other rule (open hours, lunch, taken slots, closing time) still
-   * applies: this overrides one rule, not the scheduler.
+   * It relaxes the notice requirement to zero — it does not open the past, and
+   * every other rule (open hours, lunch, taken slots, closing time) still
+   * applies.
    */
   overrideNotice?: boolean;
 }
@@ -79,13 +91,15 @@ export interface AdminBookingResult {
   reference: string;
   payToken: string;
   payUrl: string;
-  /** Base price before the customer's own extras, in whole dollars. */
-  basePrice: number;
-  depositEstimate: number;
+  /** Base price before extras, or null while a pricing fact is still missing. */
+  basePrice: number | null;
+  depositEstimate: number | null;
   expiresAt: Date;
   /** True when county records priced the home above what the owner typed. */
   sqftCorrected: boolean;
-  sqft: number;
+  sqft: number | null;
+  /** The facts the customer will be asked for on the link. */
+  customerWillChoose: string[];
 }
 
 /** The one message the owner sees when the slot will not take this booking. */
@@ -100,9 +114,9 @@ export function slotUnavailableError(): TRPCError {
  * Whether this slot may be booked, under every scheduling rule.
  *
  * Deliberately the same isSlotBookable the public calendar and booking.create
- * go through, with the same occupancy: an admin booking that ignored the rules
- * would produce exactly the overlapping pair the owner would then have to
- * untangle by hand.
+ * go through, with the same occupancy: a hand-entered booking that ignored the
+ * rules would produce exactly the overlapping pair the owner would then have
+ * to untangle by hand.
  */
 export async function adminSlotBookable(args: {
   date: string;
@@ -132,15 +146,13 @@ export async function adminSlotBookable(args: {
 }
 
 /**
- * The base price of an admin-created booking: the quote with no extras.
+ * The quote for a booking's known facts plus a set of extras.
  *
- * Extras are the customer's to choose on the pay page, so the figure stored at
- * creation is a floor, not a total. Frequency discount and coupon are applied
- * here as well as at payment, so the owner sees on screen what the customer
- * will see in their email.
+ * Bedrooms and bathrooms default to the schema's own defaults — they are crew
+ * information, not price inputs, under fixed tier pricing.
  */
 export function computeBasePrice(
-  input: Pick<AdminBookingInput, "serviceType" | "frequency" | "bedrooms" | "bathrooms">,
+  input: { serviceType: CleaningType; frequency?: Frequency | null; bedrooms?: number | null; bathrooms?: number | null },
   sqft: number,
   pricing: PricingConfig,
   extras: ExtraId[] = []
@@ -148,24 +160,17 @@ export function computeBasePrice(
   return calculateQuote(
     {
       type: input.serviceType,
-      bedrooms: input.bedrooms,
-      bathrooms: input.bathrooms,
+      bedrooms: input.bedrooms ?? 2,
+      bathrooms: input.bathrooms ?? 1,
       sqft,
       extras,
-      frequency: input.frequency,
+      frequency: input.frequency ?? "onetime",
     },
     pricing
   );
 }
 
-/**
- * Applies a coupon to a total, server-side, returning the discounted total.
- *
- * Lifted out of booking.create's body so the admin flow and the pay page apply
- * a coupon the same way rather than each growing their own arithmetic. An
- * unusable coupon (missing, inactive, expired, exhausted) is silently no
- * discount, exactly as it is in the public flow.
- */
+/** A coupon row, only when the server would actually honour it right now. */
 export async function usableCoupon(couponCode: string | null | undefined) {
   if (!couponCode) return undefined;
   const coupon = await db.getCouponByCode(couponCode.trim().toUpperCase());
@@ -178,6 +183,7 @@ export async function usableCoupon(couponCode: string | null | undefined) {
   return usable ? coupon : undefined;
 }
 
+/** Applies a coupon to a total, server-side, returning the discounted total. */
 export async function applyCoupon(
   total: number,
   couponCode: string | null | undefined
@@ -191,63 +197,121 @@ export async function applyCoupon(
 }
 
 /**
- * Creates the booking, holds the slot, and issues the deposit link.
+ * Resolves the effective square footage from what the owner typed and what the
+ * county records say, under the standing rule: when both exist, the figure
+ * that prices higher wins, so an understated guess cannot lower the price.
+ * With only one source, that source is simply the answer.
+ */
+export function resolveEffectiveSqft(args: {
+  enteredSqft: number | null;
+  verifiedSqft: number | null;
+  serviceType: CleaningType;
+  frequency?: Frequency | null;
+  pricing: PricingConfig;
+}): { sqft: number | null; corrected: boolean } {
+  const { enteredSqft, verifiedSqft } = args;
+  if (enteredSqft == null && verifiedSqft == null) return { sqft: null, corrected: false };
+  if (enteredSqft == null) return { sqft: verifiedSqft, corrected: false };
+  if (verifiedSqft == null) return { sqft: enteredSqft, corrected: false };
+  const price = (sqft: number) =>
+    computeBasePrice({ serviceType: args.serviceType, frequency: args.frequency }, sqft, args.pricing).total;
+  return price(verifiedSqft) > price(enteredSqft)
+    ? { sqft: verifiedSqft, corrected: true }
+    : { sqft: enteredSqft, corrected: false };
+}
+
+/**
+ * Creates the booking in whatever state of completeness the owner has, and
+ * issues the deposit link.
  *
- * Mirrors booking.create step for step — county sqft verification, the
- * check-verify-recheck sandwich around the network call, the stale-hold
- * release before the insert, the unique-index catch — because the failure
- * modes are identical and solving them twice, differently, is how the two
- * paths drift apart.
+ * With a slot: the same check-verify-recheck sandwich, stale-hold release and
+ * unique-index catch as the public flow, and the slot is held for the admin
+ * window. Without one: no scheduling checks run and no inventory is touched —
+ * the row's scheduledDate/Time stay NULL, its generated slotKey stays NULL,
+ * and the unique index ignores it entirely.
  */
 export async function createAdminBooking(
   input: AdminBookingInput,
   origin: string
 ): Promise<AdminBookingResult> {
+  if (!input.email && !input.phone) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Enter an email or a phone number — the link needs a way to reach them." });
+  }
+  const hasSlot = Boolean(input.date && input.time);
+  if (Boolean(input.date) !== Boolean(input.time)) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "A held time needs both a date and a time — or leave both blank and let them pick." });
+  }
+
+  const pricing = await loadPricingConfig();
+
+  // County verification runs whenever there is an address to look up, exactly
+  // as the public flow does — the verified figure can settle the size question
+  // even when the owner left sqft blank.
+  const property = input.address
+    ? await lookupPropertySqft(input.address, input.city, input.zip)
+    : ({ verified: false, addressVerified: false } as Awaited<ReturnType<typeof lookupPropertySqft>>);
+
+  let effectiveSqft: number | null = input.sqft ?? null;
+  let sqftMismatch = false;
+  if (input.serviceType && property.verified && property.sqft) {
+    const resolved = resolveEffectiveSqft({
+      enteredSqft: input.sqft ?? null,
+      verifiedSqft: property.sqft,
+      serviceType: input.serviceType,
+      frequency: input.frequency,
+      pricing,
+    });
+    effectiveSqft = resolved.sqft;
+    sqftMismatch = resolved.corrected;
+  } else if (effectiveSqft == null && property.verified && property.sqft) {
+    // Size known from records alone; without a service there is nothing to
+    // price yet, but the fact itself is settled.
+    effectiveSqft = property.sqft;
+  }
+
   const { schedule, lunchBreak, leadTimeHours, durations } = await loadSchedulingRules();
   const overrideNotice = input.overrideNotice === true;
+  const priceable = Boolean(input.serviceType && effectiveSqft != null);
 
-  const bookable = (jobHours: number) =>
-    adminSlotBookable({
-      date: input.date,
-      time: input.time,
-      jobHours,
+  // Duration for slot checks: from the real facts when known, the ladder
+  // fallback otherwise (an hour — the same floor the public calendar uses
+  // before a quote is complete).
+  const estimatedHours =
+    input.serviceType != null && effectiveSqft != null
+      ? durationHoursFor(input.serviceType, effectiveSqft, durations)
+      : null;
+
+  if (hasSlot) {
+    const bookable = await adminSlotBookable({
+      date: input.date!,
+      time: input.time!,
+      jobHours: estimatedHours ?? 1,
       overrideNotice,
       schedule,
       lunchBreak,
       leadTimeHours,
       durations,
     });
-
-  // Fast fail on the entered size, before spending a round trip on the county
-  // records. The authoritative check is the second one, before the insert.
-  if (!(await bookable(durationHoursFor(input.serviceType, input.sqft, durations)))) {
-    throw slotUnavailableError();
+    if (!bookable) throw slotUnavailableError();
   }
 
-  // Same verification the public flow runs: if county records price the home
-  // into a higher tier than the entered figure, the verified square footage
-  // wins, so an understated guess on the phone cannot lower the price.
-  const pricing = await loadPricingConfig();
-  const property = await lookupPropertySqft(input.address, input.city, input.zip);
-  let effectiveSqft = input.sqft;
-  let sqftMismatch = false;
-  if (property.verified && property.sqft) {
-    const entered = computeBasePrice(input, input.sqft, pricing);
-    const verified = computeBasePrice(input, property.sqft, pricing);
-    if (verified.total > entered.total) {
-      effectiveSqft = property.sqft;
-      sqftMismatch = true;
-    }
-  }
-
-  const breakdown = computeBasePrice(input, effectiveSqft, pricing);
-  const coupon = await applyCoupon(breakdown.total, input.couponCode);
-  const deposit = depositFor(coupon.total, pricing.depositRate);
+  const breakdown = priceable
+    ? computeBasePrice(
+        { serviceType: input.serviceType!, frequency: input.frequency, bedrooms: input.bedrooms, bathrooms: input.bathrooms },
+        effectiveSqft!,
+        pricing
+      )
+    : null;
+  const coupon = breakdown ? await applyCoupon(breakdown.total, input.couponCode) : null;
+  const deposit = coupon ? depositFor(coupon.total, pricing.depositRate) : null;
 
   const holdMinutes = adminHoldMinutes(await db.getSetting(ADMIN_HOLD_SETTING_KEY));
   const reference = generateBookingReference();
   const payToken = generateDepositToken();
   const createdAt = new Date();
+  // One window, two meanings that coincide: with a slot it is the hold AND the
+  // link's life; without one it is only how long the link works — no inventory
+  // is at stake, and the stale-release machinery skips slotless rows entirely.
   const expiresAt = depositLinkExpiresAt(createdAt, holdMinutes);
 
   const customerId = await db.findOrCreateCustomer({
@@ -258,26 +322,44 @@ export async function createAdminBooking(
     address: input.address,
     city: input.city,
     zip: input.zip,
-    preferredLocale: input.locale,
+    preferredLocale: input.locale ?? "en",
   });
 
-  await db.expireStaleBookingsForSlot(input.date, input.time);
+  // Provenance: the facts the OWNER locked. Everything else is the customer's
+  // to fill in — and to re-edit until they pay.
+  const provided: ProvidedFact[] = [];
+  if (input.serviceType) provided.push("service");
+  if (effectiveSqft != null) provided.push("size");
+  if (input.address) provided.push("address");
+  if (hasSlot) provided.push("slot");
 
-  const estimatedHours = durationHoursFor(input.serviceType, effectiveSqft, durations);
-  if (!(await bookable(estimatedHours))) throw slotUnavailableError();
+  if (hasSlot) {
+    await db.expireStaleBookingsForSlot(input.date!, input.time!);
+    const stillBookable = await adminSlotBookable({
+      date: input.date!,
+      time: input.time!,
+      jobHours: estimatedHours ?? 1,
+      overrideNotice,
+      schedule,
+      lunchBreak,
+      leadTimeHours,
+      durations,
+    });
+    if (!stillBookable) throw slotUnavailableError();
+  }
 
   let bookingId: number;
   try {
     bookingId = await db.createBooking({
       reference,
       customerId,
-      serviceType: input.serviceType,
-      frequency: input.frequency,
-      scheduledDate: input.date,
-      scheduledTime: input.time,
-      bedrooms: input.bedrooms,
-      bathrooms: input.bathrooms,
-      sqft: Math.round(effectiveSqft),
+      serviceType: input.serviceType ?? null,
+      frequency: input.frequency ?? "onetime",
+      scheduledDate: input.date ?? null,
+      scheduledTime: input.time ?? null,
+      bedrooms: input.bedrooms ?? 2,
+      bathrooms: input.bathrooms ?? 1,
+      sqft: effectiveSqft != null ? Math.round(effectiveSqft) : null,
       estimatedHours,
       // Empty until the customer chooses on the pay page. The owner is
       // deliberately not asked to guess on their behalf.
@@ -286,12 +368,14 @@ export async function createAdminBooking(
       city: input.city,
       zip: input.zip,
       notes: input.notes,
-      locale: input.locale,
-      totalAmount: coupon.total,
-      depositAmount: deposit,
+      locale: input.locale ?? "en",
+      // Zero while unpriceable — recomputed the moment the missing fact
+      // arrives, and again at payment. Never shown to anyone as a price.
+      totalAmount: coupon?.total ?? 0,
+      depositAmount: deposit ?? 0,
       status: "pending_deposit",
-      couponCode: coupon.couponCode,
-      discountApplied: coupon.discountApplied,
+      couponCode: coupon?.couponCode ?? input.couponCode?.trim().toUpperCase(),
+      discountApplied: coupon?.discountApplied ?? 0,
       verifiedSqft: property.verified ? property.sqft : undefined,
       sqftSource: property.verified || property.addressVerified ? property.source : undefined,
       sqftMismatch,
@@ -299,21 +383,28 @@ export async function createAdminBooking(
       holdMinutes,
       payToken,
       payTokenExpiresAt: expiresAt,
+      adminProvided: serializeAdminProvided(provided),
     });
   } catch (error) {
     if (db.isSlotTakenError(error)) throw slotUnavailableError();
     throw error;
   }
 
+  const missing: string[] = [];
+  if (!input.serviceType) missing.push("service");
+  if (effectiveSqft == null) missing.push("size");
+  if (!hasSlot) missing.push("time");
+
   return {
     bookingId,
     reference,
     payToken,
     payUrl: depositPayUrl(origin, payToken),
-    basePrice: coupon.total,
+    basePrice: coupon?.total ?? null,
     depositEstimate: deposit,
     expiresAt,
     sqftCorrected: sqftMismatch,
-    sqft: Math.round(effectiveSqft),
+    sqft: effectiveSqft != null ? Math.round(effectiveSqft) : null,
+    customerWillChoose: missing,
   };
 }

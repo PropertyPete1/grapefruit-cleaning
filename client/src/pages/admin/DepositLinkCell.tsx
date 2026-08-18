@@ -16,6 +16,12 @@ import { Button } from "@/components/ui/button";
 
 const LABELS: Record<DepositLinkStatus, { text: string; className: string; title: string }> = {
   none: { text: "—", className: "text-muted-foreground", title: "Booked online — no deposit link was issued." },
+  incomplete: {
+    text: "Incomplete",
+    className: "bg-sky-100 text-sky-800",
+    title:
+      "The customer still has choices to make on their link — service, size, or time. No slot is held until they pick one.",
+  },
   awaiting_payment: {
     text: "Awaiting payment",
     className: "bg-amber-100 text-amber-800",
@@ -84,7 +90,7 @@ export function DepositLinkCell({ bookingId, status }: { bookingId: number; stat
         {label.text}
       </span>
       <div className="flex gap-1">
-        {status === "awaiting_payment" && (
+        {(status === "awaiting_payment" || status === "incomplete") && (
           <Button
             type="button"
             variant="outline"
@@ -96,7 +102,7 @@ export function DepositLinkCell({ bookingId, status }: { bookingId: number; stat
             <Copy className="mr-1 h-3 w-3" /> Copy
           </Button>
         )}
-        {(status === "awaiting_payment" || status === "expired") && (
+        {(status === "awaiting_payment" || status === "incomplete" || status === "expired") && (
           <Button
             type="button"
             variant="outline"
