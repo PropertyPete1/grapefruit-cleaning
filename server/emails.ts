@@ -807,3 +807,128 @@ export async function sendContactNotification(data: ContactEmailData): Promise<v
     await deliverEmail(process.env.GMAIL_USER, `New contact message from ${data.name}`, contactBody);
   }
 }
+
+export interface DepositLinkEmailData {
+  reference: string;
+  serviceName: string;
+  /** Scheduled date (YYYY-MM-DD). */
+  date: string;
+  /** Scheduled start time ("HH:MM"). */
+  time: string;
+  customerName: string;
+  customerEmail: string;
+  address?: string;
+  /** Price before the customer's own extras, in whole dollars. */
+  basePrice: number;
+  /** Deposit due on the base price — it moves if they add extras. */
+  deposit: number;
+  /** The personal pay page (/pay/deposit/:token). */
+  payUrl: string;
+  /** Last day the link works (YYYY-MM-DD). */
+  expiresOn: string;
+  locale: "en" | "es";
+  bizPhone?: string;
+}
+
+/**
+ * "Your booking is ready — confirm with your deposit."
+ *
+ * Sent when the owner enters a phone or text lead by hand. Its job is to get
+ * the customer onto the pay page, where they choose their own extras — so the
+ * price here is named as a starting point rather than a total, and the call to
+ * action leads with the choosing, not the paying.
+ */
+export function buildDepositLinkEmail(data: DepositLinkEmailData): {
+  subject: string;
+  body: string;
+  html: string;
+} {
+  const spanish = data.locale === "es";
+  const email: BrandedEmail = spanish
+    ? {
+        preheader: `Su horario está apartado — elija sus extras y confirme con su depósito.`,
+        eyebrow: "Su reserva está lista",
+        headline: "¡Su horario está apartado! 🍊",
+        intro: [
+          `Hola ${data.customerName},`,
+          `Gracias por comunicarse con nosotros. Preparamos su reserva con lo que conversamos y le apartamos el horario.`,
+          `Solo falta un paso: abra su enlace, agregue los extras que desee y pague su depósito para confirmar.`,
+        ],
+        detailsTitle: "Su reserva",
+        details: [
+          { label: "Servicio", value: data.serviceName },
+          { label: "Fecha", value: data.date },
+          { label: "Hora", value: data.time },
+          ...(data.address ? [{ label: "Dirección", value: data.address }] : []),
+          { label: "Precio base", value: fmtUsd(data.basePrice) },
+          { label: "Depósito para confirmar", value: fmtUsd(data.deposit) },
+          { label: "Referencia", value: data.reference },
+        ],
+        callout: {
+          text: "Elija sus extras y vea su precio actualizarse al instante. Usted decide qué incluir — nosotros nos encargamos del resto.",
+          ctaLabel: "Elegir extras y pagar depósito",
+          ctaUrl: data.payUrl,
+        },
+        outro: [
+          `El precio base cubre su limpieza tal como la conversamos. Si agrega extras, el total y el depósito se actualizan antes de pagar — sin sorpresas.`,
+          `Su horario está apartado hasta el ${data.expiresOn}. Después de esa fecha podríamos ofrecerlo a otra persona.`,
+          data.bizPhone
+            ? `¿Alguna pregunta? Llámenos al ${data.bizPhone} o responda a este correo.`
+            : `¿Alguna pregunta? Simplemente responda a este correo.`,
+        ],
+        signOff: ["Con aprecio,", "El equipo de Grapefruit Cleaning Co."],
+        footerNote: data.bizPhone
+          ? `Grapefruit Cleaning Co. · ${data.bizPhone}`
+          : `Grapefruit Cleaning Co.`,
+      }
+    : {
+        preheader: `Your time is held — pick your extras and confirm with your deposit.`,
+        eyebrow: "Your booking is ready",
+        headline: "Your time is held! 🍊",
+        intro: [
+          `Hi ${data.customerName},`,
+          `Thanks for getting in touch. We've set up your booking from what we discussed and held your time slot.`,
+          `One step left: open your link, add any extras you'd like, and pay your deposit to confirm.`,
+        ],
+        detailsTitle: "Your booking",
+        details: [
+          { label: "Service", value: data.serviceName },
+          { label: "Date", value: data.date },
+          { label: "Time", value: data.time },
+          ...(data.address ? [{ label: "Address", value: data.address }] : []),
+          { label: "Base price", value: fmtUsd(data.basePrice) },
+          { label: "Deposit to confirm", value: fmtUsd(data.deposit) },
+          { label: "Reference", value: data.reference },
+        ],
+        callout: {
+          text: "Pick your extras and watch your price update instantly. You decide what's included — we'll handle the rest.",
+          ctaLabel: "Choose extras & pay deposit",
+          ctaUrl: data.payUrl,
+        },
+        outro: [
+          `The base price covers your cleaning exactly as we discussed. If you add extras, your total and deposit update before you pay — no surprises.`,
+          `We're holding your time through ${data.expiresOn}. After that we may need to offer it to someone else.`,
+          data.bizPhone
+            ? `Any questions? Call us at ${data.bizPhone} or just reply to this email.`
+            : `Any questions? Just reply to this email.`,
+        ],
+        signOff: ["Warmly,", "The Grapefruit Cleaning Co. Team"],
+        footerNote: data.bizPhone
+          ? `Grapefruit Cleaning Co. · ${data.bizPhone}`
+          : `Grapefruit Cleaning Co.`,
+      };
+
+  return {
+    subject: spanish
+      ? `Su reserva está lista — confirme con su depósito | Grapefruit Cleaning Co.`
+      : `Your booking is ready — confirm with your deposit | Grapefruit Cleaning Co.`,
+    body: renderBrandedEmailText(email),
+    html: renderBrandedEmail(email),
+  };
+}
+
+/** Sends the deposit link. Returns whether it was delivered. */
+export async function sendDepositLinkEmail(data: DepositLinkEmailData): Promise<boolean> {
+  const { subject, body, html } = buildDepositLinkEmail(data);
+  return deliverEmail(data.customerEmail, subject, body, html);
+}

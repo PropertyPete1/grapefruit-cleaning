@@ -7,6 +7,12 @@ import {
   validateDurationConfig,
   type DurationConfig,
 } from "@shared/duration";
+import {
+  ADMIN_HOLD_SETTING_KEY,
+  MAX_ADMIN_HOLD_HOURS,
+  MIN_ADMIN_HOLD_HOURS,
+  readAdminHoldHours,
+} from "@shared/holdWindow";
 import { LEAD_TIME_SETTING_KEY, MAX_LEAD_TIME_HOURS, readLeadTimeHours } from "@shared/leadTime";
 import {
   PRICING_SETTING_KEY,
@@ -14,11 +20,15 @@ import {
   validatePricingConfig,
   type PricingConfig,
 } from "@shared/pricing";
+import { CLEANING_TYPES, FREQUENCIES } from "@shared/pricing";
 import * as db from "../db";
+import { createAdminBooking, generateDepositToken } from "../adminBooking";
+import { depositLinkExpiresAt, depositLinkStatus, depositPayUrl } from "../depositLinkRules";
+import { holdMinutesFor } from "../bookingRules";
 import { approveBalanceInvoice, issueBalanceSafely, originFromRequest, resendBalanceLink } from "../balance";
 import { balanceLinkStatus } from "../balanceRules";
-import { buildStaffInviteEmail, deliverEmail } from "../emails";
-import { loadDurationConfig, withDurationHours } from "./booking";
+import { buildStaffInviteEmail, deliverEmail, sendDepositLinkEmail } from "../emails";
+import { loadDurationConfig, SERVICE_NAMES, withDurationHours } from "./booking";
 import { sendJobStartedEmailSafely } from "../statusEmails";
 import { storagePut } from "../storage";
 import { getStripe } from "../stripe";
@@ -54,6 +64,19 @@ function assertValidLeadTimeHours(raw: string): void {
   }
 }
 
+/**
+ * Rejects a deposit hold the booking rules would not honour — asked of the same
+ * reader the create path uses, so "saved" and "in force" can never differ.
+ */
+function assertValidAdminHoldHours(raw: string): void {
+  if (readAdminHoldHours(raw) === null) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Deposit hold must be a whole number of hours between ${MIN_ADMIN_HOLD_HOURS} and ${MAX_ADMIN_HOLD_HOURS}.`,
+    });
+  }
+}
+
 /** Validates a duration config, throwing a readable BAD_REQUEST if a ladder breaks the rules. */
 function assertValidDurationConfig(raw: string): DurationConfig {
   const result = validateDurationConfig(raw);
@@ -74,7 +97,190 @@ export const adminRouter = router({
   // ---------- Appointments ----------
   bookings: adminProcedure
     .input(z.object({ status: bookingStatusEnum.optional(), from: z.string().optional(), to: z.string().optional() }).optional())
-    .query(async ({ input }) => withDurationHours(await db.listBookings(input))),
+    .query(async ({ input }) => {
+      const rows = await withDurationHours(await db.listBookings(input));
+      const now = new Date();
+      // Derived, never the token itself: db.listBookings strips payToken, and
+      // the owner fetches the actual URL through depositLink below when they
+      // ask for it. A list that carried the credential would put it in every
+      // browser tab, every log, every screenshot of the appointments table.
+      return rows.map(row => ({
+        ...row,
+        depositLink: depositLinkStatus(row, now),
+      }));
+    }),
+
+  /**
+   * The deposit link for one admin-created booking, for the owner to copy into
+   * a text message.
+   *
+   * A separate call rather than a field on the list: the token is a bearer
+   * credential, and it should leave the server when the owner asks for that one
+   * booking's link, not every time the appointments table renders.
+   */
+  depositLink: adminProcedure
+    .input(z.object({ id: z.number().int() }))
+    .query(async ({ ctx, input }) => {
+      const booking = await db.getBookingById(input.id);
+      if (!booking) throw new TRPCError({ code: "NOT_FOUND", message: "Booking not found" });
+      if (!booking.payToken) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This booking has no deposit link." });
+      }
+      return {
+        url: depositPayUrl(originFromRequest(ctx.req), booking.payToken),
+        status: depositLinkStatus(booking),
+        expiresAt: booking.payTokenExpiresAt,
+      };
+    }),
+
+  /**
+   * Creates a booking the owner took by phone or text and issues its deposit
+   * link.
+   *
+   * No extras in the input, and no prices: the customer picks their own extras
+   * on the pay page, and every figure is computed server-side from the live
+   * config. See server/adminBooking.ts.
+   */
+  createBooking: adminProcedure
+    .input(
+      z.object({
+        serviceType: z.enum(CLEANING_TYPES),
+        frequency: z.enum(FREQUENCIES).default("onetime"),
+        bedrooms: z.number().int().min(0).max(10),
+        bathrooms: z.number().int().min(1).max(10),
+        sqft: z.number().min(200).max(20000),
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        time: z.string().regex(/^\d{2}:\d{2}$/),
+        firstName: z.string().min(1).max(100),
+        lastName: z.string().min(1).max(100),
+        email: z.string().email().max(320),
+        phone: z.string().min(7).max(40),
+        address: z.string().min(1).max(255),
+        city: z.string().min(1).max(100),
+        zip: z.string().min(3).max(20),
+        notes: z.string().max(2000).optional(),
+        locale: z.enum(["en", "es"]),
+        couponCode: z.string().max(40).optional(),
+        overrideNotice: z.boolean().optional(),
+        /** Owner's choice: email the link, or copy it for a text message. */
+        sendEmail: z.boolean().default(true),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const origin = originFromRequest(ctx.req);
+      const result = await createAdminBooking(input, origin);
+
+      let emailSent = false;
+      if (input.sendEmail) {
+        const bizPhone = (await db.getSetting("business_phone"))?.trim() || undefined;
+        // Best-effort, like every other transactional send: the booking exists
+        // and holds its slot whether or not the mail server cooperates, and the
+        // owner still has the link to paste into a text.
+        try {
+          emailSent = await sendDepositLinkEmail({
+            reference: result.reference,
+            serviceName: SERVICE_NAMES[input.serviceType][input.locale],
+            date: input.date,
+            time: input.time,
+            customerName: input.firstName,
+            customerEmail: input.email,
+            address: [input.address, input.city, input.zip].filter(Boolean).join(", "),
+            basePrice: result.basePrice,
+            deposit: result.depositEstimate,
+            payUrl: result.payUrl,
+            expiresOn: result.expiresAt.toISOString().slice(0, 10),
+            locale: input.locale,
+            bizPhone,
+          });
+        } catch (error) {
+          console.error("[AdminBooking] Deposit link email failed:", error);
+        }
+      }
+
+      return {
+        bookingId: result.bookingId,
+        reference: result.reference,
+        payUrl: result.payUrl,
+        basePrice: result.basePrice,
+        deposit: result.depositEstimate,
+        expiresAt: result.expiresAt,
+        sqft: result.sqft,
+        sqftCorrected: result.sqftCorrected,
+        emailSent,
+      };
+    }),
+
+  /**
+   * Re-sends the deposit link, renewing its window.
+   *
+   * Renewing rather than reusing the old expiry: the reason to resend is almost
+   * always that the customer let it lapse, and a link that arrives already dead
+   * is worse than no link. The hold window the booking pinned at creation is
+   * what it renews for, and the slot has to still be free — the row still holds
+   * it unless something else took it after release.
+   */
+  resendDepositLink: adminProcedure
+    .input(z.object({ id: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const booking = await db.getBookingById(input.id);
+      if (!booking) throw new TRPCError({ code: "NOT_FOUND", message: "Booking not found" });
+      if (booking.kind !== "admin") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Only phone bookings have a deposit link." });
+      }
+      if (booking.status !== "pending_deposit") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "This booking is no longer awaiting a deposit.",
+        });
+      }
+      const customer = await db.getCustomerById(booking.customerId);
+      if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Customer not found" });
+
+      // A fresh token as well as a fresh window, so a link the customer
+      // forwarded to someone else stops working when it is replaced.
+      const payToken = generateDepositToken();
+      const now = new Date();
+      const window = holdMinutesFor(booking);
+      const expiresAt = depositLinkExpiresAt(now, window);
+
+      // The slot hold has to move with the link, not just the token's own
+      // expiry. blocksSlot measures from createdAt, which a resend cannot
+      // change, so the window is restated as the minutes from creation to the
+      // new expiry. Without this the email promises to hold a time the
+      // scheduler has already put back on the calendar.
+      const createdAt = booking.createdAt ? new Date(booking.createdAt).getTime() : now.getTime();
+      const holdMinutes = Math.max(
+        window,
+        Math.ceil((expiresAt.getTime() - createdAt) / 60_000)
+      );
+      await db.updateBooking(booking.id, { payToken, payTokenExpiresAt: expiresAt, holdMinutes });
+
+      const origin = originFromRequest(ctx.req);
+      const payUrl = depositPayUrl(origin, payToken);
+      const locale = (booking.locale as "en" | "es") ?? "en";
+      const bizPhone = (await db.getSetting("business_phone"))?.trim() || undefined;
+      let emailSent = false;
+      try {
+        emailSent = await sendDepositLinkEmail({
+          reference: booking.reference,
+          serviceName: SERVICE_NAMES[booking.serviceType][locale],
+          date: booking.scheduledDate,
+          time: booking.scheduledTime,
+          customerName: customer.firstName,
+          customerEmail: customer.email,
+          address: [booking.addressLine, booking.city, booking.zip].filter(Boolean).join(", "),
+          basePrice: booking.totalAmount,
+          deposit: booking.depositAmount,
+          payUrl,
+          expiresOn: expiresAt.toISOString().slice(0, 10),
+          locale,
+          bizPhone,
+        });
+      } catch (error) {
+        console.error("[AdminBooking] Deposit link resend failed:", error);
+      }
+      return { payUrl, expiresAt, emailSent };
+    }),
   updateBookingStatus: adminProcedure
     .input(z.object({ id: z.number().int(), status: bookingStatusEnum }))
     .mutation(async ({ ctx, input }) => {
@@ -514,6 +720,9 @@ export const adminRouter = router({
       }
       if (input.key === DURATION_SETTING_KEY) {
         assertValidDurationConfig(input.value);
+      }
+      if (input.key === ADMIN_HOLD_SETTING_KEY) {
+        assertValidAdminHoldHours(input.value);
       }
       await db.setSetting(input.key, input.value);
       return { success: true } as const;

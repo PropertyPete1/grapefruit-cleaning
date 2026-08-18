@@ -30,18 +30,43 @@
 
 import { z } from "zod";
 
-export type CleaningType = "residential" | "commercial" | "airbnb" | "moveinout" | "deep" | "office";
-export type Frequency = "onetime" | "weekly" | "biweekly" | "monthly";
-export type ExtraId =
-  | "pets"
-  | "deepClean"
-  | "moveOut"
-  | "oven"
-  | "refrigerator"
-  | "windows"
-  | "laundry"
-  | "garage"
-  | "organization";
+/** Every service that can be booked, in the order they are offered. */
+export const CLEANING_TYPES = [
+  "residential",
+  "commercial",
+  "airbnb",
+  "moveinout",
+  "deep",
+  "office",
+] as const;
+
+export type CleaningType = (typeof CLEANING_TYPES)[number];
+
+/** Every booking cadence, in the order they are offered. */
+export const FREQUENCIES = ["onetime", "weekly", "biweekly", "monthly"] as const;
+
+export type Frequency = (typeof FREQUENCIES)[number];
+
+/**
+ * Every add-on a customer may choose, in the order they are offered.
+ *
+ * The one list. The quote form renders it, the booking input validates against
+ * it, and the deposit pay page prices from it — a second copy anywhere is a
+ * copy that eventually accepts an extra the pricing config has no price for.
+ */
+export const EXTRA_IDS = [
+  "pets",
+  "deepClean",
+  "moveOut",
+  "oven",
+  "refrigerator",
+  "windows",
+  "laundry",
+  "garage",
+  "organization",
+] as const;
+
+export type ExtraId = (typeof EXTRA_IDS)[number];
 
 export interface QuoteInput {
   type: CleaningType;
@@ -75,6 +100,40 @@ export interface PricingConfig {
   extras: Record<ExtraId, number>;
   frequencyDiscounts: Record<Frequency, number>;
   depositRate: number;
+}
+
+/** The discount terms of a coupon, without the bookkeeping around it. */
+export interface CouponTerms {
+  percentOff?: number | null;
+  amountOff?: number | null;
+}
+
+/**
+ * Applies a coupon's discount to a total, in whole dollars.
+ *
+ * Shared so the deposit pay page can preview a price the instant an extra is
+ * tapped and still be showing the figure the server will charge. The server
+ * decides whether a coupon is usable at all (active, in date, not exhausted);
+ * this is only the arithmetic, and both sides run this exact function.
+ *
+ * A percentage rounds to the nearest dollar; a fixed amount never takes the
+ * total below $1, so a generous coupon leaves something to charge rather than
+ * producing a zero-dollar Stripe session.
+ */
+export function applyCouponToTotal(
+  total: number,
+  coupon: CouponTerms | null | undefined
+): { total: number; discountApplied: number } {
+  if (!coupon) return { total, discountApplied: 0 };
+  let discountApplied = 0;
+  if (coupon.percentOff) discountApplied = Math.round((total * coupon.percentOff) / 100);
+  else if (coupon.amountOff) discountApplied = Math.min(coupon.amountOff, total - 1);
+  return { total: Math.max(1, total - discountApplied), discountApplied };
+}
+
+/** The deposit owed on a total, in whole dollars — never less than $1. */
+export function depositFor(total: number, depositRate: number): number {
+  return Math.max(1, Math.round(total * depositRate));
 }
 
 /** Setting key under which the pricing override JSON is stored. */

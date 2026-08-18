@@ -35,6 +35,7 @@ import { trpc } from "@/lib/trpc";
 import { todayInBookingZone } from "@shared/leadTime";
 import {
   calculateQuote,
+  EXTRA_IDS,
   type CleaningType,
   type ExtraId,
   type Frequency,
@@ -52,17 +53,7 @@ const SERVICE_ICONS: Record<CleaningType, typeof HomeIcon> = {
   office: Briefcase,
 };
 
-const ALL_EXTRAS: ExtraId[] = [
-  "pets",
-  "deepClean",
-  "moveOut",
-  "oven",
-  "refrigerator",
-  "windows",
-  "laundry",
-  "garage",
-  "organization",
-];
+const ALL_EXTRAS: readonly ExtraId[] = EXTRA_IDS;
 
 const VALID_TYPES: CleaningType[] = ["residential", "commercial", "airbnb", "moveinout", "deep", "office"];
 const VALID_FREQ: Frequency[] = ["onetime", "weekly", "biweekly", "monthly"];

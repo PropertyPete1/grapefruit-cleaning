@@ -99,6 +99,13 @@
       "when": 1786640781182,
       "tag": "0013_true_jackpot",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "5",
+      "when": 1787079493831,
+      "tag": "0014_silly_magneto",
+      "breakpoints": true
     }
   ]
 }

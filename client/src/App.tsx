@@ -25,6 +25,7 @@ import Privacy from "./pages/Privacy";
 import Terms from "./pages/Terms";
 import NotFound from "./pages/NotFound";
 import NoAccess from "./pages/NoAccess";
+import PayDeposit from "./pages/PayDeposit";
 import AdminRoutes from "./pages/admin/AdminRoutes";
 import StaffRoutes from "./pages/staff/StaffRoutes";
 
@@ -100,6 +101,12 @@ function Router() {
       <Route path="/" component={RootRedirect} />
       {/* Must precede /admin/*? — this page is what the admin guard sends
           role-less accounts to, so it can never require the admin role. */}
+      {/*
+        The deposit link the owner texts or emails. Outside the locale-routed
+        site on purpose: it carries no locale, and the language comes from the
+        booking itself — whichever one the owner took the call in.
+      */}
+      <Route path="/pay/deposit/:token" component={PayDeposit} />
       <Route path="/admin/no-access" component={NoAccess} />
       <Route path="/admin/*?" component={AdminRoutes} />
       <Route path="/staff/*?" component={StaffRoutes} />

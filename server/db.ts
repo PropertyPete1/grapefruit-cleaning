@@ -195,6 +195,18 @@ export async function getBookingByReference(reference: string) {
   return rows[0];
 }
 
+/**
+ * Looks up a booking by its deposit-link token.
+ *
+ * Server-internal on purpose: this is the one read that returns the token
+ * column, and every list path strips it (see stripPayToken).
+ */
+export async function getBookingByPayToken(token: string) {
+  const db = requireDb(await getDb());
+  const rows = await db.select().from(bookings).where(eq(bookings.payToken, token)).limit(1);
+  return rows[0];
+}
+
 export async function getBookingByStripeSession(sessionId: string) {
   const db = requireDb(await getDb());
   const rows = await db.select().from(bookings).where(eq(bookings.stripeSessionId, sessionId)).limit(1);
@@ -229,6 +241,32 @@ export async function confirmUnpaidBooking(
 }
 
 /**
+ * SQL for "this unpaid booking has held its slot for long enough".
+ *
+ * The window is per row — 24 hours for an admin-created booking, one for the
+ * public flow — so the comparison has to happen in the database rather than
+ * against a single precomputed cutoff. COALESCE covers rows written before the
+ * column existed: every one of those came from the public flow, so the old
+ * global constant is exactly right for them.
+ *
+ * This mirrors blocksSlot, which decides the same thing in application code for
+ * rows already in hand. Both must agree, or a slot the calendar treats as free
+ * would keep failing the unique index on insert.
+ */
+function bookingHoldElapsed(now: Date) {
+  // TIMESTAMPDIFF rather than `createdAt + INTERVAL COALESCE(holdMinutes, 60)
+  // MINUTE <= ?`, which reads more naturally but compiles to a placeholder
+  // INSIDE the INTERVAL expression — a position MySQL's prepared-statement
+  // parser rejects on some versions. Here both bound values sit in ordinary
+  // argument positions.
+  //
+  // Whole minutes, truncated, and the boundary still lands where blocksSlot
+  // puts it: blocksSlot holds while elapsed < window, so releasing at
+  // elapsed >= window is the same instant from the other side.
+  return sql`TIMESTAMPDIFF(MINUTE, ${bookings.createdAt}, ${now}) >= COALESCE(${bookings.holdMinutes}, ${STALE_DEPOSIT_MINUTES})`;
+}
+
+/**
  * Expires unpaid bookings that are still holding one specific slot past the
  * stale cutoff.
  *
@@ -244,7 +282,6 @@ export async function expireStaleBookingsForSlot(
   now: Date = new Date()
 ): Promise<number> {
   const db = requireDb(await getDb());
-  const cutoff = new Date(now.getTime() - STALE_DEPOSIT_MINUTES * 60_000);
   const result = await db
     .update(bookings)
     .set({ status: "expired" })
@@ -253,7 +290,7 @@ export async function expireStaleBookingsForSlot(
         eq(bookings.scheduledDate, date),
         eq(bookings.scheduledTime, time),
         eq(bookings.status, "pending_deposit"),
-        lte(bookings.createdAt, cutoff)
+        bookingHoldElapsed(now)
       )
     );
   return affectedRows(result);
@@ -281,6 +318,33 @@ export function isSlotTakenError(error: unknown): boolean {
   return false;
 }
 
+/**
+ * Drops the deposit-link token from a booking row.
+ *
+ * The token is a bearer credential: whoever holds it can open the pay page for
+ * that booking. The list queries select the whole row, so without this it would
+ * ride along in every admin table, staff schedule and calendar payload — and
+ * those reach the browser. Link status is derived and sent instead (see
+ * depositLinkStatus); the token itself only ever leaves the server inside the
+ * URL the owner explicitly asks for.
+ *
+ * Applied inside the query functions rather than at the router, so a list
+ * endpoint added later cannot forget it.
+ */
+export function stripPayToken<T extends { payToken?: string | null }>(
+  row: T
+): Omit<T, "payToken"> & { hasPayToken: boolean } {
+  const { payToken, ...rest } = row;
+  // The boolean, not the token: whether a link exists is what the appointments
+  // table needs in order to show its status, and it is not a credential.
+  return { ...rest, hasPayToken: Boolean(payToken) };
+}
+
+/** The same, for the {booking, customer} shape the staff views select. */
+function stripJoinedPayToken<T extends { booking: { payToken?: string | null } }>(row: T) {
+  return { ...row, booking: stripPayToken(row.booking) };
+}
+
 export async function listBookings(filter?: { status?: string; from?: string; to?: string }) {
   const db = requireDb(await getDb());
   const conditions = [];
@@ -288,19 +352,26 @@ export async function listBookings(filter?: { status?: string; from?: string; to
   if (filter?.from) conditions.push(gte(bookings.scheduledDate, filter.from));
   if (filter?.to) conditions.push(lte(bookings.scheduledDate, filter.to));
   if (conditions.length > 0) {
-    return db
+    const rows = await db
       .select()
       .from(bookings)
       .where(and(...conditions))
       .orderBy(desc(bookings.scheduledDate))
       .limit(500);
+    return rows.map(stripPayToken);
   }
-  return db.select().from(bookings).orderBy(desc(bookings.createdAt)).limit(500);
+  const rows = await db.select().from(bookings).orderBy(desc(bookings.createdAt)).limit(500);
+  return rows.map(stripPayToken);
 }
 
 export async function listBookingsForCustomer(customerId: number) {
   const db = requireDb(await getDb());
-  return db.select().from(bookings).where(eq(bookings.customerId, customerId)).orderBy(desc(bookings.createdAt));
+  const rows = await db
+    .select()
+    .from(bookings)
+    .where(eq(bookings.customerId, customerId))
+    .orderBy(desc(bookings.createdAt));
+  return rows.map(stripPayToken);
 }
 
 /**
@@ -326,6 +397,7 @@ export async function getOccupiedBookings(date: string) {
       estimatedHours: bookings.estimatedHours,
       status: bookings.status,
       createdAt: bookings.createdAt,
+      holdMinutes: bookings.holdMinutes,
     })
     .from(bookings)
     .where(and(eq(bookings.scheduledDate, date), sql`${bookings.status} NOT IN ('cancelled', 'expired')`));
@@ -334,18 +406,17 @@ export async function getOccupiedBookings(date: string) {
 }
 
 /**
- * Marks unpaid (pending_deposit) bookings older than STALE_DEPOSIT_MINUTES as
- * expired so they stop appearing as held slots. A late Stripe payment can
- * still recover an expired booking (finalizeBooking accepts both states).
+ * Marks unpaid (pending_deposit) bookings past their own hold window as expired
+ * so they stop appearing as held slots. A late Stripe payment can still recover
+ * an expired booking (finalizeBooking accepts both states).
  * Returns the number of bookings expired.
  */
 export async function expireStaleDepositBookings(now: Date = new Date()): Promise<number> {
   const db = requireDb(await getDb());
-  const cutoff = new Date(now.getTime() - STALE_DEPOSIT_MINUTES * 60_000);
   const result = await db
     .update(bookings)
     .set({ status: "expired" })
-    .where(and(eq(bookings.status, "pending_deposit"), lte(bookings.createdAt, cutoff)));
+    .where(and(eq(bookings.status, "pending_deposit"), bookingHoldElapsed(now)));
   return affectedRows(result);
 }
 
@@ -459,21 +530,23 @@ export async function listBookingsForStaff(filter: { status?: string; date?: str
     .select({ booking: bookings, customer: customers })
     .from(bookings)
     .leftJoin(customers, eq(bookings.customerId, customers.id));
-  if (conditions.length > 0) {
-    return base.where(and(...conditions)).orderBy(desc(bookings.scheduledDate)).limit(500);
-  }
-  return base.orderBy(desc(bookings.scheduledDate)).limit(500);
+  const rows =
+    conditions.length > 0
+      ? await base.where(and(...conditions)).orderBy(desc(bookings.scheduledDate)).limit(500)
+      : await base.orderBy(desc(bookings.scheduledDate)).limit(500);
+  return rows.map(stripJoinedPayToken);
 }
 
 /** All non-cancelled bookings within a YYYY-MM month for the staff calendar. */
 export async function listBookingsForMonth(month: string) {
   const db = requireDb(await getDb());
-  return db
+  const rows = await db
     .select({ booking: bookings, customer: customers })
     .from(bookings)
     .leftJoin(customers, eq(bookings.customerId, customers.id))
     .where(and(like(bookings.scheduledDate, `${month}%`), sql`${bookings.status} != 'cancelled'`))
     .orderBy(bookings.scheduledDate, bookings.scheduledTime);
+  return rows.map(stripJoinedPayToken);
 }
 
 export async function createEmployee(data: typeof employees.$inferInsert) {

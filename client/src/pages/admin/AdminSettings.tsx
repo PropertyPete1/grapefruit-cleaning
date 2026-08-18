@@ -7,6 +7,13 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import {
+  ADMIN_HOLD_SETTING_KEY,
+  DEFAULT_ADMIN_HOLD_HOURS,
+  MAX_ADMIN_HOLD_HOURS,
+  MIN_ADMIN_HOLD_HOURS,
+  parseAdminHoldHours,
+} from "@shared/holdWindow";
+import {
   DEFAULT_LEAD_TIME_HOURS,
   LEAD_TIME_SETTING_KEY,
   MAX_LEAD_TIME_HOURS,
@@ -200,6 +207,87 @@ function BookingHoursSection() {
 }
 
 /**
+ * How long a phone booking's deposit link holds its slot.
+ *
+ * Sits with the booking hours for the same reason the notice period does: it is
+ * a question about who may have which slot, and when it lapses the slot goes
+ * back on the calendar.
+ */
+function DepositHoldSection() {
+  const utils = trpc.useUtils();
+  const settings = trpc.admin.settings.useQuery();
+  const save = trpc.admin.saveSetting.useMutation({
+    onSuccess: () => {
+      utils.admin.settings.invalidate();
+      toast.success("Deposit hold saved — applies to new phone bookings");
+    },
+    onError: e => toast.error(e.message || "Failed to save the deposit hold"),
+  });
+
+  const [hours, setHours] = useState(String(DEFAULT_ADMIN_HOLD_HOURS));
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    if (settings.data && !dirty) {
+      const raw = settings.data.find(s => s.settingKey === ADMIN_HOLD_SETTING_KEY)?.settingValue ?? null;
+      setHours(String(parseAdminHoldHours(raw)));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.data]);
+
+  const parsed = Number(hours.trim());
+  const valid =
+    hours.trim() !== "" &&
+    Number.isInteger(parsed) &&
+    parsed >= MIN_ADMIN_HOLD_HOURS &&
+    parsed <= MAX_ADMIN_HOLD_HOURS;
+
+  return (
+    <div className="rounded-2xl bg-card p-8 shadow-sm ring-1 ring-border">
+      <h2 className="font-display text-lg font-bold text-foreground">Phone booking deposit hold</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        When you create a booking by hand, this is how long their slot stays held while you wait for the
+        deposit. Someone who booked online gets one hour; a customer you quoted on the phone usually needs the
+        evening, so this defaults to 24. Their deposit link expires at the same moment the hold does.
+      </p>
+      <p className="mt-2 text-xs text-muted-foreground">
+        Changing this affects new bookings only — each one keeps the hold it was created with, so raising this
+        can never take back a slot that was already released.
+      </p>
+      <div className="mt-6 flex flex-wrap items-end gap-3">
+        <div>
+          <Label htmlFor="setting-deposit-hold">Hours held</Label>
+          <Input
+            id="setting-deposit-hold"
+            type="number"
+            inputMode="numeric"
+            min={MIN_ADMIN_HOLD_HOURS}
+            max={MAX_ADMIN_HOLD_HOURS}
+            step="1"
+            className="mt-1.5 w-32 rounded-xl"
+            value={hours}
+            onChange={e => {
+              setDirty(true);
+              setHours(e.target.value);
+            }}
+          />
+        </div>
+        <Button
+          className="rounded-xl"
+          disabled={save.isPending || !dirty || !valid}
+          onClick={() => {
+            save.mutate({ key: ADMIN_HOLD_SETTING_KEY, value: String(parsed) });
+            setDirty(false);
+          }}
+        >
+          Save deposit hold
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Minimum notice before a slot may be booked. Sits with the booking hours
  * because it is the same question — when can a customer book — and it only
  * ever removes slots the hours already allow.
@@ -351,6 +439,7 @@ export default function AdminSettings() {
           ))}
           <BookingHoursSection />
           <BookingLeadTimeSection />
+          <DepositHoldSection />
           <p className="rounded-xl bg-muted/50 p-4 text-xs leading-relaxed text-muted-foreground">
             Changes go live on the public site right away. Anything left blank is hidden automatically, so the site
             never shows placeholder details.

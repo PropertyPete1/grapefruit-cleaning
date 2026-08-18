@@ -2,6 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import {
   calculateQuote,
+  EXTRA_IDS,
   generateBookingReference,
   parsePricingConfig,
   PRICING_SETTING_KEY,
@@ -36,9 +37,7 @@ const quoteInputSchema = z.object({
   bedrooms: z.number().int().min(0).max(10),
   bathrooms: z.number().int().min(1).max(10),
   sqft: z.number().min(200).max(10000),
-  extras: z.array(
-    z.enum(["pets", "deepClean", "moveOut", "oven", "refrigerator", "windows", "laundry", "garage", "organization"])
-  ),
+  extras: z.array(z.enum(EXTRA_IDS)),
   frequency: z.enum(["onetime", "weekly", "biweekly", "monthly"]),
 });
 
@@ -551,9 +550,17 @@ export async function finalizeBooking(bookingId: number, paymentIntentId: string
   // job could have been booked earlier in the day and now runs across this
   // booking's hours without starting on them. That is just as much a clash for
   // the crew, and the owner needs the same warning.
+  //
+  // holdMinutes is passed along with the status and the clock: an admin-created
+  // booking holds its slot for a day, not the hour a public checkout gets, and
+  // asking without it would call a two-hour-old phone booking released — then
+  // flag a conflict against a slot it is still legitimately holding.
   const slotConflict =
-    !blocksSlot({ status: booking.status, createdAt: booking.createdAt ?? null }) &&
-    (await overlapsLiveBooking(booking));
+    !blocksSlot({
+      status: booking.status,
+      createdAt: booking.createdAt ?? null,
+      holdMinutes: booking.holdMinutes,
+    }) && (await overlapsLiveBooking(booking));
 
   // Claim the booking before doing anything with side effects. The status check
   // above is only a fast path — the webhook and the return-page confirmation
