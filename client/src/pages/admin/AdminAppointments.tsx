@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { DepositLinkCell } from "./DepositLinkCell";
+import { SetTimeDialog } from "./SetTimeDialog";
 import {
   NotesBlock,
   PageHeader,
@@ -114,7 +115,13 @@ export default function AdminAppointments() {
                       {b.serviceType ? (SERVICE_LABELS[b.serviceType] ?? b.serviceType) : (
                         <span className="text-xs text-muted-foreground">Customer picks</span>
                       )}
-                      <span className="block text-xs text-muted-foreground">{b.frequency}</span>
+                      {b.kind === "ical_auto" ? (
+                        <span className="mt-1 block w-fit rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-accent-foreground">
+                          Auto · Airbnb
+                        </span>
+                      ) : (
+                        <span className="block text-xs text-muted-foreground">{b.frequency}</span>
+                      )}
                     </td>
                     <td className="px-5 py-3.5">
                       {b.scheduledDate && b.scheduledTime ? (
@@ -125,6 +132,15 @@ export default function AdminAppointments() {
                             {formatJobSpan(b.scheduledTime, b.durationHours)}
                           </span>
                         </>
+                      ) : b.kind === "ical_auto" ? (
+                        /* An unplaced turnover — the [ACTION NEEDED] state. */
+                        <SetTimeDialog
+                          bookingId={b.id}
+                          reference={b.reference}
+                          serviceType={b.serviceType}
+                          sqft={b.sqft}
+                          currentDate={null}
+                        />
                       ) : (
                         /* No slot yet — and no inventory held, so nothing can go stale. */
                         <span className="text-xs text-muted-foreground">Customer picks a time</span>
@@ -240,6 +256,11 @@ export default function AdminAppointments() {
                   <span className="flex flex-wrap items-center gap-x-2">
                     <span className="font-mono text-xs font-semibold text-primary">{b.reference}</span>
                     <span>{b.serviceType ? (SERVICE_LABELS[b.serviceType] ?? b.serviceType) : "Customer picks service"}</span>
+                    {b.kind === "ical_auto" && (
+                      <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-accent-foreground">
+                        Auto · Airbnb
+                      </span>
+                    )}
                   </span>
                 }
                 subtitle={
@@ -280,6 +301,17 @@ export default function AdminAppointments() {
                     {b.depositLink !== "none" && (
                       <div className="w-full">
                         <DepositLinkCell bookingId={b.id} status={b.depositLink} />
+                      </div>
+                    )}
+                    {b.kind === "ical_auto" && !b.scheduledDate && (
+                      <div className="w-full">
+                        <SetTimeDialog
+                          bookingId={b.id}
+                          reference={b.reference}
+                          serviceType={b.serviceType}
+                          sqft={b.sqft}
+                          currentDate={null}
+                        />
                       </div>
                     )}
                     <Select

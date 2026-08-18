@@ -25,11 +25,15 @@ import * as db from "../db";
 import { createAdminBooking, generateDepositToken } from "../adminBooking";
 import { depositLinkExpiresAt, depositLinkStatus, depositPayUrl } from "../depositLinkRules";
 import { holdMinutesFor } from "../bookingRules";
+import { syncConnectedProperty, validateIcalFeed } from "../icalSync";
+import { isSlotBookable } from "@shared/availability";
+import { durationHoursFor } from "@shared/duration";
+import { todayInBookingZone } from "@shared/leadTime";
 import { composeAddress, PROPERTY_TYPES } from "@shared/property";
 import { approveBalanceInvoice, issueBalanceSafely, originFromRequest, resendBalanceLink } from "../balance";
 import { balanceLinkStatus } from "../balanceRules";
-import { buildStaffInviteEmail, deliverEmail, sendDepositLinkEmail } from "../emails";
-import { loadDurationConfig, SERVICE_NAMES, withDurationHours } from "./booking";
+import { buildStaffInviteEmail, deliverEmail, sendDepositLinkEmail, sendPropertyConnectedEmail } from "../emails";
+import { loadDurationConfig, loadSchedulingRules, occupiedIntervals, SERVICE_NAMES, withDurationHours } from "./booking";
 import { sendJobStartedEmailSafely } from "../statusEmails";
 import { storagePut } from "../storage";
 import { getStripe } from "../stripe";
@@ -362,6 +366,195 @@ export const adminRouter = router({
     .mutation(async ({ input }) => {
       await db.updateBooking(input.bookingId, { employeeId: input.employeeId });
       return { success: true } as const;
+    }),
+
+  // ---------- Connected properties (Airbnb auto-booking) ----------
+  properties: adminProcedure.query(async () => {
+    const rows = await db.listConnectedProperties();
+    const today = todayInBookingZone();
+    // The card shows what the owner actually checks: is it syncing, and what
+    // is coming up. Fetched per property — the fleet is a handful of rows.
+    return Promise.all(
+      rows.map(async ({ property, customer }) => ({
+        ...property,
+        customerName: customer ? `${customer.firstName} ${customer.lastName}`.trim() : "",
+        upcoming: await db.listUpcomingAutoBookings(property.id, today),
+      }))
+    );
+  }),
+
+  createProperty: adminProcedure
+    .input(
+      z.object({
+        customerId: z.number().int(),
+        label: z.string().min(1).max(120),
+        addressLine: z.string().min(3).max(255),
+        unitNumber: z.string().max(20).optional(),
+        propertyType: z.enum(PROPERTY_TYPES).default("apartment"),
+        city: z.string().max(100).optional(),
+        zip: z.string().max(20).optional(),
+        sqft: z.number().int().min(200).max(20000),
+        serviceType: z.enum(CLEANING_TYPES).default("airbnb"),
+        icalUrl: z.string().url().max(500),
+        defaultTime: z.string().regex(/^\d{2}:\d{2}$/).default("11:00"),
+        autoBook: z.boolean().default(true),
+        perCleanEmails: z.boolean().default(false),
+        active: z.boolean().default(true),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const customer = await db.getCustomerById(input.customerId);
+      if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Customer not found" });
+      // Validate the feed at save time: a typo'd or revoked URL should bounce
+      // here with a readable message, not fail silently every hour.
+      let feed: { reservationCount: number; eventCount: number };
+      try {
+        feed = await validateIcalFeed(input.icalUrl);
+      } catch (error) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: error instanceof Error ? error.message : "Could not read the calendar feed.",
+        });
+      }
+      const id = await db.createConnectedProperty({
+        ...input,
+        lastSyncAt: new Date(),
+        lastSyncStatus: "ok",
+        reservationCount: feed.reservationCount,
+      });
+      // The one setup email — after this, the host hears from us per clean
+      // only through the balance link (or per-clean notices if they opted in).
+      let emailSent = false;
+      if (customer.email) {
+        const locale = (customer.preferredLocale as "en" | "es") ?? "en";
+        emailSent = await sendPropertyConnectedEmail({
+          label: input.label,
+          address: composeAddress(input),
+          customerName: customer.firstName,
+          customerEmail: customer.email,
+          serviceName: SERVICE_NAMES[input.serviceType][locale],
+          defaultTime: input.defaultTime,
+          reservationCount: feed.reservationCount,
+          locale,
+          bizPhone: (await db.getSetting("business_phone"))?.trim() || undefined,
+        });
+      }
+      return { id, reservationsFound: feed.reservationCount, eventsFound: feed.eventCount, emailSent };
+    }),
+
+  updateProperty: adminProcedure
+    .input(
+      z.object({
+        id: z.number().int(),
+        label: z.string().min(1).max(120).optional(),
+        addressLine: z.string().min(3).max(255).optional(),
+        unitNumber: z.string().max(20).nullable().optional(),
+        propertyType: z.enum(PROPERTY_TYPES).optional(),
+        city: z.string().max(100).optional(),
+        zip: z.string().max(20).optional(),
+        sqft: z.number().int().min(200).max(20000).optional(),
+        serviceType: z.enum(CLEANING_TYPES).optional(),
+        icalUrl: z.string().url().max(500).optional(),
+        defaultTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+        autoBook: z.boolean().optional(),
+        perCleanEmails: z.boolean().optional(),
+        active: z.boolean().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const { id, ...patch } = input;
+      const property = await db.getConnectedPropertyById(id);
+      if (!property) throw new TRPCError({ code: "NOT_FOUND", message: "Property not found" });
+      let reservationsFound: number | undefined;
+      if (patch.icalUrl && patch.icalUrl !== property.icalUrl) {
+        try {
+          const feed = await validateIcalFeed(patch.icalUrl);
+          reservationsFound = feed.reservationCount;
+        } catch (error) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: error instanceof Error ? error.message : "Could not read the calendar feed.",
+          });
+        }
+      }
+      await db.updateConnectedProperty(id, {
+        ...patch,
+        ...(reservationsFound !== undefined
+          ? { reservationCount: reservationsFound, consecutiveFailures: 0, lastSyncStatus: "ok", lastSyncAt: new Date() }
+          : {}),
+      });
+      return { success: true as const, reservationsFound };
+    }),
+
+  /** Manual "Sync now" — the same reconcile the hourly cron runs. */
+  syncProperty: adminProcedure.input(z.object({ id: z.number().int() })).mutation(async ({ input }) => {
+    const property = await db.getConnectedPropertyById(input.id);
+    if (!property) throw new TRPCError({ code: "NOT_FOUND", message: "Property not found" });
+    return syncConnectedProperty(property);
+  }),
+
+  /**
+   * Place (or move) an auto-booked turnover by hand — the [ACTION NEEDED]
+   * path when no slot fit automatically. Restricted to ical_auto bookings:
+   * link bookings are the customer's to schedule, through their own page.
+   *
+   * Lead time is exempt (operational placement, same as the sync itself);
+   * every physical rule applies, and the unique index backstops the race.
+   */
+  scheduleBooking: adminProcedure
+    .input(
+      z.object({
+        id: z.number().int(),
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        time: z.string().regex(/^\d{2}:\d{2}$/),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const booking = await db.getBookingById(input.id);
+      if (!booking) throw new TRPCError({ code: "NOT_FOUND", message: "Booking not found" });
+      if (booking.kind !== "ical_auto") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Only auto-booked turnovers are scheduled here — link bookings are the customer's to place.",
+        });
+      }
+      if (booking.status !== "confirmed") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Only a confirmed booking can be scheduled." });
+      }
+      const { schedule, lunchBreak, durations } = await loadSchedulingRules();
+      const jobHours =
+        booking.estimatedHours ?? durationHoursFor(booking.serviceType, booking.sqft, durations);
+      const rows = (await db.getOccupiedBookings(input.date)).filter(row => row.id !== booking.id);
+      const bookable = isSlotBookable(
+        {
+          date: input.date,
+          schedule,
+          lunchBreak,
+          leadTimeHours: 0,
+          occupied: occupiedIntervals(rows, durations),
+          jobHours,
+        },
+        input.time
+      );
+      if (!bookable) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "That time doesn't fit — the hours, the lunch break, or another booking rules it out.",
+        });
+      }
+      try {
+        await db.updateBooking(booking.id, {
+          scheduledDate: input.date,
+          scheduledTime: input.time,
+          estimatedHours: jobHours,
+        });
+      } catch (error) {
+        if (db.isSlotTakenError(error)) {
+          throw new TRPCError({ code: "CONFLICT", message: "Another booking just took that time — pick another." });
+        }
+        throw error;
+      }
+      return { success: true as const };
     }),
 
   // ---------- Customers ----------

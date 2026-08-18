@@ -172,7 +172,7 @@ export const bookings = mysqlTable("bookings", {
    * has been paid looks exactly like a self-serve one afterwards, and the
    * difference is what justifies its longer slot hold.
    */
-  kind: mysqlEnum("kind", ["self_serve", "admin"]).default("self_serve").notNull(),
+  kind: mysqlEnum("kind", ["self_serve", "admin", "ical_auto"]).default("self_serve").notNull(),
   /**
    * Minutes this booking may hold its slot while the deposit is unpaid,
    * pinned at creation.
@@ -217,10 +217,78 @@ export const bookings = mysqlTable("bookings", {
     sql`(case when \`status\` in ('cancelled','expired') then null else concat(\`scheduledDate\`, 'T', \`scheduledTime\`) end)`,
     { mode: "virtual" }
   ),
+  /**
+   * The connected property this booking was auto-created for (kind
+   * "ical_auto"), or NULL for every hand- or self-made booking.
+   */
+  propertyId: int("propertyId"),
+  /**
+   * The reservation UID from the host's calendar feed. Idempotency lives
+   * here: a re-poll finds the existing booking by (propertyId, icalUid)
+   * instead of creating a twin, a date change moves that booking, and a
+   * vanished UID cancels it. The unique index is the backstop for two syncs
+   * racing — same philosophy as slotKey.
+   */
+  icalUid: varchar("icalUid", { length: 255 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-}, table => [uniqueIndex(SLOT_UNIQUE_INDEX).on(table.slotKey)]);
+}, table => [
+  uniqueIndex(SLOT_UNIQUE_INDEX).on(table.slotKey),
+  uniqueIndex("bookings_property_uid_unique").on(table.propertyId, table.icalUid),
+]);
 export type Booking = typeof bookings.$inferSelect;
+
+/**
+ * A recurring host's property, connected to its Airbnb/VRBO calendar feed.
+ *
+ * The feed is the booking interface: every reservation's checkout day becomes
+ * a cleaning without anyone filling a form. The property stores what the
+ * booking flow would otherwise ask — address, size, service — so the sync can
+ * price and schedule from the live config unattended.
+ */
+export const connectedProperties = mysqlTable("connected_properties", {
+  id: int("id").autoincrement().primaryKey(),
+  customerId: int("customerId").notNull(),
+  /** Owner-facing name, e.g. "Riverwalk condo" — the customer may have several. */
+  label: varchar("label", { length: 120 }).notNull(),
+  addressLine: varchar("addressLine", { length: 255 }).notNull(),
+  unitNumber: varchar("unitNumber", { length: 20 }),
+  propertyType: mysqlEnum("propertyType", ["house", "apartment"]).default("apartment").notNull(),
+  city: varchar("city", { length: 100 }),
+  zip: varchar("zip", { length: 20 }),
+  /** Priced from this at sync time — required, unlike ordinary bookings. */
+  sqft: int("sqft").notNull(),
+  serviceType: mysqlEnum("serviceType", ["residential", "commercial", "airbnb", "moveinout", "deep", "office"])
+    .default("airbnb")
+    .notNull(),
+  /** The per-listing iCal export URL from Airbnb/VRBO. */
+  icalUrl: varchar("icalUrl", { length: 500 }).notNull(),
+  /** Preferred cleaning start on checkout day, "HH:MM". */
+  defaultTime: varchar("defaultTime", { length: 5 }).default("11:00").notNull(),
+  /** Master switch: off = poll nothing, book nothing. */
+  active: boolean("active").default(true).notNull(),
+  /** Create bookings from reservations (off = sync visibility only). */
+  autoBook: boolean("autoBook").default(true).notNull(),
+  /**
+   * Hosts running every turnover through us do NOT want an email per guest.
+   * Off: one setup confirmation, then only the balance link per completed
+   * clean. On: the per-clean notices (scheduled/started) too.
+   */
+  perCleanEmails: boolean("perCleanEmails").default(false).notNull(),
+  lastSyncAt: timestamp("lastSyncAt"),
+  /** "ok" or the failure message — what the admin list shows per feed. */
+  lastSyncStatus: varchar("lastSyncStatus", { length: 500 }),
+  /** Reservations found on the last successful poll. */
+  reservationCount: int("reservationCount"),
+  /**
+   * Failed polls in a row. The owner is alerted when this crosses the
+   * threshold, not on the first blip — feeds flake, hosts revoke.
+   */
+  consecutiveFailures: int("consecutiveFailures").default(0).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type ConnectedProperty = typeof connectedProperties.$inferSelect;
 
 export const contactMessages = mysqlTable("contact_messages", {
   id: int("id").autoincrement().primaryKey(),

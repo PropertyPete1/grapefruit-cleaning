@@ -35,6 +35,13 @@ async function loadJobStatusEmailData(
 ): Promise<Omit<JobStatusEmailData, "reviewUrl"> | null> {
   const booking = await db.getBookingById(bookingId);
   if (!booking) return null;
+  // Auto-booked turnovers stay quiet unless the host opted into per-clean
+  // notices — "we've started" for every guest checkout is inbox noise for a
+  // host running every turnover through us.
+  if (booking.kind === "ical_auto") {
+    const property = booking.propertyId ? await db.getConnectedPropertyById(booking.propertyId) : undefined;
+    if (!property?.perCleanEmails) return null;
+  }
   const customer = await db.getCustomerById(booking.customerId);
   if (!customer) return null;
   const locale = booking.locale as "en" | "es";

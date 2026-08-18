@@ -6,6 +6,7 @@
  */
 import type { Express, Request, Response } from "express";
 import { sdk } from "./_core/sdk";
+import { syncAllProperties } from "./icalSync";
 import { sendDueReminders } from "./reminders";
 
 async function sendRemindersHandler(req: Request, res: Response) {
@@ -40,6 +41,38 @@ async function sendRemindersHandler(req: Request, res: Response) {
   }
 }
 
+/**
+ * Hourly cron: poll every active property's Airbnb/VRBO feed and reconcile
+ * bookings. Same auth posture as the reminders endpoint; idempotent by
+ * reservation UID, so an extra or repeated firing changes nothing.
+ */
+async function icalSyncHandler(req: Request, res: Response) {
+  let isCron = false;
+  try {
+    isCron = (await sdk.authenticateRequest(req)).isCron === true;
+  } catch {
+    isCron = false;
+  }
+  if (!isCron) {
+    return res.status(403).json({ error: "cron-only endpoint" });
+  }
+  try {
+    const summaries = await syncAllProperties();
+    const line = summaries
+      .map(s => `#${s.propertyId}:${s.ok ? "ok" : "FAIL"} +${s.created} →${s.moved} ✕${s.cancelled}${s.unplaced ? ` ?${s.unplaced}` : ""}`)
+      .join(" | ");
+    console.log(`[iCalSync] ${summaries.length} propert${summaries.length === 1 ? "y" : "ies"}: ${line || "none active"}`);
+    return res.json({ ok: true, summaries });
+  } catch (error) {
+    console.error("[iCalSync] Handler error:", error);
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : String(error),
+      timestamp: new Date().toISOString(),
+    });
+  }
+}
+
 export function registerScheduledRoutes(app: Express): void {
   app.post("/api/scheduled/sendReminders", sendRemindersHandler);
+  app.post("/api/scheduled/icalSync", icalSyncHandler);
 }

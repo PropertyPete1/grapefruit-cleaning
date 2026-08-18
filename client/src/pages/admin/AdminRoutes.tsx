@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { useState } from "react";
 import { Link, Redirect, Route, Switch, useLocation } from "wouter";
 import {
+  Home as HomeIcon,
   BarChart3,
   CalendarDays,
   CreditCard,
@@ -43,12 +44,14 @@ const AdminCoupons = lazy(() => import("./AdminCoupons"));
 const AdminSettings = lazy(() => import("./AdminSettings"));
 const AdminMessages = lazy(() => import("./AdminMessages"));
 const AdminBlog = lazy(() => import("./AdminBlog"));
+const AdminProperties = lazy(() => import("./AdminProperties"));
 
 const NAV_ITEMS = [
   { path: "/admin", label: "Dashboard", icon: LayoutDashboard, exact: true },
   { path: "/admin/appointments", label: "Appointments", icon: ClipboardList },
   { path: "/admin/calendar", label: "Calendar", icon: CalendarDays },
   { path: "/admin/customers", label: "Customers", icon: Users },
+  { path: "/admin/properties", label: "Properties", icon: HomeIcon },
   { path: "/admin/messages", label: "Messages", icon: MessageSquare },
   { path: "/admin/invoices", label: "Invoices", icon: FileText },
   { path: "/admin/payments", label: "Payments", icon: CreditCard },
@@ -236,6 +239,7 @@ export default function AdminRoutes() {
           <Route path="/admin/calendar" component={AdminCalendar} />
           <Route path="/admin/customers" component={AdminCustomers} />
           <Route path="/admin/messages" component={AdminMessages} />
+          <Route path="/admin/properties" component={AdminProperties} />
           <Route path="/admin/invoices" component={AdminInvoices} />
           <Route path="/admin/payments" component={AdminPayments} />
           <Route path="/admin/employees" component={AdminEmployees} />
