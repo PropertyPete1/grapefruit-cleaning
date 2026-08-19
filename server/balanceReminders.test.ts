@@ -168,8 +168,15 @@ describe("balanceReminderAction — the 3/7-day schedule", () => {
     }
   });
 
-  it("chases only balance invoices that actually have a link", () => {
-    expect(balanceReminderAction({ ...INVOICE, kind: "manual" }, daysLater(10))).toBeNull();
+  it("chases any invoice that actually has a link, whatever produced it", () => {
+    // The gate is the LINK, not the kind: manual invoices are billable and get
+    // chased on the same schedule — a dollar owed is a dollar owed.
+    expect(balanceReminderAction({ ...INVOICE, kind: "manual" }, daysLater(10))).toEqual({
+      action: "remind",
+      reminderNumber: 1,
+    });
+    // No link means nothing to point the customer at. This is also what keeps
+    // pre-feature manual invoices (which never had a token) out of the sweep.
     expect(balanceReminderAction({ ...INVOICE, payToken: null }, daysLater(10))).toBeNull();
     expect(balanceReminderAction({ ...INVOICE, linkSentAt: null }, daysLater(10))).toBeNull();
   });

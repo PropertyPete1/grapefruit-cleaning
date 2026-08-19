@@ -121,10 +121,17 @@ async function payBalanceHandler(req: Request, res: Response) {
     }
 
     const invoice = token ? await db.getInvoiceByPayToken(token) : undefined;
-    if (!invoice || invoice.kind !== "balance") return notice("notFound", "en", 404);
+    // Any invoice holding this token is payable, balance or manual — the token
+    // itself is the credential, and manual invoices are billed on identical
+    // terms.
+    if (!invoice) return notice("notFound", "en", 404);
 
     const booking = invoice.bookingId ? await db.getBookingById(invoice.bookingId) : undefined;
-    const locale = (booking?.locale as "en" | "es") ?? "en";
+    const customerForLocale = await db.getCustomerById(invoice.customerId);
+    // A manual invoice has no booking to carry the language, so fall back to
+    // the customer's own preference.
+    const locale =
+      (booking?.locale as "en" | "es") ?? (customerForLocale?.preferredLocale as "en" | "es") ?? "en";
 
     // Stripe sends the customer back here after a successful payment; the
     // webhook may not have landed yet, so never re-open checkout in that case.
@@ -132,9 +139,11 @@ async function payBalanceHandler(req: Request, res: Response) {
 
     const linkState = balanceLinkStatus(invoice);
     if (linkState === "paid") return notice("paid", locale);
-    if (linkState !== "sent" || !booking) return notice("expired", locale);
+    // A balance invoice whose booking vanished is broken, not payable; a
+    // manual invoice never had one and is fine.
+    if (linkState !== "sent" || (invoice.kind === "balance" && !booking)) return notice("expired", locale);
 
-    const customer = await db.getCustomerById(invoice.customerId);
+    const customer = customerForLocale;
     if (!customer) return notice("error", locale, 500);
 
     const session = await createBalanceCheckoutSession({
@@ -142,6 +151,7 @@ async function payBalanceHandler(req: Request, res: Response) {
       booking,
       customerEmail: customer.email ?? "",
       origin: requestOrigin(req),
+      locale,
     });
     await db.updateInvoice(invoice.id, { stripeSessionId: session.id });
     if (!session.url) return notice("error", locale, 500);

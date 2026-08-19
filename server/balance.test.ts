@@ -484,8 +484,19 @@ describe("resendBalanceLink", () => {
     expect(mockSendMail).not.toHaveBeenCalled();
   });
 
-  it("refuses to resend a manual invoice that has no payment link", async () => {
-    mockGetInvoiceById.mockResolvedValue({ ...INVOICE, kind: "manual" });
+  it("resends a manual invoice that holds a payment link, exactly like a balance", async () => {
+    // Manual invoices are billable now, so a resend renews their link too —
+    // and does it without a booking, which is the interesting part.
+    mockGetInvoiceById.mockResolvedValue({ ...INVOICE, kind: "manual", bookingId: null });
+    const result = await resendBalanceLink(501, ORIGIN);
+    expect(result.outcome).toBe("resent");
+    expect(mockSessionCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses to resend a pre-feature manual invoice that never had a link", async () => {
+    // Older manual invoices are bookkeeping rows: no token, no snapshot, no
+    // link window. There is nothing to re-send, as opposed to a link to renew.
+    mockGetInvoiceById.mockResolvedValue({ ...INVOICE, kind: "manual", bookingId: null, payToken: null });
     const result = await resendBalanceLink(501, ORIGIN);
     expect(result.outcome).toBe("not_a_balance_invoice");
     expect(mockSessionCreate).not.toHaveBeenCalled();

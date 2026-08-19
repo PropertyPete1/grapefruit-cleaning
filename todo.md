@@ -262,3 +262,21 @@
 - [x] Guard against recursion: an alert about email failure must never itself trigger an alert
 - [x] Rate-limit failure alerts to at most 1 per hour; record suppressed repeats in email_log rather than sending them
 - [x] Cover the guard, the rate limit, and suppression accounting with tests
+- [ ] Give the manual Create-invoice dialog the same itemization as the approval flow (add-on checklist at live catalog prices + named custom line items)
+- [ ] Store manual invoice line items as the same lineItems snapshot, itemized identically in the email and Stripe session
+- [ ] Reuse the approval flow's components and validation rather than forking the logic
+- [x] Confirm from email_log whether the earlier resend to Steven was recorded as delivered (answer: table went live ~4h after that resend, so it holds no row for it)
+- [ ] Make manual invoices billable: mint a pay token and send the branded itemized payment-link email on create
+- [ ] Reuse the balance Stripe checkout path so a manual invoice's session carries its itemized lines
+- [ ] Resend works for manual invoices from the admin table, same as balance invoices
+- [ ] Manual invoices get the same automatic 3-day and 7-day reminders, stopping on paid
+- [ ] Guard booking-dependent assumptions: no deposit-credit line and no tip ask for manual invoices
+- [ ] Tests: manual invoice with items paid end to end, reminder fires on unpaid, reminder stops on paid, no tip ask after manual payment, resend uses the stored snapshot
+- [x] Manual invoices become fully billable, reusing the balance machinery (Option B)
+- [x] Itemization in the create dialog: shared InvoiceItemsEditor with the approval flow (add-ons at live prices + named custom lines)
+- [x] On create: mint pay token, Stripe session, branded itemized email with payment link
+- [x] Resend works for manual invoices, re-billing the stored snapshot
+- [x] Manual invoices get the same 3/7-day reminder schedule, halting on paid/void
+- [x] Guard: no deposit credit line and no booking fields in the manual email
+- [x] Guard: no tip ask after a manual payment (no completed job behind it)
+- [x] Full lifecycle tests in server/manualInvoice.test.ts (13 cases)

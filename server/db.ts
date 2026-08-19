@@ -759,13 +759,22 @@ export async function getInvoiceByPayToken(token: string) {
   return rows[0];
 }
 
-/** Every balance invoice whose payment link is out and unpaid — the daily reminder sweep's worklist. */
+/**
+ * Every invoice whose payment link is out and unpaid — the daily reminder
+ * sweep's worklist.
+ *
+ * Deliberately NOT filtered by kind: manual invoices are billable and get
+ * chased on the same schedule. Requiring a payToken is what keeps the sweep
+ * honest — it selects only invoices that actually have a link to point at,
+ * which excludes every pre-feature manual invoice (none were ever issued one)
+ * without needing a created-after cutoff.
+ */
 export async function listSentBalanceInvoices() {
   const db = requireDb(await getDb());
   return db
     .select()
     .from(invoices)
-    .where(and(eq(invoices.kind, "balance"), eq(invoices.status, "sent"), isNotNull(invoices.payToken)))
+    .where(and(eq(invoices.status, "sent"), isNotNull(invoices.payToken)))
     .orderBy(invoices.createdAt)
     .limit(500);
 }

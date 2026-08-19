@@ -124,6 +124,67 @@ function toBalanceEmailData(
 }
 
 /**
+ * The same email payload for an invoice with NO booking behind it — the manual
+ * invoices an owner raises by hand.
+ *
+ * Manual invoices are billable on identical terms, but the booking-derived
+ * fields simply do not exist: there is no reference, no service date, no
+ * address, and above all no deposit. Rather than invent placeholders, the
+ * fields that would be fiction are left empty and `deposit` is zero with
+ * `total` equal to the amount owed — so the templates' "Total − deposit =
+ * balance" arithmetic stays true (X − 0 = X) instead of implying a credit the
+ * customer never paid. The email builders already omit blank lines.
+ *
+ * Locale follows the customer's own preference, since no booking carries one.
+ */
+function toManualEmailData(
+  customer: Customer,
+  invoice: Pick<Invoice, "number" | "amount"> & { items?: InvoiceLineItem[] },
+  payUrl: string,
+  expiresOn: Date,
+  bizPhone?: string
+): BalanceEmailData {
+  const locale = (customer.preferredLocale as "en" | "es") ?? "en";
+  const items = invoice.items ?? [];
+  return {
+    reference: "",
+    invoiceNumber: invoice.number,
+    serviceName: locale === "es" ? "Servicios de limpieza" : "Cleaning services",
+    date: "",
+    total: invoice.amount,
+    deposit: 0,
+    balance: invoice.amount,
+    baseAmount: baseAmountOf(invoice.amount, items),
+    items: items.map(item => ({ name: lineItemLabel(item, locale), amount: item.amount })),
+    customerName: customer.firstName,
+    customerEmail: customer.email ?? "",
+    customerPhone: customer.phone ?? undefined,
+    payUrl,
+    expiresOn: expiresOn.toISOString().slice(0, 10),
+    locale,
+    bizPhone,
+  };
+}
+
+/**
+ * Email payload for any invoice, with or without a booking. One call site for
+ * both kinds keeps the manual flow on exactly the templates, itemization and
+ * transport the balance flow uses — the point of reusing the machinery rather
+ * than forking it.
+ */
+export function toInvoiceEmailData(
+  booking: Booking | undefined,
+  customer: Customer,
+  invoice: Pick<Invoice, "number" | "amount"> & { items?: InvoiceLineItem[] },
+  payUrl: string,
+  expiresOn: Date,
+  bizPhone?: string
+): BalanceEmailData {
+  return booking
+    ? toBalanceEmailData(booking, customer, invoice, payUrl, expiresOn, bizPhone)
+    : toManualEmailData(customer, invoice, payUrl, expiresOn, bizPhone);
+}
+/**
  * The Stripe line items for an invoice: the base service (when any remains
  * after itemized charges) plus one line per named item, add-ons labeled in
  * the customer's language. Sums to `amount` exactly — the base line is the
@@ -200,17 +261,25 @@ export async function resolveLineItems(
 /** Creates a Checkout Session for an outstanding balance invoice. */
 export async function createBalanceCheckoutSession(args: {
   invoice: Pick<Invoice, "id" | "number" | "amount" | "payToken"> & { items?: InvoiceLineItem[] };
-  booking: Pick<Booking, "id" | "reference" | "serviceType" | "locale" | "scheduledDate">;
+  /** Absent for a manual invoice, which has no job behind it. */
+  booking?: Pick<Booking, "id" | "reference" | "serviceType" | "locale" | "scheduledDate">;
   customerEmail: string;
   origin: string;
   now?: Date;
+  /** Locale to bill in when there is no booking to take it from. */
+  locale?: "en" | "es";
 }): Promise<Stripe.Checkout.Session> {
   const { invoice, booking, customerEmail, origin } = args;
   const now = args.now ?? new Date();
-  const locale = booking.locale as "en" | "es";
+  const locale = (booking?.locale as "en" | "es") ?? args.locale ?? "en";
   // Balance work happens on completed jobs, which paid their way past the
-  // completeness gate — the fallback is for the type system.
-  const serviceName = SERVICE_NAMES[booking.serviceType ?? "residential"][locale];
+  // completeness gate — the fallback is for the type system. A manual invoice
+  // bills generic cleaning services, since no job defines the service.
+  const serviceName = booking
+    ? SERVICE_NAMES[booking.serviceType ?? "residential"][locale]
+    : locale === "es"
+      ? "Servicios de limpieza"
+      : "Cleaning services";
   const payUrl = balancePayUrl(origin, invoice.payToken ?? "");
 
   return getStripe().checkout.sessions.create({
@@ -231,17 +300,23 @@ export async function createBalanceCheckoutSession(args: {
       items: invoice.items ?? [],
       serviceName,
       locale,
-      description:
-        locale === "es"
+      description: booking
+        ? locale === "es"
           ? `Reserva ${booking.reference} · Servicio del ${booking.scheduledDate} · Factura ${invoice.number}`
-          : `Booking ${booking.reference} · Service on ${booking.scheduledDate} · Invoice ${invoice.number}`,
+          : `Booking ${booking.reference} · Service on ${booking.scheduledDate} · Invoice ${invoice.number}`
+        : locale === "es"
+          ? `Factura ${invoice.number}`
+          : `Invoice ${invoice.number}`,
     }),
+    // payment_type stays "balance" for both kinds: it is what the webhook
+    // switches on to route the settlement, and a manual invoice settles
+    // through exactly the same path. The booking_* keys are omitted rather
+    // than stubbed when there is no booking.
     metadata: {
       payment_type: BALANCE_PAYMENT_TYPE,
       invoice_id: String(invoice.id),
       invoice_number: invoice.number,
-      booking_id: String(booking.id),
-      booking_reference: booking.reference,
+      ...(booking ? { booking_id: String(booking.id), booking_reference: booking.reference } : {}),
       customer_email: customerEmail,
       locale,
     },
@@ -472,15 +547,18 @@ export type ResendOutcome =
 export async function resendBalanceLink(invoiceId: number, origin: string): Promise<ResendOutcome> {
   const invoice = await db.getInvoiceById(invoiceId);
   if (!invoice) return { outcome: "not_found" };
-  if (invoice.kind !== "balance") return { outcome: "not_a_balance_invoice" };
   // Nothing to resend before an admin has approved the amount.
   if (invoice.status === "awaiting_approval") return { outcome: "awaiting_approval" };
   if (invoice.status === "paid") return { outcome: "already_paid" };
   if (invoice.status === "void") return { outcome: "voided" };
-  if (!invoice.bookingId) return { outcome: "booking_not_found" };
-
-  const booking = await db.getBookingById(invoice.bookingId);
-  if (!booking) return { outcome: "booking_not_found" };
+  // A manual invoice legitimately has no booking; a balance invoice that lost
+  // its booking is a broken row and still refuses.
+  const booking = invoice.bookingId ? await db.getBookingById(invoice.bookingId) : undefined;
+  if (invoice.kind === "balance" && !booking) return { outcome: "booking_not_found" };
+  // Pre-feature manual invoices were never issued a link and have no items,
+  // amount history or customer email path behind them; there is nothing to
+  // re-send, as opposed to a link to renew.
+  if (invoice.kind !== "balance" && !invoice.payToken) return { outcome: "not_a_balance_invoice" };
   const customer = await db.getCustomerById(invoice.customerId);
   if (!customer) return { outcome: "customer_not_found" };
 
@@ -497,6 +575,7 @@ export async function resendBalanceLink(invoiceId: number, origin: string): Prom
     customerEmail: customer.email ?? "",
     origin,
     now,
+    locale: (customer.preferredLocale as "en" | "es") ?? "en",
   });
 
   await db.updateInvoice(invoice.id, {
@@ -517,7 +596,7 @@ export async function resendBalanceLink(invoiceId: number, origin: string): Prom
   const bizPhone = (await db.getSetting("business_phone"))?.trim() || undefined;
   const payUrl = balancePayUrl(origin, payToken);
   const emailed = await sendBalanceDueEmail(
-    toBalanceEmailData(
+    toInvoiceEmailData(
       booking,
       customer,
       { number: invoice.number, amount: invoice.amount, items: parseLineItems(invoice.lineItems) },
@@ -525,7 +604,7 @@ export async function resendBalanceLink(invoiceId: number, origin: string): Prom
       expiresAt,
       bizPhone
     ),
-    { invoiceId: invoice.id, bookingId: booking.id }
+    { invoiceId: invoice.id, bookingId: booking?.id }
   );
 
   return {
@@ -587,7 +666,12 @@ export async function applyBalancePayment(
       // The balance landing is the moment the customer owes nothing — time
       // for the thank-you with the tip ask. Claimed once inside; a webhook
       // redelivery loses the settle claim above and never reaches this line.
-      if (invoice.bookingId) {
+      //
+      // Balance invoices only: a tip asks the customer to reward the crew for
+      // a job just finished. A manual invoice has no completed job behind it,
+      // so the ask would be meaningless (and the kind check is belt-and-braces
+      // over bookingId, which a manual invoice never has).
+      if (invoice.kind === "balance" && invoice.bookingId) {
         await sendTipRequestEmailSafely(invoice.bookingId, publicOrigin(undefined));
       }
       return { outcome: "paid" };
@@ -663,15 +747,17 @@ export async function sendDueBalanceReminders(
   for (const invoice of open) {
     const due = balanceReminderAction(invoice, now);
     if (!due) continue;
-    if (!invoice.bookingId) continue;
-    const booking = await db.getBookingById(invoice.bookingId);
-    const customer = booking ? await db.getCustomerById(invoice.customerId) : undefined;
-    if (!booking || !customer) continue;
+    // A manual invoice has no booking by design; a balance invoice missing its
+    // booking is a broken row and is skipped rather than emailed half-blank.
+    const booking = invoice.bookingId ? await db.getBookingById(invoice.bookingId) : undefined;
+    if (invoice.kind === "balance" && !booking) continue;
+    const customer = await db.getCustomerById(invoice.customerId);
+    if (!customer) continue;
 
     if (due.action === "owner_alert") {
       if (!(await db.claimBalanceReminderExhaustedAlert(invoice.id, now))) continue;
       await sendBalanceReminderExhaustedAlert(
-        toBalanceEmailData(
+        toInvoiceEmailData(
           booking,
           customer,
           { number: invoice.number, amount: invoice.amount, items: parseLineItems(invoice.lineItems) },
@@ -704,7 +790,7 @@ export async function sendDueBalanceReminders(
     if (!claimed) continue;
 
     const delivered = await sendBalanceReminderEmail(
-      toBalanceEmailData(
+      toInvoiceEmailData(
         booking,
         customer,
         { number: invoice.number, amount: invoice.amount, items: parseLineItems(invoice.lineItems) },
@@ -713,7 +799,7 @@ export async function sendDueBalanceReminders(
         bizPhone
       ),
       due.reminderNumber,
-      { invoiceId: invoice.id, bookingId: booking.id }
+      { invoiceId: invoice.id, bookingId: booking?.id }
     );
     reminded += 1;
     details.push(
@@ -736,9 +822,11 @@ async function notifyOwnerOfBalance(
   try {
     const booking = invoice.bookingId ? await db.getBookingById(invoice.bookingId) : undefined;
     const customer = await db.getCustomerById(invoice.customerId);
-    if (!booking || !customer) return;
+    // A manual invoice has no booking; only a missing customer makes the
+    // notification unbuildable.
+    if (!customer) return;
     await send(
-      toBalanceEmailData(
+      toInvoiceEmailData(
         booking,
         customer,
         { number: invoice.number, amount: invoice.amount, items: parseLineItems(invoice.lineItems) },
@@ -749,4 +837,102 @@ async function notifyOwnerOfBalance(
   } catch (error) {
     console.error(`[Balance] Failed to notify owner for invoice ${invoice.id}:`, error);
   }
+}
+
+export type ManualInvoiceOutcome =
+  | { outcome: "customer_not_found" }
+  | { outcome: "customer_has_no_email" }
+  | {
+      outcome: "issued";
+      invoiceId: number;
+      number: string;
+      amount: number;
+      emailed: boolean;
+      expiresOn: string;
+      emailError?: string;
+    };
+
+/**
+ * Raises a manual invoice and bills it — the owner-initiated counterpart to a
+ * balance invoice, for work with no booking behind it.
+ *
+ * Everything downstream of creation is the balance machinery unchanged: the
+ * same token, the same /api/pay/balance/:token route, the same Stripe session
+ * builder and itemization, the same email template and transport, and the same
+ * reminder schedule. The only difference is the absence of a booking, which
+ * the email and session builders handle explicitly rather than by faking one.
+ *
+ * The entered amount is the SERVICE line; itemized charges add on top, so the
+ * admin's previewed total and the billed total are the same arithmetic.
+ */
+export async function issueManualInvoice(args: {
+  customerId: number;
+  amount: number;
+  dueDate?: string;
+  addonIds?: ExtraId[];
+  customItems?: { name: string; amount: number }[];
+  origin: string;
+  now?: Date;
+}): Promise<ManualInvoiceOutcome> {
+  const customer = await db.getCustomerById(args.customerId);
+  if (!customer) return { outcome: "customer_not_found" };
+  // A payment link nobody can be sent is not an invoice. Refuse before writing
+  // a row, rather than leaving an unsendable one behind.
+  if (!customer.email) return { outcome: "customer_has_no_email" };
+
+  const now = args.now ?? new Date();
+  const items = await resolveLineItems(args.addonIds ?? [], args.customItems ?? []);
+  const amount = args.amount + lineItemsTotal(items);
+  const expiresAt = balanceLinkExpiresAt(now);
+  const payToken = randomBytes(24).toString("hex");
+  const number = generateInvoiceNumber();
+
+  const invoiceId = await db.createInvoice({
+    number,
+    customerId: args.customerId,
+    amount,
+    kind: "manual",
+    status: "sent",
+    lineItems: serializeLineItems(items),
+    // The owner's chosen due date wins; otherwise the link's own window is the
+    // due date, exactly as a balance invoice does it.
+    dueDate: args.dueDate || expiresAt.toISOString().slice(0, 10),
+    payToken,
+    linkSentAt: now,
+    linkExpiresAt: expiresAt,
+  });
+
+  const session = await createBalanceCheckoutSession({
+    invoice: { id: invoiceId, number, amount, payToken, items },
+    customerEmail: customer.email,
+    origin: args.origin,
+    now,
+    locale: (customer.preferredLocale as "en" | "es") ?? "en",
+  });
+  await db.updateInvoice(invoiceId, { stripeSessionId: session.id });
+
+  const bizPhone = (await db.getSetting("business_phone"))?.trim() || undefined;
+  const emailed = await sendBalanceDueEmail(
+    toInvoiceEmailData(
+      undefined,
+      customer,
+      { number, amount, items },
+      balancePayUrl(args.origin, payToken),
+      expiresAt,
+      bizPhone
+    ),
+    { invoiceId }
+  );
+
+  return {
+    outcome: "issued",
+    invoiceId,
+    number,
+    amount,
+    emailed,
+    expiresOn: expiresAt.toISOString().slice(0, 10),
+    // Same contract as resend: on failure hand back what the mail server said,
+    // so the admin sees the real reason rather than "not configured".
+    ...(emailed ? {} : { emailError: lastEmailError() ?? undefined }),
+  };
 }

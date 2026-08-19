@@ -564,26 +564,38 @@ function balanceChargeLines(data: BalanceEmailData, locale: "en" | "es"): string
 }
 
 export function buildBalanceDueEmail(data: BalanceEmailData): { subject: string; body: string } {
+  // A manual invoice has no job behind it: no booking reference, no service
+  // date, and — crucially — no deposit. Those lines are dropped rather than
+  // printed empty, and the deposit block is suppressed instead of claiming a
+  // "$0 deposit already paid", which would read as a credit the customer never
+  // made. `line === ""` is a deliberate blank line, so omitted lines use
+  // undefined and are filtered out below.
+  const jobless = data.reference === "";
+  const showDeposit = !jobless || data.deposit > 0;
   if (data.locale === "es") {
     return {
-      subject: `Su limpieza está completa — pague su saldo restante | Grapefruit Cleaning Co.`,
+      subject: jobless
+        ? `Su factura de Grapefruit Cleaning Co. — ${data.invoiceNumber}`
+        : `Su limpieza está completa — pague su saldo restante | Grapefruit Cleaning Co.`,
       body: [
         `Hola ${data.customerName},`,
         ``,
-        `¡Su limpieza está completa! Gracias por confiar en Grapefruit Cleaning Co. Solo queda pagar el saldo restante.`,
+        jobless
+          ? `Gracias por confiar en Grapefruit Cleaning Co. Aquí tiene su factura con el detalle de los cargos.`
+          : `¡Su limpieza está completa! Gracias por confiar en Grapefruit Cleaning Co. Solo queda pagar el saldo restante.`,
         ``,
-        `RESUMEN DEL SERVICIO`,
-        `Referencia: ${data.reference}`,
+        jobless ? `RESUMEN` : `RESUMEN DEL SERVICIO`,
+        jobless ? undefined : `Referencia: ${data.reference}`,
         `Factura: ${data.invoiceNumber}`,
         `Servicio: ${data.serviceName}`,
-        `Fecha del servicio: ${data.date}`,
+        jobless ? undefined : `Fecha del servicio: ${data.date}`,
         data.address ? `Dirección: ${data.address}` : ``,
         ``,
         `RESUMEN DE PAGO`,
         ...balanceChargeLines(data, "es"),
-        `Total: ${fmtUsd(data.total)}`,
-        `Depósito ya pagado: ${fmtUsd(data.deposit)}`,
-        `Saldo restante a pagar: ${fmtUsd(data.balance)}`,
+        showDeposit ? `Total: ${fmtUsd(data.total)}` : undefined,
+        showDeposit ? `Depósito ya pagado: ${fmtUsd(data.deposit)}` : undefined,
+        showDeposit ? `Saldo restante a pagar: ${fmtUsd(data.balance)}` : `Total a pagar: ${fmtUsd(data.balance)}`,
         ``,
         `PAGUE EN LÍNEA`,
         `Puede pagar de forma segura con tarjeta desde este enlace:`,
@@ -603,24 +615,28 @@ export function buildBalanceDueEmail(data: BalanceEmailData): { subject: string;
     };
   }
   return {
-    subject: `Your cleaning is complete — pay your remaining balance | Grapefruit Cleaning Co.`,
+    subject: jobless
+      ? `Your invoice from Grapefruit Cleaning Co. — ${data.invoiceNumber}`
+      : `Your cleaning is complete — pay your remaining balance | Grapefruit Cleaning Co.`,
     body: [
       `Hi ${data.customerName},`,
       ``,
-      `Your cleaning is complete! Thank you for trusting Grapefruit Cleaning Co. All that's left is your remaining balance.`,
+      jobless
+        ? `Thank you for trusting Grapefruit Cleaning Co. Here's your invoice, itemized below.`
+        : `Your cleaning is complete! Thank you for trusting Grapefruit Cleaning Co. All that's left is your remaining balance.`,
       ``,
-      `SERVICE SUMMARY`,
-      `Reference: ${data.reference}`,
+      jobless ? `SUMMARY` : `SERVICE SUMMARY`,
+      jobless ? undefined : `Reference: ${data.reference}`,
       `Invoice: ${data.invoiceNumber}`,
       `Service: ${data.serviceName}`,
-      `Service date: ${data.date}`,
+      jobless ? undefined : `Service date: ${data.date}`,
       data.address ? `Address: ${data.address}` : ``,
       ``,
       `PAYMENT SUMMARY`,
       ...balanceChargeLines(data, "en"),
-      `Total: ${fmtUsd(data.total)}`,
-      `Deposit already paid: ${fmtUsd(data.deposit)}`,
-      `Remaining balance due: ${fmtUsd(data.balance)}`,
+      showDeposit ? `Total: ${fmtUsd(data.total)}` : undefined,
+      showDeposit ? `Deposit already paid: ${fmtUsd(data.deposit)}` : undefined,
+      showDeposit ? `Remaining balance due: ${fmtUsd(data.balance)}` : `Total due: ${fmtUsd(data.balance)}`,
       ``,
       `PAY ONLINE`,
       `You can pay securely by card using this link:`,
@@ -651,24 +667,35 @@ export function buildBalanceReminderEmail(
   reminderNumber: 1 | 2
 ): { subject: string; body: string } {
   const lastCall = reminderNumber === 2;
+  // Same rule as the original send: without a booking there is no reference to
+  // print and nothing to call "your cleaning".
+  const jobless = data.reference === "";
   if (data.locale === "es") {
     return {
       subject: lastCall
-        ? `Recordatorio final — saldo pendiente de su limpieza | Grapefruit Cleaning Co.`
-        : `Recordatorio amistoso — saldo pendiente de su limpieza | Grapefruit Cleaning Co.`,
+        ? jobless
+          ? `Recordatorio final — factura ${data.invoiceNumber} pendiente | Grapefruit Cleaning Co.`
+          : `Recordatorio final — saldo pendiente de su limpieza | Grapefruit Cleaning Co.`
+        : jobless
+          ? `Recordatorio amistoso — factura ${data.invoiceNumber} pendiente | Grapefruit Cleaning Co.`
+          : `Recordatorio amistoso — saldo pendiente de su limpieza | Grapefruit Cleaning Co.`,
       body: [
         `Hola ${data.customerName},`,
         ``,
         lastCall
-          ? `Solo un último recordatorio amistoso: el saldo de su limpieza sigue pendiente. Sabemos que la vida se pone ocupada — el enlace de abajo lo resuelve en un minuto.`
-          : `Esperamos que esté disfrutando su hogar recién limpio. Solo un recordatorio amistoso: el saldo de su limpieza sigue pendiente.`,
+          ? jobless
+            ? `Solo un último recordatorio amistoso: su factura sigue pendiente. Sabemos que la vida se pone ocupada — el enlace de abajo lo resuelve en un minuto.`
+            : `Solo un último recordatorio amistoso: el saldo de su limpieza sigue pendiente. Sabemos que la vida se pone ocupada — el enlace de abajo lo resuelve en un minuto.`
+          : jobless
+            ? `Solo un recordatorio amistoso: su factura sigue pendiente.`
+            : `Esperamos que esté disfrutando su hogar recién limpio. Solo un recordatorio amistoso: el saldo de su limpieza sigue pendiente.`,
         ``,
         `RESUMEN`,
-        `Referencia: ${data.reference}`,
+        ...(jobless ? [] : [`Referencia: ${data.reference}`]),
         `Factura: ${data.invoiceNumber}`,
         `Servicio: ${data.serviceName}`,
         ...balanceChargeLines(data, "es"),
-        `Saldo pendiente: ${fmtUsd(data.balance)}`,
+        jobless ? `Total a pagar: ${fmtUsd(data.balance)}` : `Saldo pendiente: ${fmtUsd(data.balance)}`,
         ``,
         `PAGUE EN LÍNEA`,
         `Puede pagar de forma segura con tarjeta desde este enlace:`,
@@ -687,21 +714,29 @@ export function buildBalanceReminderEmail(
   }
   return {
     subject: lastCall
-      ? `Final reminder — your cleaning balance is still open | Grapefruit Cleaning Co.`
-      : `Friendly reminder — your cleaning balance is still open | Grapefruit Cleaning Co.`,
+      ? jobless
+        ? `Final reminder — invoice ${data.invoiceNumber} is still open | Grapefruit Cleaning Co.`
+        : `Final reminder — your cleaning balance is still open | Grapefruit Cleaning Co.`
+      : jobless
+        ? `Friendly reminder — invoice ${data.invoiceNumber} is still open | Grapefruit Cleaning Co.`
+        : `Friendly reminder — your cleaning balance is still open | Grapefruit Cleaning Co.`,
     body: [
       `Hi ${data.customerName},`,
       ``,
       lastCall
-        ? `Just one last friendly nudge: the balance for your cleaning is still open. We know life gets busy — the link below settles it in a minute.`
-        : `We hope you're enjoying your freshly cleaned home! Just a friendly reminder that the balance for your cleaning is still open.`,
+        ? jobless
+          ? `Just one last friendly nudge: your invoice is still open. We know life gets busy — the link below settles it in a minute.`
+          : `Just one last friendly nudge: the balance for your cleaning is still open. We know life gets busy — the link below settles it in a minute.`
+        : jobless
+          ? `Just a friendly reminder that your invoice is still open.`
+          : `We hope you're enjoying your freshly cleaned home! Just a friendly reminder that the balance for your cleaning is still open.`,
       ``,
       `SUMMARY`,
-      `Reference: ${data.reference}`,
+      ...(jobless ? [] : [`Reference: ${data.reference}`]),
       `Invoice: ${data.invoiceNumber}`,
       `Service: ${data.serviceName}`,
       ...balanceChargeLines(data, "en"),
-      `Balance due: ${fmtUsd(data.balance)}`,
+      jobless ? `Total due: ${fmtUsd(data.balance)}` : `Balance due: ${fmtUsd(data.balance)}`,
       ``,
       `PAY ONLINE`,
       `You can pay securely by card using this link:`,

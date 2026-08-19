@@ -21,9 +21,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { EXTRA_IDS, type ExtraId } from "@shared/pricing";
-import { CUSTOM_ITEM_MAX, parseLineItems } from "@shared/invoiceItems";
+import { parseLineItems } from "@shared/invoiceItems";
 import { usePricing } from "@/hooks/usePricing";
 import { en } from "@/i18n/translations/en";
+import {
+  InvoiceItemsEditor,
+  InvoiceItemsSummary,
+  addonsTotal,
+  customItemsValid,
+  parseCustomItems,
+  type CustomItemRow,
+} from "./InvoiceItemsEditor";
 import { NotesBlock, PageHeader, RowCard, StatusBadge, TableOrCards, fmtDate, fmtMoney } from "./adminShared";
 
 const INVOICE_STATUSES = ["draft", "sent", "paid", "overdue", "void"] as const;
@@ -74,7 +82,7 @@ function ReviewAndSendDialog({
 }) {
   const [amount, setAmount] = useState("");
   const [checkedAddons, setCheckedAddons] = useState<ExtraId[]>([]);
-  const [customs, setCustoms] = useState<{ name: string; amount: string }[]>([]);
+  const [customs, setCustoms] = useState<CustomItemRow[]>([]);
   const pricing = usePricing();
   const computed = invoice?.computedAmount ?? invoice?.amount ?? 0;
   const parsed = amount.trim() === "" ? computed : Number(amount);
@@ -84,13 +92,11 @@ function ReviewAndSendDialog({
   // The same arithmetic the server runs: base + each checked add-on at its
   // live catalog price + each named custom line. Previewed here, recomputed
   // there — the ids travel, never the dollars.
-  const addonsTotal = checkedAddons.reduce((sum, id) => sum + Math.max(1, Math.round(pricing.extras[id] ?? 0)), 0);
-  const customsParsed = customs.map(row => ({ name: row.name.trim(), amount: Number(row.amount) }));
-  const customsValid = customsParsed.every(
-    row => row.name.length > 0 && Number.isInteger(row.amount) && row.amount >= 1 && row.amount <= CUSTOM_ITEM_MAX
-  );
+  const extrasTotal = addonsTotal(pricing.extras, checkedAddons);
+  const customsParsed = parseCustomItems(customs);
+  const customsValid = customItemsValid(customsParsed);
   const customsTotal = customsValid ? customsParsed.reduce((sum, row) => sum + row.amount, 0) : 0;
-  const grandTotal = (baseValid ? Math.round(parsed) : 0) + addonsTotal + customsTotal;
+  const grandTotal = (baseValid ? Math.round(parsed) : 0) + extrasTotal + customsTotal;
   const valid = baseValid && customsValid;
 
   return (
@@ -162,118 +168,23 @@ function ReviewAndSendDialog({
               {!baseValid && <p className="mt-1.5 text-xs text-destructive">Enter a valid amount.</p>}
             </div>
 
-            <div>
-              <Label>Add-ons done on-site</Label>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Checked items appear on the invoice by name, priced from today's catalog.
-              </p>
-              <div className="mt-2 grid grid-cols-2 gap-1.5">
-                {EXTRA_IDS.map(id => {
-                  const active = checkedAddons.includes(id);
-                  const price = Math.max(1, Math.round(pricing.extras[id] ?? 0));
-                  return (
-                    <button
-                      key={id}
-                      type="button"
-                      aria-pressed={active}
-                      onClick={() =>
-                        setCheckedAddons(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]))
-                      }
-                      className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-left text-xs font-medium transition-colors ${
-                        active
-                          ? "border-primary bg-primary/5 text-foreground"
-                          : "border-border bg-card text-muted-foreground hover:border-primary/40"
-                      }`}
-                    >
-                      <span className="min-w-0 truncate">{(en.extras as Record<string, string>)[id] ?? id}</span>
-                      <span className="shrink-0">+{fmtMoney(price)}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+            <InvoiceItemsEditor
+              extras={pricing.extras}
+              checkedAddons={checkedAddons}
+              onToggleAddon={id =>
+                setCheckedAddons(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]))
+              }
+              customs={customs}
+              onCustomsChange={setCustoms}
+            />
 
-            <div>
-              <Label>One-off charges</Label>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Anything not in the catalog. Every line needs a name — the customer sees exactly these words.
-              </p>
-              {customs.map((row, index) => (
-                <div key={index} className="mt-2 flex gap-2">
-                  <Input
-                    className="flex-1 rounded-xl"
-                    placeholder="e.g. Carpet spot treatment"
-                    value={row.name}
-                    onChange={e =>
-                      setCustoms(prev => prev.map((r, i) => (i === index ? { ...r, name: e.target.value } : r)))
-                    }
-                  />
-                  <Input
-                    type="number"
-                    inputMode="numeric"
-                    min={1}
-                    max={CUSTOM_ITEM_MAX}
-                    className="w-24 rounded-xl"
-                    placeholder="$"
-                    value={row.amount}
-                    onChange={e =>
-                      setCustoms(prev => prev.map((r, i) => (i === index ? { ...r, amount: e.target.value } : r)))
-                    }
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="rounded-xl px-2.5"
-                    onClick={() => setCustoms(prev => prev.filter((_, i) => i !== index))}
-                    aria-label="Remove line"
-                  >
-                    ×
-                  </Button>
-                </div>
-              ))}
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="mt-2 rounded-lg text-xs"
-                onClick={() => setCustoms(prev => [...prev, { name: "", amount: "" }])}
-              >
-                + Add a line
-              </Button>
-              {!customsValid && (
-                <p className="mt-1.5 text-xs text-destructive">
-                  Every line needs a name and a whole-dollar amount of $1 or more.
-                </p>
-              )}
-            </div>
-
-            {(checkedAddons.length > 0 || customs.length > 0) && (
-              <dl className="space-y-1 rounded-xl bg-muted/50 p-3 text-xs">
-                <div className="flex justify-between">
-                  <dt className="text-muted-foreground">Service</dt>
-                  <dd className="font-medium">{fmtMoney(baseValid ? Math.round(parsed) : 0)}</dd>
-                </div>
-                {checkedAddons.map(id => (
-                  <div key={id} className="flex justify-between">
-                    <dt className="text-muted-foreground">{(en.extras as Record<string, string>)[id] ?? id}</dt>
-                    <dd className="font-medium">{fmtMoney(Math.max(1, Math.round(pricing.extras[id] ?? 0)))}</dd>
-                  </div>
-                ))}
-                {customsParsed.map(
-                  (row, index) =>
-                    row.name && (
-                      <div key={index} className="flex justify-between">
-                        <dt className="text-muted-foreground">{row.name}</dt>
-                        <dd className="font-medium">{Number.isFinite(row.amount) ? fmtMoney(row.amount) : "—"}</dd>
-                      </div>
-                    )
-                )}
-                <div className="flex justify-between border-t border-border pt-1">
-                  <dt className="font-semibold text-foreground">Invoice total</dt>
-                  <dd className="font-semibold text-foreground">{fmtMoney(grandTotal)}</dd>
-                </div>
-              </dl>
-            )}
+            <InvoiceItemsSummary
+              extras={pricing.extras}
+              base={baseValid ? Math.round(parsed) : 0}
+              checkedAddons={checkedAddons}
+              customs={customsParsed}
+              total={grandTotal}
+            />
 
             <p className="text-xs text-muted-foreground">
               Approving emails {invoice.customerEmail ?? "the customer"} a payment link valid for 7 days.
@@ -306,15 +217,42 @@ export default function AdminInvoices() {
   const customers = trpc.admin.customers.useQuery({});
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ customerId: "", amount: "", dueDate: "" });
+  const [newAddons, setNewAddons] = useState<ExtraId[]>([]);
+  const [newCustoms, setNewCustoms] = useState<CustomItemRow[]>([]);
+  const pricing = usePricing();
+
+  // Same preview arithmetic as the approval dialog, from the same helpers: the
+  // entered amount is the service line, items add on top.
+  const newBase = Math.round(Number(form.amount));
+  const newBaseValid = Number.isFinite(newBase) && newBase >= 1;
+  const newCustomsParsed = parseCustomItems(newCustoms);
+  const newCustomsValid = customItemsValid(newCustomsParsed);
+  const newTotal =
+    (newBaseValid ? newBase : 0) +
+    addonsTotal(pricing.extras, newAddons) +
+    (newCustomsValid ? newCustomsParsed.reduce((sum, row) => sum + row.amount, 0) : 0);
 
   const create = trpc.admin.createInvoice.useMutation({
     onSuccess: r => {
       utils.admin.invoices.invalidate();
       setOpen(false);
       setForm({ customerId: "", amount: "", dueDate: "" });
-      toast.success(`Invoice ${r.number} created`);
+      setNewAddons([]);
+      setNewCustoms([]);
+      // A manual invoice now bills the customer, so what matters is whether the
+      // payment link actually reached them — not merely that a row was written.
+      if (r.emailed) {
+        toast.success(`Invoice ${r.number} sent — ${fmtMoney(r.amount)} payable through ${r.expiresOn}`);
+      } else {
+        toast.error(
+          r.emailError
+            ? `Invoice ${r.number} created, but the email did not send: ${r.emailError}`
+            : `Invoice ${r.number} created, but no email was sent (email not configured)`,
+          { duration: 12000 }
+        );
+      }
     },
-    onError: () => toast.error("Failed to create invoice"),
+    onError: e => toast.error(e.message || "Failed to create invoice"),
   });
   const updateStatus = trpc.admin.updateInvoiceStatus.useMutation({
     onSuccess: () => {
@@ -409,7 +347,31 @@ export default function AdminInvoices() {
                     value={form.amount}
                     onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
                   />
+                  <p className="mt-1.5 text-xs text-muted-foreground">
+                    The base service charge. Anything you add below is billed on top.
+                  </p>
                 </div>
+
+                <InvoiceItemsEditor
+                  extras={pricing.extras}
+                  checkedAddons={newAddons}
+                  onToggleAddon={id =>
+                    setNewAddons(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]))
+                  }
+                  customs={newCustoms}
+                  onCustomsChange={setNewCustoms}
+                  addonsLabel="Add-ons"
+                  addonsHint="Checked items appear on the invoice by name, priced from today's catalog."
+                />
+
+                <InvoiceItemsSummary
+                  extras={pricing.extras}
+                  base={newBaseValid ? newBase : 0}
+                  checkedAddons={newAddons}
+                  customs={newCustomsParsed}
+                  total={newTotal}
+                />
+
                 <div>
                   <Label htmlFor="inv-due">Due date</Label>
                   <Input
@@ -419,19 +381,30 @@ export default function AdminInvoices() {
                     value={form.dueDate}
                     onChange={e => setForm(f => ({ ...f, dueDate: e.target.value }))}
                   />
+                  <p className="mt-1.5 text-xs text-muted-foreground">
+                    Optional. Leave blank to use the payment link's own 7-day window.
+                  </p>
                 </div>
+
+                <p className="text-xs text-muted-foreground">
+                  Creating this invoice emails the customer a payment link valid for 7 days, and sends automatic
+                  reminders at 3 and 7 days if it goes unpaid.
+                </p>
+
                 <Button
                   className="w-full rounded-xl"
-                  disabled={!form.customerId || !form.amount || create.isPending}
+                  disabled={!form.customerId || !newBaseValid || !newCustomsValid || create.isPending}
                   onClick={() =>
                     create.mutate({
                       customerId: Number(form.customerId),
-                      amount: Math.round(Number(form.amount)),
+                      amount: newBase,
                       dueDate: form.dueDate || undefined,
+                      addonIds: newAddons,
+                      customItems: newCustomsParsed,
                     })
                   }
                 >
-                  {create.isPending ? "Creating…" : "Create invoice"}
+                  {create.isPending ? "Sending…" : `Create & send ${fmtMoney(newTotal)}`}
                 </Button>
               </div>
             </DialogContent>

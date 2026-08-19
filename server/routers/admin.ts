@@ -31,7 +31,13 @@ import { durationHoursFor } from "@shared/duration";
 import { todayInBookingZone } from "@shared/leadTime";
 import { CUSTOM_ITEM_MAX, CUSTOM_ITEM_MIN } from "@shared/invoiceItems";
 import { composeAddress, PROPERTY_TYPES } from "@shared/property";
-import { approveBalanceInvoice, issueBalanceSafely, originFromRequest, resendBalanceLink } from "../balance";
+import {
+  approveBalanceInvoice,
+  issueBalanceSafely,
+  issueManualInvoice,
+  originFromRequest,
+  resendBalanceLink,
+} from "../balance";
 import { balanceLinkStatus } from "../balanceRules";
 import { buildStaffInviteEmail, deliverEmail, sendDepositLinkEmail, sendPropertyConnectedEmail } from "../emails";
 import { loadDurationConfig, loadSchedulingRules, occupiedIntervals, SERVICE_NAMES, withDurationHours } from "./booking";
@@ -804,15 +810,67 @@ export const adminRouter = router({
     .input(
       z.object({
         customerId: z.number().int(),
-        bookingId: z.number().int().optional(),
         amount: z.number().int().min(1),
         dueDate: z.string().optional(),
+        /**
+         * Same itemization the approval flow takes, deliberately the same
+         * shape: ids only for catalog add-ons (the server prices them from the
+         * live catalog, so a stale client cannot dictate dollars), and named
+         * one-off lines. Omitted means an un-itemized invoice, which is the
+         * pre-existing behaviour and stays valid.
+         */
+        addonIds: z.array(z.enum(EXTRA_IDS)).max(EXTRA_IDS.length).optional(),
+        customItems: z
+          .array(
+            z.object({
+              name: z
+                .string()
+                .trim()
+                .min(1, "Every custom line item needs a name — that's the point.")
+                .max(120),
+              amount: z
+                .number()
+                .int("Whole dollars only")
+                .min(CUSTOM_ITEM_MIN, "A line item must charge at least $1.")
+                .max(CUSTOM_ITEM_MAX, `A single line item tops out at $${CUSTOM_ITEM_MAX.toLocaleString()}.`),
+            })
+          )
+          .max(10)
+          .optional(),
       })
     )
-    .mutation(async ({ input }) => {
-      const number = `INV-${Date.now().toString(36).toUpperCase()}`;
-      const id = await db.createInvoice({ ...input, number, status: "sent" });
-      return { id, number };
+    .mutation(async ({ ctx, input }) => {
+      // The whole lifecycle lives in balance.ts, shared with the approval
+      // flow: itemization is resolved and snapshotted there, a pay token is
+      // minted, the Stripe session is built by the same builder, and the same
+      // branded email goes out on the same transport.
+      const result = await issueManualInvoice({
+        customerId: input.customerId,
+        amount: input.amount,
+        dueDate: input.dueDate,
+        addonIds: input.addonIds,
+        customItems: input.customItems,
+        origin: originFromRequest(ctx.req),
+      });
+      switch (result.outcome) {
+        case "customer_not_found":
+          throw new TRPCError({ code: "NOT_FOUND", message: "That customer no longer exists." });
+        case "customer_has_no_email":
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "This customer has no email address on file, so there is nowhere to send the payment link. Add one on their profile first.",
+          });
+        default:
+          return {
+            id: result.invoiceId,
+            number: result.number,
+            amount: result.amount,
+            emailed: result.emailed,
+            expiresOn: result.expiresOn,
+            emailError: result.emailError,
+          };
+      }
     }),
   updateInvoiceStatus: adminProcedure
     .input(z.object({ id: z.number().int(), status: z.enum(["draft", "sent", "paid", "overdue", "void"]) }))
@@ -828,7 +886,8 @@ export const adminRouter = router({
       });
       // Best-effort: close the outstanding checkout so the emailed link can't
       // take a second payment. The refund-needed guard covers it either way.
-      if (input.status === "paid" && invoice?.kind === "balance" && invoice.stripeSessionId) {
+      // Applies to manual invoices too now that they carry live payment links.
+      if (input.status === "paid" && invoice?.stripeSessionId) {
         try {
           await getStripe().checkout.sessions.expire(invoice.stripeSessionId);
         } catch (error) {
@@ -837,6 +896,7 @@ export const adminRouter = router({
       }
       // Marking a balance paid by hand (collected in person, say) settles the
       // customer — the thank-you with the tip ask goes out now, claimed once.
+      // Balance only: a manual invoice has no finished job to tip a crew for.
       if (input.status === "paid" && invoice?.kind === "balance" && invoice.bookingId) {
         await sendTipRequestEmailSafely(invoice.bookingId, originFromRequest(ctx.req));
       }

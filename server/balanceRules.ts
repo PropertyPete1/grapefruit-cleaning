@@ -44,7 +44,8 @@ export type BalanceLinkStatus = "none" | "awaiting_approval" | "sent" | "paid" |
 /**
  * Payment-link state shown in Admin → Invoices.
  * - "awaiting_approval": balance computed, waiting on an admin — nothing sent.
- * - "none": no link was ever generated (manual invoices, zero-balance invoices).
+ * - "none": no link was ever generated (zero-balance invoices, or an invoice
+ *   created before manual invoices became billable).
  * - "paid": settled, by card or in person — a paid invoice is never "expired".
  * - "expired": the 7-day window closed with the balance still outstanding.
  * - "sent": link is live and payable.
@@ -100,9 +101,11 @@ export function balanceReminderAction(
   },
   now: Date = new Date()
 ): BalanceReminderAction {
-  // Only a live balance link is chased: manual invoices have no link to point
-  // at, and any status but "sent" means the money moved or the invoice died.
-  if (invoice.kind !== "balance" || invoice.status !== "sent" || !invoice.payToken) return null;
+  // The gate is the LINK, not the kind. Manual invoices are billable now and a
+  // dollar owed is a dollar owed, so both kinds are chased on the same
+  // schedule; what disqualifies a row is having nothing to point the customer
+  // at (no token) or having left "sent" (the money moved, or the invoice died).
+  if (invoice.status !== "sent" || !invoice.payToken) return null;
   if (!invoice.linkSentAt) return null;
   const sentAt = new Date(invoice.linkSentAt).getTime();
   if (!Number.isFinite(sentAt)) return null;
