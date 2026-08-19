@@ -20,6 +20,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { EXTRA_IDS, type ExtraId } from "@shared/pricing";
+import { CUSTOM_ITEM_MAX, parseLineItems } from "@shared/invoiceItems";
+import { usePricing } from "@/hooks/usePricing";
+import { en } from "@/i18n/translations/en";
 import { NotesBlock, PageHeader, RowCard, StatusBadge, TableOrCards, fmtDate, fmtMoney } from "./adminShared";
 
 const INVOICE_STATUSES = ["draft", "sent", "paid", "overdue", "void"] as const;
@@ -60,14 +64,34 @@ function ReviewAndSendDialog({
 }: {
   invoice: PendingInvoice | null;
   onClose: () => void;
-  onApprove: (invoiceId: number, adjustedAmount: number | undefined) => void;
+  onApprove: (
+    invoiceId: number,
+    adjustedAmount: number | undefined,
+    addonIds: ExtraId[],
+    customItems: { name: string; amount: number }[]
+  ) => void;
   pending: boolean;
 }) {
   const [amount, setAmount] = useState("");
+  const [checkedAddons, setCheckedAddons] = useState<ExtraId[]>([]);
+  const [customs, setCustoms] = useState<{ name: string; amount: string }[]>([]);
+  const pricing = usePricing();
   const computed = invoice?.computedAmount ?? invoice?.amount ?? 0;
   const parsed = amount.trim() === "" ? computed : Number(amount);
-  const valid = Number.isFinite(parsed) && parsed >= 0;
-  const adjusted = valid && Math.round(parsed) !== computed;
+  const baseValid = Number.isFinite(parsed) && parsed >= 0;
+  const adjusted = baseValid && Math.round(parsed) !== computed;
+
+  // The same arithmetic the server runs: base + each checked add-on at its
+  // live catalog price + each named custom line. Previewed here, recomputed
+  // there — the ids travel, never the dollars.
+  const addonsTotal = checkedAddons.reduce((sum, id) => sum + Math.max(1, Math.round(pricing.extras[id] ?? 0)), 0);
+  const customsParsed = customs.map(row => ({ name: row.name.trim(), amount: Number(row.amount) }));
+  const customsValid = customsParsed.every(
+    row => row.name.length > 0 && Number.isInteger(row.amount) && row.amount >= 1 && row.amount <= CUSTOM_ITEM_MAX
+  );
+  const customsTotal = customsValid ? customsParsed.reduce((sum, row) => sum + row.amount, 0) : 0;
+  const grandTotal = (baseValid ? Math.round(parsed) : 0) + addonsTotal + customsTotal;
+  const valid = baseValid && customsValid;
 
   return (
     <Dialog
@@ -75,6 +99,8 @@ function ReviewAndSendDialog({
       onOpenChange={o => {
         if (!o) {
           setAmount("");
+          setCheckedAddons([]);
+          setCustoms([]);
           onClose();
         }
       }}
@@ -133,8 +159,121 @@ function ReviewAndSendDialog({
                   ? `Adjusted from the computed ${fmtMoney(computed)} — the customer is charged ${fmtMoney(Math.round(parsed))}.`
                   : "Leave blank to charge the computed balance."}
               </p>
-              {!valid && <p className="mt-1.5 text-xs text-destructive">Enter a valid amount.</p>}
+              {!baseValid && <p className="mt-1.5 text-xs text-destructive">Enter a valid amount.</p>}
             </div>
+
+            <div>
+              <Label>Add-ons done on-site</Label>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Checked items appear on the invoice by name, priced from today's catalog.
+              </p>
+              <div className="mt-2 grid grid-cols-2 gap-1.5">
+                {EXTRA_IDS.map(id => {
+                  const active = checkedAddons.includes(id);
+                  const price = Math.max(1, Math.round(pricing.extras[id] ?? 0));
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() =>
+                        setCheckedAddons(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]))
+                      }
+                      className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-left text-xs font-medium transition-colors ${
+                        active
+                          ? "border-primary bg-primary/5 text-foreground"
+                          : "border-border bg-card text-muted-foreground hover:border-primary/40"
+                      }`}
+                    >
+                      <span className="min-w-0 truncate">{(en.extras as Record<string, string>)[id] ?? id}</span>
+                      <span className="shrink-0">+{fmtMoney(price)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <Label>One-off charges</Label>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Anything not in the catalog. Every line needs a name — the customer sees exactly these words.
+              </p>
+              {customs.map((row, index) => (
+                <div key={index} className="mt-2 flex gap-2">
+                  <Input
+                    className="flex-1 rounded-xl"
+                    placeholder="e.g. Carpet spot treatment"
+                    value={row.name}
+                    onChange={e =>
+                      setCustoms(prev => prev.map((r, i) => (i === index ? { ...r, name: e.target.value } : r)))
+                    }
+                  />
+                  <Input
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    max={CUSTOM_ITEM_MAX}
+                    className="w-24 rounded-xl"
+                    placeholder="$"
+                    value={row.amount}
+                    onChange={e =>
+                      setCustoms(prev => prev.map((r, i) => (i === index ? { ...r, amount: e.target.value } : r)))
+                    }
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="rounded-xl px-2.5"
+                    onClick={() => setCustoms(prev => prev.filter((_, i) => i !== index))}
+                    aria-label="Remove line"
+                  >
+                    ×
+                  </Button>
+                </div>
+              ))}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-2 rounded-lg text-xs"
+                onClick={() => setCustoms(prev => [...prev, { name: "", amount: "" }])}
+              >
+                + Add a line
+              </Button>
+              {!customsValid && (
+                <p className="mt-1.5 text-xs text-destructive">
+                  Every line needs a name and a whole-dollar amount of $1 or more.
+                </p>
+              )}
+            </div>
+
+            {(checkedAddons.length > 0 || customs.length > 0) && (
+              <dl className="space-y-1 rounded-xl bg-muted/50 p-3 text-xs">
+                <div className="flex justify-between">
+                  <dt className="text-muted-foreground">Service</dt>
+                  <dd className="font-medium">{fmtMoney(baseValid ? Math.round(parsed) : 0)}</dd>
+                </div>
+                {checkedAddons.map(id => (
+                  <div key={id} className="flex justify-between">
+                    <dt className="text-muted-foreground">{(en.extras as Record<string, string>)[id] ?? id}</dt>
+                    <dd className="font-medium">{fmtMoney(Math.max(1, Math.round(pricing.extras[id] ?? 0)))}</dd>
+                  </div>
+                ))}
+                {customsParsed.map(
+                  (row, index) =>
+                    row.name && (
+                      <div key={index} className="flex justify-between">
+                        <dt className="text-muted-foreground">{row.name}</dt>
+                        <dd className="font-medium">{Number.isFinite(row.amount) ? fmtMoney(row.amount) : "—"}</dd>
+                      </div>
+                    )
+                )}
+                <div className="flex justify-between border-t border-border pt-1">
+                  <dt className="font-semibold text-foreground">Invoice total</dt>
+                  <dd className="font-semibold text-foreground">{fmtMoney(grandTotal)}</dd>
+                </div>
+              </dl>
+            )}
 
             <p className="text-xs text-muted-foreground">
               Approving emails {invoice.customerEmail ?? "the customer"} a payment link valid for 7 days.
@@ -143,9 +282,16 @@ function ReviewAndSendDialog({
             <Button
               className="w-full rounded-xl"
               disabled={!valid || pending}
-              onClick={() => onApprove(invoice.id, adjusted ? Math.round(parsed) : undefined)}
+              onClick={() =>
+                onApprove(
+                  invoice.id,
+                  adjusted ? Math.round(parsed) : undefined,
+                  checkedAddons,
+                  customsParsed
+                )
+              }
             >
-              {pending ? "Sending…" : `Approve & send ${fmtMoney(valid ? Math.round(parsed) : computed)}`}
+              {pending ? "Sending…" : `Approve & send ${fmtMoney(valid ? grandTotal : computed)}`}
             </Button>
           </div>
         )}
@@ -334,7 +480,14 @@ export default function AdminInvoices() {
         invoice={reviewing}
         pending={approve.isPending}
         onClose={() => setReviewing(null)}
-        onApprove={(invoiceId, adjustedAmount) => approve.mutate({ invoiceId, adjustedAmount })}
+        onApprove={(invoiceId, adjustedAmount, addonIds, customItems) =>
+          approve.mutate({
+            invoiceId,
+            adjustedAmount,
+            addonIds: addonIds.length > 0 ? addonIds : undefined,
+            customItems: customItems.length > 0 ? customItems : undefined,
+          })
+        }
       />
 
       <div className="rounded-2xl bg-card shadow-sm ring-1 ring-border">
@@ -365,7 +518,21 @@ export default function AdminInvoices() {
                   <tr key={inv.id} className="border-b border-border/60 last:border-0 hover:bg-muted/40">
                     <td className="px-6 py-3.5 font-mono text-xs font-semibold text-primary">{inv.number}</td>
                     <td className="px-6 py-3.5">{customerName(inv.customerId)}</td>
-                    <td className="px-6 py-3.5 font-semibold">{fmtMoney(inv.amount)}</td>
+                    <td className="px-6 py-3.5">
+                      <span className="font-semibold">{fmtMoney(inv.amount)}</span>
+                      {(() => {
+                        const items = parseLineItems(inv.lineItems);
+                        if (items.length === 0) return null;
+                        return (
+                          <span
+                            className="mt-0.5 block max-w-56 truncate text-[11px] text-muted-foreground"
+                            title={items.map(i => `${i.name} — ${fmtMoney(i.amount)}`).join("\n")}
+                          >
+                            {items.map(i => `${i.name} ${fmtMoney(i.amount)}`).join(" · ")}
+                          </span>
+                        );
+                      })()}
+                    </td>
                     <td className="px-6 py-3.5 text-muted-foreground">{inv.dueDate ? fmtDate(inv.dueDate) : "—"}</td>
                     <td className="px-6 py-3.5">
                       {inv.linkStatus === "none" ? (
