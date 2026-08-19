@@ -34,9 +34,18 @@ import {
   lastEmailError,
   type BalanceEmailData,
 } from "./emails";
-import { SERVICE_NAMES } from "./routers/booking";
+import { EXTRA_NAMES, loadPricingConfig, SERVICE_NAMES } from "./routers/booking";
 import { getStripe } from "./stripe";
 import { sendTipRequestEmailSafely } from "./tip";
+import {
+  baseAmountOf,
+  lineItemsTotal,
+  parseLineItems,
+  serializeLineItems,
+  type CustomLineItem,
+  type InvoiceLineItem,
+} from "@shared/invoiceItems";
+import type { ExtraId } from "@shared/pricing";
 
 /** Metadata tag that marks a Checkout Session as a balance payment. */
 export const BALANCE_PAYMENT_TYPE = "balance";
@@ -78,7 +87,7 @@ export function balanceDueForBooking(booking: Pick<Booking, "totalAmount" | "dep
 function toBalanceEmailData(
   booking: Booking,
   customer: Customer,
-  invoice: Pick<Invoice, "number" | "amount">,
+  invoice: Pick<Invoice, "number" | "amount"> & { items?: InvoiceLineItem[] },
   payUrl: string,
   expiresOn: Date,
   bizPhone?: string
@@ -94,6 +103,15 @@ function toBalanceEmailData(
     total: booking.totalAmount,
     deposit: booking.stripePaymentIntentId ? booking.depositAmount : 0,
     balance: invoice.amount,
+    // The itemization, when this invoice has one: the base service line plus
+    // each named charge, exactly as approved — names already in the
+    // customer's language. The email renders these so the total is never a
+    // mystery.
+    baseAmount: baseAmountOf(invoice.amount, invoice.items ?? []),
+    items: (invoice.items ?? []).map(item => ({
+      name: lineItemLabel(item, locale),
+      amount: item.amount,
+    })),
     customerName: customer.firstName,
     customerEmail: customer.email ?? "",
     customerPhone: customer.phone ?? undefined,
@@ -105,9 +123,83 @@ function toBalanceEmailData(
   };
 }
 
+/**
+ * The Stripe line items for an invoice: the base service (when any remains
+ * after itemized charges) plus one line per named item, add-ons labeled in
+ * the customer's language. Sums to `amount` exactly — the base line is the
+ * remainder by definition, and lineItemsTotal never exceeds it because the
+ * approval computed amount = base + items.
+ */
+export function buildStripeLineItems(args: {
+  amount: number;
+  items: InvoiceLineItem[];
+  serviceName: string;
+  locale: "en" | "es";
+  description: string;
+}): Stripe.Checkout.SessionCreateParams.LineItem[] {
+  const { amount, items, serviceName, locale, description } = args;
+  const base = baseAmountOf(amount, items);
+  const lines: Stripe.Checkout.SessionCreateParams.LineItem[] = [];
+  if (base > 0 || items.length === 0) {
+    lines.push({
+      price_data: {
+        currency: "usd",
+        unit_amount: base * 100,
+        product_data: {
+          name: locale === "es" ? `Saldo restante — ${serviceName}` : `Remaining balance — ${serviceName}`,
+          description,
+        },
+      },
+      quantity: 1,
+    });
+  }
+  for (const item of items) {
+    lines.push({
+      price_data: {
+        currency: "usd",
+        unit_amount: item.amount * 100,
+        product_data: { name: lineItemLabel(item, locale) },
+      },
+      quantity: 1,
+    });
+  }
+  return lines;
+}
+
+/** An item's customer-facing label: add-ons localize, custom names verbatim. */
+export function lineItemLabel(item: InvoiceLineItem, locale: "en" | "es"): string {
+  if (item.kind === "addon") return EXTRA_NAMES[item.id]?.[locale] ?? item.name;
+  return item.name;
+}
+
+/**
+ * Resolve the admin's picked add-on ids and custom lines into the snapshot the
+ * invoice stores: names and prices pinned NOW, from the live catalog — an
+ * add-on chosen on-site is billed at today's price, and a catalog edit
+ * tomorrow cannot rewrite it.
+ */
+export async function resolveLineItems(
+  addonIds: ExtraId[],
+  customItems: { name: string; amount: number }[]
+): Promise<InvoiceLineItem[]> {
+  const pricing = await loadPricingConfig();
+  const addons: InvoiceLineItem[] = addonIds.map(id => ({
+    kind: "addon",
+    id,
+    name: EXTRA_NAMES[id]?.en ?? id,
+    amount: Math.max(1, Math.round(pricing.extras[id] ?? 0)),
+  }));
+  const customs: CustomLineItem[] = customItems.map(item => ({
+    kind: "custom",
+    name: item.name.trim(),
+    amount: Math.round(item.amount),
+  }));
+  return [...addons, ...customs];
+}
+
 /** Creates a Checkout Session for an outstanding balance invoice. */
 export async function createBalanceCheckoutSession(args: {
-  invoice: Pick<Invoice, "id" | "number" | "amount" | "payToken">;
+  invoice: Pick<Invoice, "id" | "number" | "amount" | "payToken"> & { items?: InvoiceLineItem[] };
   booking: Pick<Booking, "id" | "reference" | "serviceType" | "locale" | "scheduledDate">;
   customerEmail: string;
   origin: string;
@@ -129,22 +221,21 @@ export async function createBalanceCheckoutSession(args: {
     // A single Stripe session tops out at 24 hours; the emailed link keeps
     // working for the full 7-day window by minting a new one on each visit.
     expires_at: stripeSessionExpiresAt(now),
-    line_items: [
-      {
-        price_data: {
-          currency: "usd",
-          unit_amount: invoice.amount * 100,
-          product_data: {
-            name: locale === "es" ? `Saldo restante — ${serviceName}` : `Remaining balance — ${serviceName}`,
-            description:
-              locale === "es"
-                ? `Reserva ${booking.reference} · Servicio del ${booking.scheduledDate} · Factura ${invoice.number}`
-                : `Booking ${booking.reference} · Service on ${booking.scheduledDate} · Invoice ${invoice.number}`,
-          },
-        },
-        quantity: 1,
-      },
-    ],
+    // One Stripe line per named charge, so the checkout page itemizes exactly
+    // what the email itemized: base service, each add-on by name, any custom
+    // item. The unit amounts sum to invoice.amount by construction — the base
+    // line is defined as the remainder — and old un-itemized invoices keep
+    // their single-line shape.
+    line_items: buildStripeLineItems({
+      amount: invoice.amount,
+      items: invoice.items ?? [],
+      serviceName,
+      locale,
+      description:
+        locale === "es"
+          ? `Reserva ${booking.reference} · Servicio del ${booking.scheduledDate} · Factura ${invoice.number}`
+          : `Booking ${booking.reference} · Service on ${booking.scheduledDate} · Invoice ${invoice.number}`,
+    }),
     metadata: {
       payment_type: BALANCE_PAYMENT_TYPE,
       invoice_id: String(invoice.id),
@@ -276,7 +367,14 @@ export async function approveBalanceInvoice(args: {
   invoiceId: number;
   approvedByUserId: number;
   origin: string;
+  /** Base-service correction only — itemized charges ride in the two lists. */
   adjustedAmount?: number;
+  /** Catalog add-ons chosen on-site, priced from the live config at approval. */
+  addonIds?: ExtraId[];
+  /** One-off named charges. Names are required non-empty — enforced at the
+   * API edge and again in resolveLineItems — because an unlabeled amount is
+   * the mystery charge this feature exists to kill. */
+  customItems?: { name: string; amount: number }[];
 }): Promise<ApprovalOutcome> {
   const { invoiceId, approvedByUserId, origin } = args;
   const invoice = await db.getInvoiceById(invoiceId);
@@ -292,7 +390,12 @@ export async function approveBalanceInvoice(args: {
   const customer = await db.getCustomerById(invoice.customerId);
   if (!customer) return { outcome: "customer_not_found" };
 
-  const amount = args.adjustedAmount ?? invoice.amount;
+  // The final amount is built, not typed: the (possibly corrected) base plus
+  // every named item. Items are snapshotted here — name and price as of this
+  // moment — so a catalog edit tomorrow cannot rewrite what was billed.
+  const items = await resolveLineItems(args.addonIds ?? [], args.customItems ?? []);
+  const base = args.adjustedAmount ?? invoice.amount;
+  const amount = base + lineItemsTotal(items);
   const now = new Date();
 
   // An admin can zero out the balance (goodwill, or the deposit turned out to
@@ -300,6 +403,7 @@ export async function approveBalanceInvoice(args: {
   if (amount <= 0) {
     await db.updateInvoice(invoiceId, {
       amount: 0,
+      lineItems: null,
       status: "paid",
       paidAt: now,
       approvedAt: now,
@@ -314,7 +418,7 @@ export async function approveBalanceInvoice(args: {
   const expiresAt = balanceLinkExpiresAt(now);
   const payToken = invoice.payToken ?? randomBytes(24).toString("hex");
   const session = await createBalanceCheckoutSession({
-    invoice: { id: invoiceId, number: invoice.number, amount, payToken },
+    invoice: { id: invoiceId, number: invoice.number, amount, payToken, items },
     booking,
     customerEmail: customer.email ?? "",
     origin,
@@ -323,6 +427,7 @@ export async function approveBalanceInvoice(args: {
 
   await db.updateInvoice(invoiceId, {
     amount,
+    lineItems: serializeLineItems(items),
     status: "sent",
     approvedAt: now,
     approvedByUserId,
@@ -338,7 +443,7 @@ export async function approveBalanceInvoice(args: {
     toBalanceEmailData(
       booking,
       customer,
-      { number: invoice.number, amount },
+      { number: invoice.number, amount, items },
       balancePayUrl(origin, payToken),
       expiresAt,
       bizPhone
@@ -382,8 +487,11 @@ export async function resendBalanceLink(invoiceId: number, origin: string): Prom
   const expiresAt = balanceLinkExpiresAt(now);
   const payToken = invoice.payToken ?? randomBytes(24).toString("hex");
 
+  // The stored snapshot, untouched: a resend re-bills exactly what was
+  // approved, whatever the catalog says today.
+  const items = parseLineItems(invoice.lineItems);
   const session = await createBalanceCheckoutSession({
-    invoice: { id: invoice.id, number: invoice.number, amount: invoice.amount, payToken },
+    invoice: { id: invoice.id, number: invoice.number, amount: invoice.amount, payToken, items },
     booking,
     customerEmail: customer.email ?? "",
     origin,
@@ -411,7 +519,7 @@ export async function resendBalanceLink(invoiceId: number, origin: string): Prom
     toBalanceEmailData(
       booking,
       customer,
-      { number: invoice.number, amount: invoice.amount },
+      { number: invoice.number, amount: invoice.amount, items: parseLineItems(invoice.lineItems) },
       payUrl,
       expiresAt,
       bizPhone
@@ -564,7 +672,7 @@ export async function sendDueBalanceReminders(
         toBalanceEmailData(
           booking,
           customer,
-          { number: invoice.number, amount: invoice.amount },
+          { number: invoice.number, amount: invoice.amount, items: parseLineItems(invoice.lineItems) },
           balancePayUrl(origin, invoice.payToken ?? ""),
           invoice.linkExpiresAt ? new Date(invoice.linkExpiresAt) : now,
           bizPhone
@@ -597,7 +705,7 @@ export async function sendDueBalanceReminders(
       toBalanceEmailData(
         booking,
         customer,
-        { number: invoice.number, amount: invoice.amount },
+        { number: invoice.number, amount: invoice.amount, items: parseLineItems(invoice.lineItems) },
         balancePayUrl(origin, invoice.payToken ?? ""),
         expiresAt,
         bizPhone
@@ -630,7 +738,7 @@ async function notifyOwnerOfBalance(
       toBalanceEmailData(
         booking,
         customer,
-        { number: invoice.number, amount: invoice.amount },
+        { number: invoice.number, amount: invoice.amount, items: parseLineItems(invoice.lineItems) },
         balancePayUrl("", invoice.payToken ?? ""),
         invoice.linkExpiresAt ? new Date(invoice.linkExpiresAt) : new Date()
       )

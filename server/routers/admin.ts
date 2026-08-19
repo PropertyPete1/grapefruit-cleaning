@@ -20,7 +20,7 @@ import {
   validatePricingConfig,
   type PricingConfig,
 } from "@shared/pricing";
-import { CLEANING_TYPES, FREQUENCIES } from "@shared/pricing";
+import { CLEANING_TYPES, EXTRA_IDS, FREQUENCIES } from "@shared/pricing";
 import * as db from "../db";
 import { createAdminBooking, generateDepositToken } from "../adminBooking";
 import { depositLinkExpiresAt, depositLinkStatus, depositPayUrl } from "../depositLinkRules";
@@ -29,6 +29,7 @@ import { syncConnectedProperty, validateIcalFeed } from "../icalSync";
 import { isSlotBookable } from "@shared/availability";
 import { durationHoursFor } from "@shared/duration";
 import { todayInBookingZone } from "@shared/leadTime";
+import { CUSTOM_ITEM_MAX, CUSTOM_ITEM_MIN } from "@shared/invoiceItems";
 import { composeAddress, PROPERTY_TYPES } from "@shared/property";
 import { approveBalanceInvoice, issueBalanceSafely, originFromRequest, resendBalanceLink } from "../balance";
 import { balanceLinkStatus } from "../balanceRules";
@@ -865,12 +866,37 @@ export const adminRouter = router({
         invoiceId: z.number().int(),
         /** Optional corrected total; omitted means bill the computed balance. */
         adjustedAmount: z.number().int().min(0).max(100000).optional(),
+        /** Catalog add-ons picked on-site — ids only; the server prices them. */
+        addonIds: z.array(z.enum(EXTRA_IDS)).max(EXTRA_IDS.length).optional(),
+        /**
+         * One-off charges. The name is REQUIRED non-empty: an unlabeled
+         * amount is the mystery total this feature exists to kill.
+         */
+        customItems: z
+          .array(
+            z.object({
+              name: z
+                .string()
+                .trim()
+                .min(1, "Every custom line item needs a name — that's the point.")
+                .max(120),
+              amount: z
+                .number()
+                .int("Whole dollars only")
+                .min(CUSTOM_ITEM_MIN, "A line item must charge at least $1.")
+                .max(CUSTOM_ITEM_MAX, `A single line item tops out at $${CUSTOM_ITEM_MAX.toLocaleString()}.`),
+            })
+          )
+          .max(10)
+          .optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const result = await approveBalanceInvoice({
         invoiceId: input.invoiceId,
         adjustedAmount: input.adjustedAmount,
+        addonIds: input.addonIds,
+        customItems: input.customItems,
         approvedByUserId: ctx.user.id,
         origin: originFromRequest(ctx.req),
       });

@@ -389,6 +389,13 @@ export const invoices = mysqlTable("invoices", {
   linkSentAt: timestamp("linkSentAt"),
   /** End of the payment link's validity window (7 days from send/resend). */
   linkExpiresAt: timestamp("linkExpiresAt"),
+  /**
+   * Itemized charges (JSON array of InvoiceLineItem): the add-ons and custom
+   * lines billed on top of the base service, snapshotted with name and price
+   * at approval time so later catalog edits cannot rewrite a sent invoice.
+   * NULL = no items (every pre-feature invoice, and plain balances).
+   */
+  lineItems: text("lineItems"),
   /** How the invoice was settled — null for zero-balance invoices covered by the deposit. */
   paidVia: mysqlEnum("paidVia", ["stripe", "manual"]),
   /**

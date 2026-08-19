@@ -461,6 +461,13 @@ export interface BalanceEmailData {
   deposit: number;
   /** Remaining balance in whole dollars — computed server-side. */
   balance: number;
+  /** Base service portion of the balance (balance minus itemized charges). */
+  baseAmount?: number;
+  /**
+   * Named charges on top of the base, display-ready: the caller resolves
+   * add-on names into the customer's language, custom names pass verbatim.
+   */
+  items?: { name: string; amount: number }[];
   customerName: string;
   customerEmail: string;
   customerPhone?: string;
@@ -477,6 +484,28 @@ export interface BalanceEmailData {
  * "Your cleaning is complete — pay your remaining balance", in the language
  * stored on the booking.
  */
+/**
+ * The itemized charge lines for a balance email, or nothing for a plain
+ * un-itemized balance (the pre-feature shape). Base service first, then each
+ * named charge — so the total that follows is never a mystery.
+ */
+function balanceChargeLines(data: BalanceEmailData, locale: "en" | "es"): string[] {
+  const items = data.items ?? [];
+  if (items.length === 0) return [];
+  const base = data.baseAmount ?? 0;
+  const lines: string[] = [];
+  if (base > 0) {
+    lines.push(
+      locale === "es" ? `Servicio: ${fmtUsd(base)}` : `Service: ${fmtUsd(base)}`
+    );
+  }
+  for (const item of items) {
+    lines.push(`${item.name}: ${fmtUsd(item.amount)}`);
+  }
+  lines.push("");
+  return lines;
+}
+
 export function buildBalanceDueEmail(data: BalanceEmailData): { subject: string; body: string } {
   if (data.locale === "es") {
     return {
@@ -494,6 +523,7 @@ export function buildBalanceDueEmail(data: BalanceEmailData): { subject: string;
         data.address ? `Dirección: ${data.address}` : ``,
         ``,
         `RESUMEN DE PAGO`,
+        ...balanceChargeLines(data, "es"),
         `Total: ${fmtUsd(data.total)}`,
         `Depósito ya pagado: ${fmtUsd(data.deposit)}`,
         `Saldo restante a pagar: ${fmtUsd(data.balance)}`,
@@ -530,6 +560,7 @@ export function buildBalanceDueEmail(data: BalanceEmailData): { subject: string;
       data.address ? `Address: ${data.address}` : ``,
       ``,
       `PAYMENT SUMMARY`,
+      ...balanceChargeLines(data, "en"),
       `Total: ${fmtUsd(data.total)}`,
       `Deposit already paid: ${fmtUsd(data.deposit)}`,
       `Remaining balance due: ${fmtUsd(data.balance)}`,
@@ -579,6 +610,7 @@ export function buildBalanceReminderEmail(
         `Referencia: ${data.reference}`,
         `Factura: ${data.invoiceNumber}`,
         `Servicio: ${data.serviceName}`,
+        ...balanceChargeLines(data, "es"),
         `Saldo pendiente: ${fmtUsd(data.balance)}`,
         ``,
         `PAGUE EN LÍNEA`,
@@ -611,6 +643,7 @@ export function buildBalanceReminderEmail(
       `Reference: ${data.reference}`,
       `Invoice: ${data.invoiceNumber}`,
       `Service: ${data.serviceName}`,
+      ...balanceChargeLines(data, "en"),
       `Balance due: ${fmtUsd(data.balance)}`,
       ``,
       `PAY ONLINE`,

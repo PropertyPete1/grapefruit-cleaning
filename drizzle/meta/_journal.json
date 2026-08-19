@@ -141,6 +141,13 @@
       "when": 1787103226117,
       "tag": "0019_fat_tarantula",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "5",
+      "when": 1787176197769,
+      "tag": "0020_sloppy_bromley",
+      "breakpoints": true
     }
   ]
 }
