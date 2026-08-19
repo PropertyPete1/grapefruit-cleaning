@@ -5,8 +5,10 @@
  * Idempotent: reminders are tracked per booking (weekReminderSentAt / dayReminderSentAt).
  */
 import type { Express, Request, Response } from "express";
+import { sendDueBalanceReminders } from "./balance";
 import { sdk } from "./_core/sdk";
 import { syncAllProperties } from "./icalSync";
+import { publicOrigin } from "./publicOrigin";
 import { sendDueReminders } from "./reminders";
 
 async function sendRemindersHandler(req: Request, res: Response) {
@@ -29,7 +31,16 @@ async function sendRemindersHandler(req: Request, res: Response) {
       `[Reminders] Scanned ${summary.scanned} upcoming bookings, sent ${summary.sent} reminder(s).`,
       summary.details.join(" | ") || "none due"
     );
-    return res.json({ ok: true, ...summary });
+    // Same daily beat chases unpaid balance links: reminders at 3 and 7 days,
+    // then one owner alert. PUBLIC_BASE_URL (via publicOrigin) is what keeps
+    // the emailed pay links on the public domain — the cron's own request
+    // arrives on the internal hostname.
+    const balances = await sendDueBalanceReminders(publicOrigin(req));
+    console.log(
+      `[BalanceReminders] Scanned ${balances.scanned} open balance link(s), sent ${balances.reminded}, alerted owner on ${balances.alerted}.`,
+      balances.details.join(" | ") || "none due"
+    );
+    return res.json({ ok: true, ...summary, balanceReminders: balances });
   } catch (error) {
     // Stack traces stay in the server log; the response carries only the
     // message, so the endpoint can't be used to map the filesystem.

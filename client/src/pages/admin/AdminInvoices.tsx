@@ -363,6 +363,18 @@ export default function AdminInvoices() {
                       ) : (
                         <div className="flex items-center gap-2">
                           <StatusBadge status={LINK_BADGE_STATUS[inv.linkStatus]} />
+                          {inv.linkStatus !== "paid" && (inv.reminderCount ?? 0) > 0 && (
+                            <span
+                              className="rounded-full bg-muted px-2 py-0.5 text-xs font-semibold text-muted-foreground"
+                              title={
+                                inv.reminderExhaustedAlertAt
+                                  ? "Both automatic reminders sent and you've been alerted — personal follow-up is the next step. Resend restarts the sequence."
+                                  : "Automatic unpaid-balance reminders sent so far (3 and 7 days after send)."
+                              }
+                            >
+                              {inv.reminderCount} reminder{inv.reminderCount === 1 ? "" : "s"}
+                            </span>
+                          )}
                           {inv.refundNeeded && (
                             <span
                               className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700"
@@ -429,6 +441,14 @@ export default function AdminInvoices() {
                     value:
                       inv.linkStatus === "none" ? "—" : <StatusBadge status={LINK_BADGE_STATUS[inv.linkStatus]} />,
                   },
+                  ...(inv.linkStatus !== "paid" && (inv.reminderCount ?? 0) > 0
+                    ? [
+                        {
+                          label: "Reminders",
+                          value: `${inv.reminderCount} sent${inv.reminderExhaustedAlertAt ? " — follow up personally" : ""}`,
+                        },
+                      ]
+                    : []),
                   ...(inv.refundNeeded ? [{ label: "Action", value: "Refund needed in Stripe" }] : []),
                 ]}
                 actions={

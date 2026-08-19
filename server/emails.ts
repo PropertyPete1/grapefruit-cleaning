@@ -501,6 +501,126 @@ export function buildBalanceDueEmail(data: BalanceEmailData): { subject: string;
   };
 }
 
+/**
+ * Polite follow-up for a balance link that has sat unpaid: first at 3 days,
+ * once more at 7. Warmer and shorter than the original — the details were
+ * already delivered; this is a nudge with the link, not a second invoice.
+ * The link's validity is renewed with each reminder, so the URL always works.
+ */
+export function buildBalanceReminderEmail(
+  data: BalanceEmailData,
+  reminderNumber: 1 | 2
+): { subject: string; body: string } {
+  const lastCall = reminderNumber === 2;
+  if (data.locale === "es") {
+    return {
+      subject: lastCall
+        ? `Recordatorio final — saldo pendiente de su limpieza | Grapefruit Cleaning Co.`
+        : `Recordatorio amistoso — saldo pendiente de su limpieza | Grapefruit Cleaning Co.`,
+      body: [
+        `Hola ${data.customerName},`,
+        ``,
+        lastCall
+          ? `Solo un último recordatorio amistoso: el saldo de su limpieza sigue pendiente. Sabemos que la vida se pone ocupada — el enlace de abajo lo resuelve en un minuto.`
+          : `Esperamos que esté disfrutando su hogar recién limpio. Solo un recordatorio amistoso: el saldo de su limpieza sigue pendiente.`,
+        ``,
+        `RESUMEN`,
+        `Referencia: ${data.reference}`,
+        `Factura: ${data.invoiceNumber}`,
+        `Servicio: ${data.serviceName}`,
+        `Saldo pendiente: ${fmtUsd(data.balance)}`,
+        ``,
+        `PAGUE EN LÍNEA`,
+        `Puede pagar de forma segura con tarjeta desde este enlace:`,
+        `${data.payUrl}`,
+        ``,
+        `El enlace estará disponible hasta el ${data.expiresOn}. Si ya realizó el pago o prefiere pagarlo en persona, ignore este mensaje o avísenos y con gusto lo ajustamos.`,
+        ``,
+        data.bizPhone
+          ? `¿Preguntas? Responda a este correo o llámenos al ${data.bizPhone}.`
+          : `¿Preguntas? Simplemente responda a este correo.`,
+        ``,
+        `Con aprecio,`,
+        `El equipo de Grapefruit Cleaning Co.`,
+      ].join("\n"),
+    };
+  }
+  return {
+    subject: lastCall
+      ? `Final reminder — your cleaning balance is still open | Grapefruit Cleaning Co.`
+      : `Friendly reminder — your cleaning balance is still open | Grapefruit Cleaning Co.`,
+    body: [
+      `Hi ${data.customerName},`,
+      ``,
+      lastCall
+        ? `Just one last friendly nudge: the balance for your cleaning is still open. We know life gets busy — the link below settles it in a minute.`
+        : `We hope you're enjoying your freshly cleaned home! Just a friendly reminder that the balance for your cleaning is still open.`,
+      ``,
+      `SUMMARY`,
+      `Reference: ${data.reference}`,
+      `Invoice: ${data.invoiceNumber}`,
+      `Service: ${data.serviceName}`,
+      `Balance due: ${fmtUsd(data.balance)}`,
+      ``,
+      `PAY ONLINE`,
+      `You can pay securely by card using this link:`,
+      `${data.payUrl}`,
+      ``,
+      `The link stays available through ${data.expiresOn}. If you've already paid or would rather settle in person, just ignore this note or let us know and we'll sort it out.`,
+      ``,
+      data.bizPhone
+        ? `Questions? Reply to this email or call us at ${data.bizPhone}.`
+        : `Questions? Just reply to this email.`,
+      ``,
+      `Warmly,`,
+      `The Grapefruit Cleaning Co. Team`,
+    ].join("\n"),
+  };
+}
+
+/** Emails one automatic balance reminder. Returns true when delivered. */
+export async function sendBalanceReminderEmail(
+  data: BalanceEmailData,
+  reminderNumber: 1 | 2
+): Promise<boolean> {
+  const email = buildBalanceReminderEmail(data, reminderNumber);
+  return deliverEmail(data.customerEmail, email.subject, email.body);
+}
+
+/**
+ * The hand-off to the owner: both automatic reminders went out and the balance
+ * is still open, so the machine stops emailing the customer and a person takes
+ * over. Sent once per sequence.
+ */
+export function buildBalanceReminderExhaustedAlert(data: BalanceEmailData): { title: string; content: string } {
+  return {
+    title: `[ACTION NEEDED] Unpaid balance ${data.invoiceNumber} — 2 reminders sent, time for a personal follow-up (${data.reference})`,
+    content: [
+      `${data.customerName}'s balance of ${fmtUsd(data.balance)} is still unpaid after the original email and two automatic reminders.`,
+      `No more automatic emails will be sent — a call or a personal note from you is the next step.`,
+      ``,
+      `Reference: ${data.reference}`,
+      `Invoice: ${data.invoiceNumber}`,
+      `Service: ${data.serviceName}`,
+      `Service date: ${data.date}`,
+      ``,
+      `Customer: ${data.customerName}`,
+      `Email: ${data.customerEmail}`,
+      data.customerPhone ? `Phone: ${data.customerPhone}` : ``,
+      ``,
+      `Balance due: ${fmtUsd(data.balance)}`,
+      `If they pay in person, mark the invoice paid in Admin → Invoices. Resending the link from there restarts the reminder sequence.`,
+    ]
+      .filter(line => line !== undefined)
+      .join("\n"),
+  };
+}
+
+/** Alerts the owner that the reminder sequence ran its course unpaid. */
+export async function sendBalanceReminderExhaustedAlert(data: BalanceEmailData): Promise<void> {
+  await notifyOwnerWithEmailCopy(buildBalanceReminderExhaustedAlert(data));
+}
+
 /** Owner notification for a balance paid online. */
 export function buildBalancePaidNotification(data: BalanceEmailData): { title: string; content: string } {
   return {

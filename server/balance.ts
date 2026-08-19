@@ -16,13 +16,20 @@ import { composeAddress } from "@shared/property";
 import { randomBytes } from "node:crypto";
 import type { Stripe } from "stripe";
 import type { Booking, Customer, Invoice } from "../drizzle/schema";
-import { balanceLinkExpiresAt, computeBalanceDue, stripeSessionExpiresAt } from "./balanceRules";
+import {
+  balanceLinkExpiresAt,
+  balanceReminderAction,
+  computeBalanceDue,
+  stripeSessionExpiresAt,
+} from "./balanceRules";
 import * as db from "./db";
 import { publicOrigin, type OriginRequest } from "./publicOrigin";
 import {
   sendBalanceApprovalNeededAlert,
   sendBalanceDueEmail,
   sendBalancePaidNotification,
+  sendBalanceReminderEmail,
+  sendBalanceReminderExhaustedAlert,
   sendRefundNeededAlert,
   type BalanceEmailData,
 } from "./emails";
@@ -389,6 +396,12 @@ export async function resendBalanceLink(invoiceId: number, origin: string): Prom
     linkSentAt: now,
     linkExpiresAt: expiresAt,
     dueDate: expiresAt.toISOString().slice(0, 10),
+    // A manual resend restarts the automatic follow-up sequence from scratch:
+    // the clock re-anchors to this linkSentAt, both reminders come back, and
+    // the owner alert re-arms.
+    reminderCount: 0,
+    lastReminderAt: null,
+    reminderExhaustedAlertAt: null,
   });
 
   const bizPhone = (await db.getSetting("business_phone"))?.trim() || undefined;
@@ -505,6 +518,90 @@ async function settleAgainstPaidInvoice(
   });
   await notifyOwnerOfBalance(invoice, sendRefundNeededAlert);
   return { outcome: "refund_needed" };
+}
+
+/**
+ * Daily sweep over unpaid balance links: a polite reminder at 3 days, one more
+ * at 7, then a single owner alert instead of any further customer email.
+ *
+ * Every send goes through a conditional claim, so overlapping cron firings can
+ * never double-email — and a payment landing at any point flips the invoice
+ * out of "sent", which halts the sequence wherever it stood. Each reminder
+ * renews the link's validity window in the same claim, so the URL it carries
+ * always works; no new Stripe session is needed because the pay route mints
+ * one per visit.
+ */
+export async function sendDueBalanceReminders(
+  origin: string,
+  now: Date = new Date()
+): Promise<{ scanned: number; reminded: number; alerted: number; details: string[] }> {
+  const open = await db.listSentBalanceInvoices();
+  const details: string[] = [];
+  let reminded = 0;
+  let alerted = 0;
+  const bizPhone = (await db.getSetting("business_phone"))?.trim() || undefined;
+
+  for (const invoice of open) {
+    const due = balanceReminderAction(invoice, now);
+    if (!due) continue;
+    if (!invoice.bookingId) continue;
+    const booking = await db.getBookingById(invoice.bookingId);
+    const customer = booking ? await db.getCustomerById(invoice.customerId) : undefined;
+    if (!booking || !customer) continue;
+
+    if (due.action === "owner_alert") {
+      if (!(await db.claimBalanceReminderExhaustedAlert(invoice.id, now))) continue;
+      await sendBalanceReminderExhaustedAlert(
+        toBalanceEmailData(
+          booking,
+          customer,
+          { number: invoice.number, amount: invoice.amount },
+          balancePayUrl(origin, invoice.payToken ?? ""),
+          invoice.linkExpiresAt ? new Date(invoice.linkExpiresAt) : now,
+          bizPhone
+        )
+      );
+      alerted += 1;
+      details.push(`${invoice.number}: owner alert — 2 reminders exhausted`);
+      continue;
+    }
+
+    // No public origin means no absolute pay link to put in an inbox. Skip
+    // WITHOUT claiming, so the reminder goes out on the next run once
+    // PUBLIC_BASE_URL is configured, rather than burning its one send on a
+    // broken relative URL.
+    if (!origin) {
+      details.push(`${invoice.number}: skipped — no public origin configured`);
+      continue;
+    }
+
+    const expiresAt = balanceLinkExpiresAt(now);
+    const claimed = await db.claimBalanceReminder(
+      invoice.id,
+      due.reminderNumber - 1,
+      { linkExpiresAt: expiresAt, dueDate: expiresAt.toISOString().slice(0, 10) },
+      now
+    );
+    if (!claimed) continue;
+
+    const delivered = await sendBalanceReminderEmail(
+      toBalanceEmailData(
+        booking,
+        customer,
+        { number: invoice.number, amount: invoice.amount },
+        balancePayUrl(origin, invoice.payToken ?? ""),
+        expiresAt,
+        bizPhone
+      ),
+      due.reminderNumber
+    );
+    reminded += 1;
+    details.push(
+      `${invoice.number}: reminder ${due.reminderNumber} → ${customer.email} (${delivered ? "delivered" : "logged"})`
+    );
+  }
+
+  return { scanned: open.length, reminded, alerted, details };
 }
 
 /**
