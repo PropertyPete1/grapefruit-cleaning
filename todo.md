@@ -248,3 +248,4 @@
 - [x] PROJECT_NOTES.md corrected: current mailbox is grapefruitcleaningc@gmail.com via Gmail SMTP (Aug 19 2026), the old grapefruitclean.com Gmail is NOT dead, Microsoft SMTP abandoned
 - [x] Standing rule recorded in PROJECT_NOTES.md: any "email is fixed" claim needs the production boot timestamp AND a real send through the production path — sandbox verification alone does not count
 - [x] Hotmail-era values audited out of every environment and out of source, docs, and test fixtures
+- [x] Deploy round: sync PR #13 (itemized balance invoices — named add-ons and custom lines), apply migration 0020 (invoices.lineItems, additive nullable text), force a genuine production restart, and prove the running commit is dea199a from production rather than the sandbox
