@@ -67,11 +67,7 @@ import { calculateQuote, DEFAULT_PRICING } from "@shared/pricing";
 import { composeAddress, plausibleVerifiedSqft } from "@shared/property";
 import { _resetRateLimits } from "./antiSpam";
 import { __resetTransporter } from "./emails";
-import {
-  COUNTY_ADAPTERS,
-  detectCounties,
-  lookupTravisProperty,
-} from "./property";
+import { censusAddressVerify, COUNTY_ADAPTERS, detectCounties } from "./property";
 import { resolveEffectiveSqft } from "./adminBooking";
 import { adminRouter } from "./routers/admin";
 import { bookingRouter, finalizeBooking } from "./routers/booking";
@@ -191,41 +187,104 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("Travis County (TCAD) adapter — address-verify-only", () => {
+describe("Travis County via the US Census geocoder — address-verify-only", () => {
+  /**
+   * Fixtures are REAL responses, fetched live from
+   * geocoding.geo.census.gov/geocoder/geographies/onelineaddress
+   * (benchmark Public_AR_Current, vintage Current_Current, layers=Counties)
+   * on 2026-08-18 for the two spec addresses, trimmed to the fields the
+   * adapter reads.
+   */
+  const censusMatch = (overrides: Record<string, unknown> = {}) => ({
+    tigerLine: { side: "L", tigerLineId: "656281944" },
+    geographies: {
+      Counties: [
+        {
+          GEOID: "48453",
+          STATE: "48",
+          BASENAME: "Travis",
+          NAME: "Travis County",
+          COUNTY: "453",
+          FUNCSTAT: "A",
+          MTFCC: "G4020",
+        },
+      ],
+    },
+    coordinates: { x: -97.739752095692, y: 30.276444701663 },
+    addressComponents: {
+      zip: "78701",
+      streetName: "CONGRESS",
+      preType: "",
+      city: "AUSTIN",
+      preDirection: "",
+      suffixDirection: "",
+      fromAddress: "1100",
+      state: "TX",
+      suffixType: "AVE",
+      toAddress: "1498",
+      suffixQualifier: "",
+      preQualifier: "",
+    },
+    matchedAddress: "1100 CONGRESS AVE, AUSTIN, TX, 78701",
+    ...overrides,
+  });
+  const censusResponse = (matches: unknown[]) => ({
+    result: {
+      input: {
+        benchmark: { id: "4", benchmarkName: "Public_AR_Current", isDefault: true },
+        vintage: { id: "4", vintageName: "Current_Current", isDefault: true },
+      },
+      addressMatches: matches,
+    },
+  });
+
   it("Austin addresses detect to Travis, through the adapter table", () => {
     expect(detectCounties("Austin", "78704")).toEqual(["travis"]);
     expect(COUNTY_ADAPTERS.travis).toBeTypeOf("function");
   });
 
-  it("matches the real layer's house-number-centric SITUS shape (1100 Congress Ave)", async () => {
-    stubFetch({ features: [{ attributes: { SITUS: "1100 CONGRESS AVE" } }] });
-    const result = await lookupTravisProperty("1100 Congress Ave");
+  it("verifies 1100 Congress Ave against the real response shape", async () => {
+    stubFetch(censusResponse([censusMatch()]));
+    const result = await censusAddressVerify("travis", "1100 Congress Ave", "78701", "Austin");
     expect(result).toMatchObject({
       verified: false,
       addressVerified: true,
       reason: "address_verified",
-      source: "travis_cad",
+      source: "census_geocoder",
       county: "Travis",
-      matchedAddress: "1100 CONGRESS AVE",
+      matchedAddress: "1100 CONGRESS AVE, AUSTIN, TX, 78701",
     });
-    // Never a square footage: the public layer carries no living-area field.
+    // Never a square footage: the Census knows where homes are, not how big.
     expect(result.sqft).toBeUndefined();
   });
 
-  it("matches a SITUS carrying trailing city/ZIP noise (6001 Shoal Creek Blvd)", async () => {
-    stubFetch({ features: [{ attributes: { SITUS: "6001 SHOAL CREEK BLVD AUSTIN TX 78757" } }] });
-    const result = await lookupTravisProperty("6001 Shoal Creek Blvd");
+  it("verifies 6001 Shoal Creek Blvd against the real response shape", async () => {
+    stubFetch(
+      censusResponse([
+        censusMatch({
+          matchedAddress: "6001 SHOAL CREEK BLVD, AUSTIN, TX, 78757",
+          addressComponents: {
+            zip: "78757",
+            streetName: "SHOAL CREEK",
+            suffixType: "BLVD",
+            city: "AUSTIN",
+            state: "TX",
+            fromAddress: "5701",
+            toAddress: "6099",
+          },
+        }),
+      ])
+    );
+    const result = await censusAddressVerify("travis", "6001 Shoal Creek Blvd", "78757", "Austin");
     expect(result).toMatchObject({
       addressVerified: true,
-      matchedAddress: "6001 SHOAL CREEK BLVD AUSTIN TX 78757",
+      matchedAddress: "6001 SHOAL CREEK BLVD, AUSTIN, TX, 78757",
     });
   });
 
   it("its outcome shape is identical to a CAD county's (Comal contract)", async () => {
-    stubFetch({ features: [{ attributes: { SITUS: "1100 CONGRESS AVE" } }] });
-    const travis = await lookupTravisProperty("1100 Congress Ave");
-    // Same tier, same keys, different source/county — the entered sqft stands
-    // exactly as it does for Comal today.
+    stubFetch(censusResponse([censusMatch()]));
+    const travis = await censusAddressVerify("travis", "1100 Congress Ave", "78701");
     expect({ ...travis, source: "comal_cad", county: "Comal", matchedAddress: "x" }).toEqual({
       verified: false,
       addressVerified: true,
@@ -236,54 +295,63 @@ describe("Travis County (TCAD) adapter — address-verify-only", () => {
     });
   });
 
-  it("refuses lookalike house numbers and lookalike streets", async () => {
-    stubFetch({
-      features: [
-        { attributes: { SITUS: "11001 CONGRESS AVE" } }, // 1100 must not match 11001
-        { attributes: { SITUS: "1100 CONGRESSIONAL LOOP" } }, // whole-word street only
-      ],
-    });
-    const result = await lookupTravisProperty("1100 Congress Ave");
+  it("refuses a match the geocoder places in the wrong county", async () => {
+    // Same street name exists in Williamson — a plausible-looking match with
+    // the wrong county context is somebody else's street.
+    stubFetch(
+      censusResponse([
+        censusMatch({
+          geographies: {
+            Counties: [{ GEOID: "48491", BASENAME: "Williamson", NAME: "Williamson County" }],
+          },
+        }),
+      ])
+    );
+    const result = await censusAddressVerify("travis", "1100 Congress Ave", "78701");
     expect(result).toMatchObject({ verified: false, reason: "not_found" });
   });
 
-  it("prefers the record agreeing with a directional prefix", async () => {
-    stubFetch({
-      features: [
-        { attributes: { SITUS: "500 N LAMAR BLVD" } },
-        { attributes: { SITUS: "500 S LAMAR BLVD" } },
-      ],
-    });
-    const result = await lookupTravisProperty("500 S Lamar Blvd");
-    expect(result.matchedAddress).toBe("500 S LAMAR BLVD");
+  it("refuses sloppy matches — wrong street with the right number, wrong number", async () => {
+    stubFetch(
+      censusResponse([censusMatch({ matchedAddress: "1100 CONGRESSIONAL LOOP, AUSTIN, TX, 78701" })])
+    );
+    expect((await censusAddressVerify("travis", "1100 Congress Ave", "78701")).reason).toBe("not_found");
+    stubFetch(
+      censusResponse([censusMatch({ matchedAddress: "1102 CONGRESS AVE, AUSTIN, TX, 78701" })])
+    );
+    expect((await censusAddressVerify("travis", "1100 Congress Ave", "78701")).reason).toBe("not_found");
   });
 
-  it("falls back gracefully on unreachable host, service errors, and empty results", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("getaddrinfo ENOTFOUND")));
-    expect(await lookupTravisProperty("1100 Congress Ave")).toEqual({
+  it("falls back gracefully on timeout, unreachable host, and empty results", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("The operation was aborted")));
+    expect(await censusAddressVerify("travis", "1100 Congress Ave", "78701")).toEqual({
       verified: false,
       reason: "not_found",
     });
-    stubFetch({ error: { code: 500 } });
-    expect((await lookupTravisProperty("1100 Congress Ave")).verified).toBe(false);
-    stubFetch({ features: [] });
-    expect((await lookupTravisProperty("1100 Congress Ave")).reason).toBe("not_found");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("getaddrinfo ENOTFOUND")));
+    expect((await censusAddressVerify("travis", "1100 Congress Ave", "78701")).verified).toBe(false);
+    stubFetch(censusResponse([]));
+    expect((await censusAddressVerify("travis", "1100 Congress Ave", "78701")).reason).toBe("not_found");
+    stubFetch({ result: {} });
+    expect((await censusAddressVerify("travis", "1100 Congress Ave", "78701")).reason).toBe("not_found");
   });
 
-  it("queries the reachable EXTERNAL_tcad_parcel layer with the SITUS field", async () => {
-    const impl = stubFetch({ features: [] });
-    await lookupTravisProperty("1100 Congress Ave");
+  it("queries the Census geocoder with the documented parameters, city and ZIP included", async () => {
+    const impl = stubFetch(censusResponse([]));
+    await censusAddressVerify("travis", "1100 Congress Ave", "78701", "Austin");
     const url = String(impl.mock.calls[0]![0]);
-    expect(url).toContain("services.arcgis.com/0L95CJ0VTaxqcmED");
-    expect(url).toContain("EXTERNAL_tcad_parcel");
-    expect(url).toContain("SITUS");
-    expect(url).not.toContain("SITUS_ADDRESS");
-    expect(url).not.toContain("gis.traviscountytx.gov");
+    expect(url).toContain("geocoding.geo.census.gov");
+    expect(url).toContain("benchmark=Public_AR_Current");
+    expect(url).toContain("format=json");
+    expect(url).toContain("layers=Counties");
+    expect(url).toContain(encodeURIComponent("1100 Congress Ave, Austin, TX, 78701").replace(/%20/g, "+"));
+    expect(url).not.toContain("traviscountytx");
+    expect(url).not.toContain("EXTERNAL_tcad_parcel");
   });
 
   it("refuses an unparseable address without touching the network", async () => {
-    const impl = stubFetch({ features: [] });
-    const result = await lookupTravisProperty("no house number here");
+    const impl = stubFetch(censusResponse([]));
+    const result = await censusAddressVerify("travis", "no house number here");
     expect(result.reason).toBe("unparseable");
     expect(impl).not.toHaveBeenCalled();
   });
@@ -323,7 +391,7 @@ describe("the plausibility guard", () => {
     mockLookupProperty.mockResolvedValue({
       verified: true,
       sqft: 41000,
-      source: "travis_cad",
+      source: "census_geocoder",
     });
     await publicCaller().create(publicInput);
     const entered = calculateQuote(publicInput.quote, DEFAULT_PRICING);
@@ -398,7 +466,7 @@ describe("apartments never verify", () => {
   });
 
   it("link flow: a house address still verifies", async () => {
-    mockLookupProperty.mockResolvedValue({ verified: true, sqft: 2400, source: "travis_cad" });
+    mockLookupProperty.mockResolvedValue({ verified: true, sqft: 2400, source: "census_geocoder" });
     await payCaller().updateDetails({ token: TOKEN, address: "12 Oak Ln", city: "Austin", zip: "78704" });
     expect(mockLookupProperty).toHaveBeenCalled();
     expect(patched()).toMatchObject({ verifiedSqft: 2400 });

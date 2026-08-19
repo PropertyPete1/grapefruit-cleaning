@@ -11,12 +11,14 @@
  * verify the address exists in county records ("address_verified") while the
  * square footage remains customer-entered (confirmed at the appointment).
  *
- * Travis County (Austin) is covered through TCAD's public parcel layer on
- * services.arcgis.com — ADDRESS VERIFICATION ONLY, because that layer
- * publishes no living-area field (verified live in production; the county's
- * own GIS host serves no public catalog at all). Same posture as the CAD
- * counties: a match proves the address, the square footage stays
- * customer-entered.
+ * Travis County (Austin) is covered through the US Census Bureau geocoder —
+ * ADDRESS VERIFICATION ONLY. Two rounds of live production findings ruled
+ * out every TCAD-side source: the county's own GIS host serves no public
+ * catalog, and the one reachable parcel layer stores bare house numbers in
+ * its SITUS field with no street, city, ZIP, or living-area columns — it
+ * cannot verify an address at all. The Census geocoder can, nationwide, with
+ * county context attached. Same posture as the CAD counties: a match proves
+ * the address, the square footage stays customer-entered.
  *
  * Every county hangs off COUNTY_ADAPTERS: one entry per county, each an
  * independent lookup function. Adding the next county (Hays is the likely
@@ -55,7 +57,7 @@ export type PropertySource =
   | "guadalupe_cad"
   | "medina_cad"
   | "kendall_cad"
-  | "travis_cad";
+  | "census_geocoder";
 
 const BEXAR_QUERY_URL = "https://maps.bexar.org/arcgis/rest/services/Parcels/MapServer/0/query";
 const LOOKUP_TIMEOUT_MS = 8000;
@@ -509,115 +511,130 @@ export function pickBestCadMatch(
   return bestScore >= 1 ? best : null;
 }
 
-const TRAVIS_QUERY_URL =
-  "https://services.arcgis.com/0L95CJ0VTaxqcmED/arcgis/rest/services/EXTERNAL_tcad_parcel/FeatureServer/0/query";
+const CENSUS_GEOCODER_URL =
+  "https://geocoding.geo.census.gov/geocoder/geographies/onelineaddress";
 
 /**
- * Query the public TCAD parcel layer to verify an Austin-area address exists.
- *
- * ADDRESS-VERIFY-ONLY, like the Comal/Guadalupe/Medina/Kendall CAD layers —
- * not by choice but by what Travis County actually publishes. Verified live
- * in production (2026-08): the county's own GIS host (gis.traviscountytx.gov)
- * does not serve a public ArcGIS catalog at all, and the reachable layer —
- * EXTERNAL_tcad_parcel on services.arcgis.com — carries parcel/situs records
- * with NO living-area or improvement-sqft field. TCAD's improvement square
- * footage exists only behind its interactive property search, which is not an
- * API. So a Travis match proves the address is real and the sqft stays
- * customer-entered, confirmed at the appointment.
- *
- * FUTURE UPGRADE: to re-promote Travis to sqft-capable (Bexar-style), look
- * for a public TCAD layer or joined table exposing a living/improvement area
- * attribute (the certified-roll export carries `living_area` per improvement;
- * it is published as bulk downloads, not a queryable service, as of this
- * writing). The adapter seam is this one function — outcome tiers and
- * callers need no change.
- *
- * The layer's SITUS field is house-number-centric ("1100 CONGRESS AVE",
- * sometimes with trailing city/ZIP), so the query anchors on the house number
- * prefix and the street core, and a candidate only counts when the situs
- * starts with the house number and carries the street name as whole words.
+ * Score a street line ("1100 CONGRESS AVE" / a situs / the street half of a
+ * geocoder match) against a parsed input address. Null when implausible:
+ * the line must START with the exact house number (1100 never matches 11001)
+ * and carry the street core as whole words (CONGRESS matches "1100 CONGRESS
+ * AVE", not "1100 CONGRESSIONAL LOOP"). A directional prefix, when the
+ * caller gave one, prefers agreeing lines and penalizes contradicting ones.
  */
-export async function lookupTravisProperty(addressLine: string): Promise<PropertyLookupResult> {
+export function matchStreetLine(
+  line: string,
+  parsed: ParsedStreetAddress,
+  variants: string[]
+): number | null {
+  const normalized = line.toUpperCase().replace(/\s+/g, " ").trim();
+  if (!normalized.startsWith(`${parsed.houseNumber} `)) return null;
+  const rest = normalized.slice(parsed.houseNumber.length + 1);
+  const wordMatch = variants.find(
+    v => rest === v || rest.startsWith(`${v} `) || rest.endsWith(` ${v}`) || rest.includes(` ${v} `)
+  );
+  if (!wordMatch) return null;
+  let score = 1;
+  if (rest.startsWith(wordMatch)) score += 1;
+  if (parsed.prefix) {
+    if (rest.startsWith(`${parsed.prefix} `)) score += 2;
+    else if (/^(N|S|E|W|NE|NW|SE|SW) /.test(rest)) score -= 2;
+  }
+  return score;
+}
+
+/** The slice of a Census geographies/onelineaddress response this reads. */
+interface CensusAddressMatch {
+  matchedAddress?: string;
+  geographies?: { Counties?: { NAME?: string; BASENAME?: string }[] };
+}
+
+/**
+ * Verify an address exists via the US Census Bureau geocoder, constrained to
+ * one county.
+ *
+ * The geocoder (geocoding.geo.census.gov, benchmark Public_AR_Current, no
+ * key) resolves an address against TIGER address ranges and returns the
+ * county it landed in — which is the whole trick: a plausible match in the
+ * WRONG county is somebody else's street with the same name, and is refused.
+ * Plausibility itself is the same rule every adapter uses (matchStreetLine):
+ * exact house number, street core as whole words.
+ *
+ * ADDRESS-VERIFY-ONLY by nature — the Census knows where addresses are, not
+ * how big the homes on them are — so the outcome tier is exactly the CAD
+ * counties': address_verified, entered sqft stands. Built as a per-county
+ * helper rather than Travis-inline because it can back any future
+ * verify-only county (Hays is the likely next) with one adapter-table entry;
+ * this round wires ONLY Travis.
+ */
+export async function censusAddressVerify(
+  county: CountyKey,
+  addressLine: string,
+  zip?: string,
+  city?: string
+): Promise<PropertyLookupResult> {
   const parsed = parseStreetAddress(addressLine);
   if (!parsed) return { verified: false, reason: "unparseable" };
 
-  const variants = streetVariants(parsed.streetCore);
-  const likeClauses = variants
-    .map(v => `UPPER(SITUS) LIKE '%${v.replace(/'/g, "''")}%'`)
-    .join(" OR ");
+  const oneline = [addressLine.trim(), city?.trim() || "", "TX", zip?.trim() || ""]
+    .filter(Boolean)
+    .join(", ");
   const params = new URLSearchParams({
-    where: `UPPER(SITUS) LIKE '${parsed.houseNumber} %' AND (${likeClauses})`,
-    outFields: "SITUS",
-    returnGeometry: "false",
-    resultRecordCount: "10",
-    f: "json",
+    address: oneline,
+    benchmark: "Public_AR_Current",
+    vintage: "Current_Current",
+    layers: "Counties",
+    format: "json",
   });
 
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), LOOKUP_TIMEOUT_MS);
-    const res = await fetch(`${TRAVIS_QUERY_URL}?${params.toString()}`, {
+    const res = await fetch(`${CENSUS_GEOCODER_URL}?${params.toString()}`, {
       signal: controller.signal,
       headers: { Accept: "application/json" },
     });
     clearTimeout(timer);
     if (!res.ok) return { verified: false, reason: "not_found" };
-    const data = (await res.json()) as { features?: BexarFeature[]; error?: unknown };
-    if (data.error || !Array.isArray(data.features) || data.features.length === 0) {
-      return { verified: false, reason: "not_found" };
+    const data = (await res.json()) as { result?: { addressMatches?: CensusAddressMatch[] } };
+    const matches = data.result?.addressMatches ?? [];
+    if (matches.length === 0) return { verified: false, reason: "not_found" };
+
+    const countyName = COUNTY_NAMES[county].toUpperCase();
+    const variants = streetVariants(parsed.streetCore);
+    let best: string | null = null;
+    let bestScore = -1;
+    for (const match of matches) {
+      if (typeof match.matchedAddress !== "string") continue;
+      // County context is the geocoder's own: BASENAME "Travis" / NAME
+      // "Travis County". A match outside the target county is a same-named
+      // street somewhere else — refused, not verified.
+      const countyRec = match.geographies?.Counties?.[0];
+      const recName = (countyRec?.BASENAME ?? countyRec?.NAME ?? "").toUpperCase();
+      if (!recName.includes(countyName)) continue;
+      // Plausibility runs on the street half of "1100 CONGRESS AVE, AUSTIN,
+      // TX, 78701" — the same exact-number/whole-word rule as every adapter.
+      const streetHalf = match.matchedAddress.split(",")[0] ?? "";
+      const score = matchStreetLine(streetHalf, parsed, variants);
+      if (score === null) continue;
+      if (score > bestScore) {
+        bestScore = score;
+        best = match.matchedAddress.toUpperCase().replace(/\s+/g, " ").trim();
+      }
     }
-    const matched = pickBestTravisMatch(data.features, parsed, variants);
-    if (!matched) return { verified: false, reason: "not_found" };
+    if (best === null) return { verified: false, reason: "not_found" };
     return {
       verified: false,
       addressVerified: true,
       reason: "address_verified",
-      source: "travis_cad",
-      county: COUNTY_NAMES.travis,
-      matchedAddress: matched,
+      source: "census_geocoder",
+      county: COUNTY_NAMES[county],
+      matchedAddress: best,
     };
   } catch {
+    // Timeout or network failure — never block the quote.
     return { verified: false, reason: "not_found" };
   }
-}
-
-/**
- * Confirm a TCAD candidate client-side: the situs must START with the house
- * number (so 1100 never matches 11001) and carry a street variant as a whole
- * word sequence (so core "CONGRESS" matches "1100 CONGRESS AVE" but not
- * "1100 CONGRESSIONAL LOOP"). A directional prefix, when the caller gave one,
- * prefers agreeing records and penalizes contradicting ones — the same
- * scoring the BIS CAD matcher uses, adapted to a single combined field.
- */
-export function pickBestTravisMatch(
-  features: BexarFeature[],
-  parsed: ParsedStreetAddress,
-  variants: string[]
-): string | null {
-  let best: string | null = null;
-  let bestScore = -1;
-  for (const f of features) {
-    const raw = f.attributes?.["SITUS"];
-    if (typeof raw !== "string") continue;
-    const situs = raw.toUpperCase().replace(/\s+/g, " ").trim();
-    if (!situs.startsWith(`${parsed.houseNumber} `)) continue;
-    const rest = situs.slice(parsed.houseNumber.length + 1);
-    const wordMatch = variants.find(
-      v => rest === v || rest.startsWith(`${v} `) || rest.endsWith(` ${v}`) || rest.includes(` ${v} `)
-    );
-    if (!wordMatch) continue;
-    let score = 1;
-    if (rest.startsWith(wordMatch)) score += 1;
-    if (parsed.prefix) {
-      if (rest.startsWith(`${parsed.prefix} `)) score += 2;
-      else if (/^(N|S|E|W|NE|NW|SE|SW) /.test(rest)) score -= 2;
-    }
-    if (score > bestScore) {
-      bestScore = score;
-      best = situs;
-    }
-  }
-  return bestScore >= 1 ? best : null;
 }
 
 /**
@@ -627,14 +644,14 @@ export function pickBestTravisMatch(
  */
 export const COUNTY_ADAPTERS: Record<
   CountyKey,
-  (addressLine: string, zip?: string) => Promise<PropertyLookupResult>
+  (addressLine: string, zip?: string, city?: string) => Promise<PropertyLookupResult>
 > = {
   bexar: addressLine => lookupBexarProperty(addressLine),
   comal: (addressLine, zip) => lookupCadAddress("comal", addressLine, zip),
   guadalupe: (addressLine, zip) => lookupCadAddress("guadalupe", addressLine, zip),
   medina: (addressLine, zip) => lookupCadAddress("medina", addressLine, zip),
   kendall: (addressLine, zip) => lookupCadAddress("kendall", addressLine, zip),
-  travis: addressLine => lookupTravisProperty(addressLine),
+  travis: (addressLine, zip, city) => censusAddressVerify("travis", addressLine, zip, city),
 };
 
 /** In-memory cache so repeated lookups of the same address don't re-hit the county service. */
@@ -664,7 +681,7 @@ export async function lookupPropertySqft(
   // Travis can verify sqft; the CAD-only counties verify the address.
   let result: PropertyLookupResult = { verified: false, reason: "not_found" };
   for (const county of candidates) {
-    const attempt = await COUNTY_ADAPTERS[county](addressLine, zip);
+    const attempt = await COUNTY_ADAPTERS[county](addressLine, zip, city);
     if (attempt.reason === "unparseable") {
       result = attempt;
       break;
