@@ -4,7 +4,7 @@
  * Exposed at runtime through GET /api/version.
  */
 export const BUILD_INFO = {
-  commit: "8fbff1b986a506a204cbc7b5844d1685adad9d51",
+  commit: "d6af22d662f7fd4903f8484770df4c02ae2b1c1f",
   branch: "main",
-  builtAt: "2026-08-19T22:35:24.607Z",
+  builtAt: "2026-08-19T22:42:11.643Z",
 } as const;

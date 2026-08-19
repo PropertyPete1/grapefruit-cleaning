@@ -18,7 +18,7 @@
  * deploy log, rather than pretending to a self-referential hash.
  */
 import { execSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 
 function sh(cmd) {
   try {
@@ -28,8 +28,30 @@ function sh(cmd) {
   }
 }
 
-const commit = sh("git rev-parse HEAD") || "unknown";
-const branch = sh("git rev-parse --abbrev-ref HEAD") || "unknown";
+const target = new URL("../shared/buildInfo.ts", import.meta.url);
+
+/**
+ * What the file already says, if anything.
+ *
+ * This matters because `pnpm build` runs a SECOND time inside the deploy
+ * image, where `.git` does not exist — the build context is `git archive
+ * HEAD`. Without this, that run would overwrite the SHA stamped at checkpoint
+ * time with "unknown", and production would report nothing useful. So git is
+ * the preferred source, and the committed value is the fallback: whichever run
+ * actually knows the commit wins, in either order.
+ */
+function existing(field) {
+  try {
+    const match = new RegExp(`${field}:\\s*"([^"]*)"`).exec(readFileSync(target, "utf8"));
+    const value = match?.[1] ?? "";
+    return value === "unknown" ? "" : value;
+  } catch {
+    return "";
+  }
+}
+
+const commit = sh("git rev-parse HEAD") || existing("commit") || "unknown";
+const branch = sh("git rev-parse --abbrev-ref HEAD") || existing("branch") || "unknown";
 const builtAt = new Date().toISOString();
 
 const contents = `/**
@@ -44,5 +66,5 @@ export const BUILD_INFO = {
 } as const;
 `;
 
-writeFileSync(new URL("../shared/buildInfo.ts", import.meta.url), contents);
+writeFileSync(target, contents);
 console.log(`[build-info] commit=${commit.slice(0, 7)} branch=${branch} builtAt=${builtAt}`);

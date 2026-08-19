@@ -256,3 +256,4 @@
 - [x] Tag each email flow with its type (balance_due, booking_confirmation, reminders, tips, deposit links, owner alerts, contact, iCal turnovers) and attach invoice/booking ids on balance sends
 - [x] Add Admin → Email log page showing the last 50 attempts with outcome badges, the mail server's own error text, and a failure summary banner
 - [x] Restrict the email log to admins (staff and ordinary users rejected) and cap the page size
+- [x] Fix /api/version reporting commit "unknown" in production: the deploy image re-runs `pnpm build` without .git, so the stamper now falls back to the committed SHA instead of overwriting it, with a regression test that simulates a git-less build
