@@ -447,6 +447,11 @@ export const es: Dictionary = {
     depositNote:
       "Su depósito del 20% asegura su horario y se aplica al total final. Totalmente reembolsable hasta 24 horas antes de su cita.",
     payDeposit: "Pagar Depósito y Confirmar",
+    confirmBooking: "Confirmar Reserva",
+    noDepositNote:
+      "No se requiere depósito para reservar — su horario queda apartado al confirmar, y el total se paga al completar su limpieza.",
+    paymentLabel: "Pago",
+    dueAtCompletion: "Se paga al completar",
     processing: "Procesando…",
     confirmedTitle: "¡Reserva confirmada!",
     confirmedSubtitle: "Su limpieza está confirmada. Un correo de confirmación va en camino.",

@@ -3,6 +3,7 @@ import Stripe from "stripe";
 import { applyBalancePayment, BALANCE_PAYMENT_TYPE } from "./balance";
 import { finalizeBooking } from "./routers/booking";
 import { getStripe } from "./stripe";
+import { applyTipPayment, TIP_PAYMENT_TYPE } from "./tip";
 
 /**
  * Stripe webhook endpoint. MUST be registered BEFORE express.json() so the
@@ -39,6 +40,18 @@ export function registerStripeWebhook(app: Express): void {
             if (invoiceId && session.payment_status === "paid") {
               const result = await applyBalancePayment(invoiceId, (session.payment_intent as string) ?? null);
               console.log(`[Stripe Webhook] Invoice ${invoiceId} balance → ${result.outcome} (${event.id})`);
+            }
+            break;
+          }
+          if (session.metadata?.payment_type === TIP_PAYMENT_TYPE) {
+            const tipBookingId = Number(session.metadata?.booking_id);
+            // What Stripe actually charged, in whole dollars — the session was
+            // minted server-side for a server-computed figure, and this reads
+            // that figure back rather than trusting any client input.
+            const tipAmount = Math.round((session.amount_total ?? 0) / 100) || Number(session.metadata?.tip_amount);
+            if (tipBookingId && tipAmount > 0 && session.payment_status === "paid") {
+              const result = await applyTipPayment(tipBookingId, tipAmount, (session.payment_intent as string) ?? null);
+              console.log(`[Stripe Webhook] Booking ${tipBookingId} tip → ${result.outcome} (${event.id})`);
             }
             break;
           }

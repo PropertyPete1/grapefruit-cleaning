@@ -36,6 +36,7 @@ import { todayInBookingZone } from "@shared/leadTime";
 import { plausibleVerifiedSqft } from "@shared/property";
 import {
   calculateQuote,
+  depositFor,
   EXTRA_IDS,
   type CleaningType,
   type ExtraId,
@@ -201,7 +202,10 @@ export default function Booking() {
     }
     return { breakdown: entered, sqftAdjusted: false };
   }, [type, bedrooms, bathrooms, sqft, extras, frequency, verifiedSqft, pricing]);
-  const deposit = Math.max(1, Math.round(breakdown.total * pricing.depositRate));
+  // 0 when the admin has turned deposits off — the booking then confirms on
+  // submit with no Stripe step at all.
+  const deposit = depositFor(breakdown.total, pricing.depositRate);
+  const zeroDeposit = deposit === 0;
 
   const dateString = date ? toDateString(date) : null;
   // Service type and size go with the date: they decide how long the job runs,
@@ -317,6 +321,10 @@ export default function Booking() {
       if (result.checkoutUrl) {
         toast.success(locale === "es" ? "Redirigiendo al pago seguro…" : "Redirecting to secure checkout…");
         window.location.href = result.checkoutUrl;
+      } else if (result.confirmed) {
+        // Zero-deposit mode: no Stripe step — the server confirmed on submit.
+        setConfirmed(result.booking);
+        window.scrollTo({ top: 0, behavior: "smooth" });
       }
     } catch {
       toast.error(t.common.error);
@@ -406,8 +414,17 @@ export default function Booking() {
                 <p className="mt-1 font-semibold text-foreground">${confirmed.total}</p>
               </div>
               <div className="rounded-2xl border border-border p-4">
-                <p className="text-xs text-muted-foreground">{t.booking.depositDue}</p>
-                <p className="mt-1 font-semibold text-secondary">${confirmed.deposit} ✓</p>
+                {confirmed.deposit > 0 ? (
+                  <>
+                    <p className="text-xs text-muted-foreground">{t.booking.depositDue}</p>
+                    <p className="mt-1 font-semibold text-secondary">${confirmed.deposit} ✓</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-xs text-muted-foreground">{t.booking.paymentLabel}</p>
+                    <p className="mt-1 font-semibold text-secondary">{t.booking.dueAtCompletion}</p>
+                  </>
+                )}
               </div>
             </div>
 
@@ -944,16 +961,19 @@ export default function Booking() {
                         <span className="text-muted-foreground">{t.booking.estimatedTotal}</span>
                         <span className="font-display text-xl font-bold text-foreground">${formatPrice(breakdown.total)}</span>
                       </div>
-                      <div className="mt-2 flex items-center justify-between">
-                        {/* Rate comes from the live pricing config — the admin can change it. */}
-                        <span className="font-semibold text-foreground">
-                          {t.booking.depositDue} ({Math.round(pricing.depositRate * 100)}%)
-                        </span>
-                        <span className="font-display text-2xl font-extrabold text-primary">${formatPrice(deposit)}</span>
-                      </div>
+                      {/* Deposit line hides entirely when the dial is at 0. */}
+                      {!zeroDeposit && (
+                        <div className="mt-2 flex items-center justify-between">
+                          {/* Rate comes from the live pricing config — the admin can change it. */}
+                          <span className="font-semibold text-foreground">
+                            {t.booking.depositDue} ({Math.round(pricing.depositRate * 100)}%)
+                          </span>
+                          <span className="font-display text-2xl font-extrabold text-primary">${formatPrice(deposit)}</span>
+                        </div>
+                      )}
                       <p className="mt-4 flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
                         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-secondary" />
-                        {t.booking.depositNote}
+                        {zeroDeposit ? t.booking.noDepositNote : t.booking.depositNote}
                       </p>
                     </div>
 
@@ -967,6 +987,8 @@ export default function Booking() {
                         <>
                           <Loader2 className="mr-2 h-5 w-5 animate-spin" /> {t.booking.processing}
                         </>
+                      ) : zeroDeposit ? (
+                        <>{t.booking.confirmBooking}</>
                       ) : (
                         <>
                           {t.booking.payDeposit} — ${formatPrice(deposit)}
@@ -974,9 +996,13 @@ export default function Booking() {
                       )}
                     </Button>
                     <p className="text-center text-xs text-muted-foreground">
-                      {locale === "es"
-                        ? "Pago seguro procesado por Stripe. No almacenamos los datos de su tarjeta."
-                        : "Secure payment processed by Stripe. We never store your card details."}
+                      {zeroDeposit
+                        ? locale === "es"
+                          ? "Sin pago hoy. El total se paga al completar su limpieza."
+                          : "No payment today. Your total is due when your cleaning is complete."
+                        : locale === "es"
+                          ? "Pago seguro procesado por Stripe. No almacenamos los datos de su tarjeta."
+                          : "Secure payment processed by Stripe. We never store your card details."}
                     </p>
                   </div>
                 </motion.div>
@@ -1032,10 +1058,12 @@ export default function Booking() {
                     <span className="font-medium">{extras.length}</span>
                   </div>
                 )}
-                <div className="flex justify-between border-t border-background/15 pt-2.5">
-                  <span className="text-background/60">{t.booking.depositDue}</span>
-                  <span className="font-bold text-primary-foreground">${formatPrice(deposit)}</span>
-                </div>
+                {!zeroDeposit && (
+                  <div className="flex justify-between border-t border-background/15 pt-2.5">
+                    <span className="text-background/60">{t.booking.depositDue}</span>
+                    <span className="font-bold text-primary-foreground">${formatPrice(deposit)}</span>
+                  </div>
+                )}
               </div>
             </div>
           </aside>

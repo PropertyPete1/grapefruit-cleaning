@@ -45,8 +45,14 @@ export interface BrandedEmail {
   intro: string[];
   detailsTitle: string;
   details: EmailDetail[];
-  /** Optional tinted callout — the review ask, say. */
-  callout?: { text: string; ctaLabel: string; ctaUrl: string };
+  /**
+   * Optional tinted callout — the review ask, say. `extraCtas` renders more
+   * buttons stacked under the primary one (the tip email's preset amounts);
+   * older emails simply leave it off and render exactly as before.
+   */
+  callout?: { text: string; ctaLabel: string; ctaUrl: string; extraCtas?: { label: string; url: string }[] };
+  /** A second callout under the first, same rendering — tip ask + review ask can coexist. */
+  secondaryCallout?: { text: string; ctaLabel: string; ctaUrl: string; extraCtas?: { label: string; url: string }[] };
   /** Paragraphs after the details card. */
   outro: string[];
   signOff: string[];
@@ -90,18 +96,21 @@ function detailsCard(title: string, details: EmailDetail[]): string {
 }
 
 function calloutBlock(callout: NonNullable<BrandedEmail["callout"]>): string {
+  const button = (label: string, url: string, primary: boolean) => `
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:${primary ? 14 : 8}px auto 0;">
+              <tr>
+                <td style="background-color:${primary ? BRAND_CORAL : "#ffffff"};border:2px solid ${BRAND_CORAL};border-radius:999px;">
+                  <a href="${escapeHtml(url)}" style="display:inline-block;padding:${primary ? "11px 26px" : "9px 24px"};font-family:${FONT};font-size:14px;font-weight:700;color:${primary ? "#ffffff" : BRAND_CORAL};text-decoration:none;">${escapeHtml(label)}</a>
+                </td>
+              </tr>
+            </table>`;
+  const extras = (callout.extraCtas ?? []).map(cta => button(cta.label, cta.url, false)).join("");
   return `
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:22px;background-color:#FFF3F0;border-radius:12px;">
         <tr>
           <td style="padding:18px 20px;text-align:center;">
             <p style="margin:0;font-family:${FONT};font-size:15px;line-height:1.6;color:${BODY_INK};">${escapeHtml(callout.text)}</p>
-            <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:14px auto 0;">
-              <tr>
-                <td style="background-color:${BRAND_CORAL};border-radius:999px;">
-                  <a href="${escapeHtml(callout.ctaUrl)}" style="display:inline-block;padding:11px 26px;font-family:${FONT};font-size:14px;font-weight:700;color:#ffffff;text-decoration:none;">${escapeHtml(callout.ctaLabel)}</a>
-                </td>
-              </tr>
-            </table>
+            ${button(callout.ctaLabel, callout.ctaUrl, true)}${extras}
           </td>
         </tr>
       </table>`;
@@ -141,7 +150,7 @@ export function renderBrandedEmail(email: BrandedEmail): string {
         <tr>
           <td style="background-color:#ffffff;padding:30px 28px 26px;">
             <h1 style="margin:0 0 14px;font-family:${FONT};font-size:22px;line-height:1.32;font-weight:700;color:${INK};">${escapeHtml(email.headline)}</h1>
-            ${intro}${detailsCard(email.detailsTitle, email.details)}${email.callout ? calloutBlock(email.callout) : ""}${outro}${signOff}
+            ${intro}${detailsCard(email.detailsTitle, email.details)}${email.callout ? calloutBlock(email.callout) : ""}${email.secondaryCallout ? calloutBlock(email.secondaryCallout) : ""}${outro}${signOff}
           </td>
         </tr>
         <tr>
@@ -170,12 +179,19 @@ export function renderBrandedEmail(email: BrandedEmail): string {
  * message rather than a stub.
  */
 export function renderBrandedEmailText(email: BrandedEmail): string {
+  const calloutLines = (callout: NonNullable<BrandedEmail["callout"]>) => [
+    ``,
+    callout.text,
+    `${callout.ctaLabel}: ${callout.ctaUrl}`,
+    ...(callout.extraCtas ?? []).map(cta => `${cta.label}: ${cta.url}`),
+  ];
   return [
     ...email.intro,
     ``,
     email.detailsTitle.toUpperCase(),
     ...email.details.map(d => `${d.label}: ${d.value}`),
-    ...(email.callout ? [``, email.callout.text, email.callout.ctaUrl] : []),
+    ...(email.callout ? calloutLines(email.callout) : []),
+    ...(email.secondaryCallout ? calloutLines(email.secondaryCallout) : []),
     ...email.outro.flatMap(text => [``, text]),
     ``,
     ...email.signOff,

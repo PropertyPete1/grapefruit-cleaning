@@ -358,10 +358,11 @@ export function isSlotTakenError(error: unknown): boolean {
  * Applied inside the query functions rather than at the router, so a list
  * endpoint added later cannot forget it.
  */
-export function stripPayToken<T extends { payToken?: string | null }>(
+export function stripPayToken<T extends { payToken?: string | null; tipToken?: string | null }>(
   row: T
-): Omit<T, "payToken"> & { hasPayToken: boolean } {
-  const { payToken, ...rest } = row;
+): Omit<T, "payToken" | "tipToken"> & { hasPayToken: boolean } {
+  const { payToken, tipToken, ...rest } = row;
+  void tipToken; // Same bearer-credential rule: the tip page token never rides a list payload.
   // The boolean, not the token: whether a link exists is what the appointments
   // table needs in order to show its status, and it is not a credential.
   return { ...rest, hasPayToken: Boolean(payToken) };
@@ -526,6 +527,68 @@ export async function claimJobCompletedEmail(id: number, now: Date = new Date())
     .update(bookings)
     .set({ completedEmailSentAt: now })
     .where(and(eq(bookings.id, id), isNull(bookings.completedEmailSentAt)));
+  return affectedRows(result) > 0;
+}
+
+/**
+ * Claims the once-per-booking tip-request thank-you, minting its page token in
+ * the same write.
+ *
+ * The WHERE also requires the plain "cleaning complete" thank-you to be
+ * unsent: the tip email IS the thank-you now, and a booking that already got
+ * the old one (completed before this feature shipped, say) must not be thanked
+ * twice. completedEmailSentAt is set here too, closing the same door from the
+ * other side — claimJobCompletedEmail can never fire after this does.
+ */
+export async function claimTipRequestEmail(
+  id: number,
+  tipToken: string,
+  now: Date = new Date()
+): Promise<boolean> {
+  const db = requireDb(await getDb());
+  const result = await db
+    .update(bookings)
+    .set({ tipEmailSentAt: now, completedEmailSentAt: now, tipToken })
+    .where(and(eq(bookings.id, id), isNull(bookings.tipEmailSentAt), isNull(bookings.completedEmailSentAt)));
+  return affectedRows(result) > 0;
+}
+
+/** Looks up a booking by its tip-page token. Server-internal, like getBookingByPayToken. */
+export async function getBookingByTipToken(token: string) {
+  const db = requireDb(await getDb());
+  const rows = await db.select().from(bookings).where(eq(bookings.tipToken, token)).limit(1);
+  return rows[0];
+}
+
+/**
+ * Claims a tip payment, at most once. Same conditional-UPDATE shape as
+ * settleUnpaidInvoice: Stripe redelivers events, and only the delivery that
+ * lands this write records the payment and cheers the owner.
+ */
+export async function claimTipPayment(
+  id: number,
+  data: { amount: number; stripePaymentIntentId?: string },
+  now: Date = new Date()
+): Promise<boolean> {
+  const db = requireDb(await getDb());
+  const result = await db
+    .update(bookings)
+    .set({ tipPaidAt: now, tipAmount: data.amount, tipStripePaymentIntentId: data.stripePaymentIntentId })
+    .where(and(eq(bookings.id, id), isNull(bookings.tipPaidAt)));
+  return affectedRows(result) > 0;
+}
+
+/**
+ * Marks the tip politely declined, unless a tip has already been paid or the
+ * question already answered. Declining twice is a no-op, not an error — the
+ * page just thanks them either way.
+ */
+export async function declineTip(id: number, now: Date = new Date()): Promise<boolean> {
+  const db = requireDb(await getDb());
+  const result = await db
+    .update(bookings)
+    .set({ tipDeclinedAt: now })
+    .where(and(eq(bookings.id, id), isNull(bookings.tipPaidAt), isNull(bookings.tipDeclinedAt)));
   return affectedRows(result) > 0;
 }
 

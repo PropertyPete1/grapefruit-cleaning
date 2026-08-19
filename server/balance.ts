@@ -27,8 +27,8 @@ import {
   type BalanceEmailData,
 } from "./emails";
 import { SERVICE_NAMES } from "./routers/booking";
-import { sendJobCompleteEmailSafely } from "./statusEmails";
 import { getStripe } from "./stripe";
+import { sendTipRequestEmailSafely } from "./tip";
 
 /** Metadata tag that marks a Checkout Session as a balance payment. */
 export const BALANCE_PAYMENT_TYPE = "balance";
@@ -235,12 +235,11 @@ export async function issueBalanceSafely(bookingId: number, origin: string): Pro
   try {
     const result = await issueBalanceForCompletedBooking(bookingId, origin);
     console.log(`[Balance] Booking ${bookingId} completed → ${result.outcome}`);
-    // Nothing to collect means nothing else will reach this customer: no
-    // payment link, and no approved-balance email to carry the news that the
-    // job is done. This is their completion notice. Every other outcome already
-    // has one (or is not a completion at all).
+    // Nothing to collect means the customer is settled the moment the job
+    // completes — that is the thank-you-with-tip-ask moment. (The tip flow
+    // falls back to the plain thank-you itself when a tip makes no sense.)
     if (result.outcome === "zero_balance") {
-      await sendJobCompleteEmailSafely(bookingId, origin);
+      await sendTipRequestEmailSafely(bookingId, origin);
     }
   } catch (error) {
     console.error(`[Balance] Failed to issue balance for booking ${bookingId}:`, error);
@@ -298,6 +297,9 @@ export async function approveBalanceInvoice(args: {
       approvedAt: now,
       approvedByUserId,
     });
+    // Zeroing the balance settles the customer right here — their thank-you
+    // (with the tip ask) goes out now or never.
+    await sendTipRequestEmailSafely(booking.id, origin);
     return { outcome: "settled_without_link", invoiceId };
   }
 
@@ -450,6 +452,12 @@ export async function applyBalancePayment(
         status: "succeeded",
       });
       await notifyOwnerOfBalance(invoice, sendBalancePaidNotification);
+      // The balance landing is the moment the customer owes nothing — time
+      // for the thank-you with the tip ask. Claimed once inside; a webhook
+      // redelivery loses the settle claim above and never reaches this line.
+      if (invoice.bookingId) {
+        await sendTipRequestEmailSafely(invoice.bookingId, publicOrigin(undefined));
+      }
       return { outcome: "paid" };
     }
     // Lost the race. Re-read and fall through on what the winner actually left

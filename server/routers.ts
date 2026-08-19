@@ -8,6 +8,7 @@ import { contactRouter } from "./routers/contact";
 import { depositLinkRouter } from "./routers/depositLink";
 import { publicContentRouter } from "./routers/publicContent";
 import { staffRouter } from "./routers/staff";
+import { tipRouter } from "./routers/tip";
 
 export const appRouter = router({
     // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
@@ -25,6 +26,7 @@ export const appRouter = router({
 
   booking: bookingRouter,
   depositLink: depositLinkRouter,
+  tip: tipRouter,
   contact: contactRouter,
   content: publicContentRouter,
   admin: adminRouter,

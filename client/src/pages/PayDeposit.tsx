@@ -81,8 +81,15 @@ const COPY = {
     depositDue: "Deposit due today",
     priceComesLater: "Your price appears once you've chosen your service and home size.",
     payButton: "Pay deposit & confirm",
+    confirmButton: "Confirm booking",
+    noDepositDue: "No deposit due today",
+    confirmNote: "No deposit is needed — confirming reserves your time, and your total is due after your cleaning.",
+    confirmedTitle: "You're booked!",
+    confirmedBody: (ref: string) =>
+      `Your appointment is confirmed — reference ${ref}. A confirmation email is on its way. See you soon!`,
     processing: "Processing…",
     finishSteps: "Finish the steps above to unlock the deposit button.",
+    finishStepsConfirm: "Finish the steps above to unlock the confirm button.",
     depositNote: "Your deposit secures your slot and comes off your final total. The rest is due after your cleaning.",
     heldUntil: (d: string) => `This link is good through ${d}.`,
     loadFailed: "We couldn't load your booking. Please refresh, or give us a call.",
@@ -136,8 +143,15 @@ const COPY = {
     depositDue: "Depósito a pagar hoy",
     priceComesLater: "Su precio aparece cuando elija su servicio y el tamaño de su hogar.",
     payButton: "Pagar depósito y confirmar",
+    confirmButton: "Confirmar reserva",
+    noDepositDue: "Sin depósito hoy",
+    confirmNote: "No se requiere depósito — al confirmar se aparta su horario, y el total se paga después de su limpieza.",
+    confirmedTitle: "¡Reserva confirmada!",
+    confirmedBody: (ref: string) =>
+      `Su cita está confirmada — referencia ${ref}. Le enviamos un correo de confirmación. ¡Nos vemos pronto!`,
     processing: "Procesando…",
     finishSteps: "Complete los pasos anteriores para activar el botón de depósito.",
+    finishStepsConfirm: "Complete los pasos anteriores para activar el botón de confirmación.",
     depositNote: "Su depósito aparta su horario y se descuenta de su total final. El resto se paga después de su limpieza.",
     heldUntil: (d: string) => `Este enlace está disponible hasta el ${d}.`,
     loadFailed: "No pudimos cargar su reserva. Actualice la página o llámenos.",
@@ -256,6 +270,12 @@ export default function PayDeposit() {
     },
   });
 
+  // Zero-deposit mode: the link ends in CONFIRM instead of a pay button.
+  const [confirmedRef, setConfirmedRef] = useState<string | null>(null);
+  const confirm = trpc.depositLink.confirm.useMutation({
+    onSuccess: result => setConfirmedRef(result.reference),
+  });
+
   const data = link.data;
   const booking = data?.booking ?? null;
   const locale = data?.locale ?? "en";
@@ -319,6 +339,13 @@ export default function PayDeposit() {
     const notice = data.notice ?? COPY_NOTICE_FALLBACK;
     return <Notice title={notice[locale].title} body={notice[locale].body} />;
   }
+
+  if (confirmedRef) {
+    return <Notice title={c.confirmedTitle} body={c.confirmedBody(confirmedRef)} />;
+  }
+
+  // Deposit dial at 0: same page, but it ends in a CONFIRM button — no Stripe.
+  const zeroDeposit = preview != null && preview.deposit === 0;
 
   const needs = booking.needs;
   const complete = !needs.service && !needs.size && !needs.slot;
@@ -723,12 +750,19 @@ export default function PayDeposit() {
               <span>{c.estimatedTotal}</span>
               <span>{money(preview.total)}</span>
             </div>
-            <div className="mt-2 flex items-baseline justify-between">
-              <span className="font-bold text-[#3d3733]">{c.depositDue}</span>
-              <span className="font-display text-2xl font-extrabold text-[#F26D5B]">
-                {money(preview.deposit)}
-              </span>
-            </div>
+            {zeroDeposit ? (
+              <div className="mt-2 flex items-baseline justify-between">
+                <span className="font-bold text-[#3d3733]">{c.noDepositDue}</span>
+                <span className="font-display text-2xl font-extrabold text-[#2f9e6e]">$0</span>
+              </div>
+            ) : (
+              <div className="mt-2 flex items-baseline justify-between">
+                <span className="font-bold text-[#3d3733]">{c.depositDue}</span>
+                <span className="font-display text-2xl font-extrabold text-[#F26D5B]">
+                  {money(preview.deposit)}
+                </span>
+              </div>
+            )}
           </div>
         ) : (
           <p className="mt-6 rounded-xl bg-[#FDF8F3] px-4 py-3 text-sm text-[#7a716b]">{c.priceComesLater}</p>
@@ -736,30 +770,44 @@ export default function PayDeposit() {
 
         <Button
           className="mt-5 h-12 w-full rounded-xl bg-[#F26D5B] text-base font-bold hover:bg-[#e05c4a]"
-          disabled={pay.isPending || !complete}
+          disabled={pay.isPending || confirm.isPending || !complete}
           onClick={() => {
             // Selections only. Every figure above is a preview; the server
-            // recomputes the price and mints the session for that amount.
-            pay.mutate(
-              { token, extras: chosen, notes: noteText },
-              { onError: error => toast.error(error.message || c.payFailed) }
-            );
+            // recomputes the price — and decides for itself whether a deposit
+            // is owed — before charging or confirming anything.
+            if (zeroDeposit) {
+              confirm.mutate(
+                { token, extras: chosen, notes: noteText },
+                { onError: error => toast.error(error.message || c.loadFailed) }
+              );
+            } else {
+              pay.mutate(
+                { token, extras: chosen, notes: noteText },
+                { onError: error => toast.error(error.message || c.payFailed) }
+              );
+            }
           }}
         >
-          {pay.isPending ? (
+          {pay.isPending || confirm.isPending ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" /> {c.processing}
             </>
+          ) : zeroDeposit ? (
+            c.confirmButton
           ) : (
             c.payButton
           )}
         </Button>
-        {!complete && <p className="mt-2 text-center text-xs text-[#9b918a]">{c.finishSteps}</p>}
+        {!complete && (
+          <p className="mt-2 text-center text-xs text-[#9b918a]">
+            {zeroDeposit ? c.finishStepsConfirm : c.finishSteps}
+          </p>
+        )}
 
         <p className="mt-3 flex items-start gap-1.5 text-xs leading-relaxed text-[#7a716b]">
           <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
-            {c.depositNote}
+            {zeroDeposit ? c.confirmNote : c.depositNote}
             {heldUntil ? ` ${c.heldUntil(heldUntil)}` : ""}
           </span>
         </p>

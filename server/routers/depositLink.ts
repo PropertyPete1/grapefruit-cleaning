@@ -44,7 +44,7 @@ import { lookupPropertySqft } from "../property";
 import { publicOrigin } from "../publicOrigin";
 import { getStripe } from "../stripe";
 import { publicProcedure, router } from "../_core/trpc";
-import { loadPricingConfig, loadSchedulingRules, occupiedIntervals, SERVICE_NAMES } from "./booking";
+import { finalizeBooking, loadPricingConfig, loadSchedulingRules, occupiedIntervals, SERVICE_NAMES } from "./booking";
 
 const extrasInput = z.array(z.enum(EXTRA_IDS)).max(EXTRA_IDS.length);
 
@@ -617,5 +617,77 @@ export const depositLinkRouter = router({
       await db.updateBooking(booking.id, { stripeSessionId: session.id });
 
       return { checkoutUrl: session.url, total: money.total, deposit: money.deposit };
+    }),
+
+  /**
+   * Zero-deposit mode's ending for the link: the same recompute-and-guard run
+   * as createSession, but with nothing to charge the CONFIRM button confirms
+   * the booking outright — no Stripe, no session, the confirmation emails now.
+   *
+   * The deposit is judged from the live pricing recompute, exactly like the
+   * pay path judges its amount: a request claiming "confirm free" while the
+   * dial says a deposit is owed is refused, whatever the page showed.
+   */
+  confirm: publicProcedure
+    .input(
+      z.object({
+        token: z.string().min(1).max(128),
+        extras: extrasInput,
+        notes: z.string().max(1000).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      assertRateLimit("depositLinkPay", clientIp(ctx), 10, 60_000);
+      const { booking, locale } = await openLinkBooking(input.token);
+      if (!isBookingComplete(booking)) {
+        refuse(
+          locale,
+          "A few details are still missing — finish the steps above and the confirm button will unlock.",
+          "Aún faltan algunos detalles — complete los pasos anteriores y el botón de confirmación se activará."
+        );
+      }
+
+      // Same duration guard as the pay path: the ladder may have moved between
+      // the claim and this moment.
+      const { schedule, durations } = await loadSchedulingRules();
+      const estimatedHours = durationHoursFor(booking.serviceType, booking.sqft, durations);
+      if (!fitsBeforeClose(booking.scheduledTime!, estimatedHours, booking.scheduledDate!, schedule)) {
+        refuse(
+          locale,
+          "Your service now takes longer than the time left that day. Give us a call and we'll find you another time.",
+          "Su servicio ahora toma más tiempo del que queda ese día. Llámenos y con gusto le buscamos otro horario."
+        );
+      }
+
+      const money = await priceWithExtras(booking, input.extras);
+      if (money.total == null || money.deposit == null) {
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Pricing failed" });
+      }
+      if (money.deposit > 0) {
+        // The dial moved back to a real deposit while this page sat open. Not
+        // an error state — the refreshed page shows the pay button instead.
+        refuse(
+          locale,
+          "A deposit is required to confirm this booking — please refresh the page and use the payment button.",
+          "Se requiere un depósito para confirmar esta reserva — actualice la página y use el botón de pago."
+        );
+      }
+
+      await db.updateBooking(booking.id, {
+        extras: JSON.stringify(input.extras),
+        totalAmount: money.total,
+        depositAmount: 0,
+        discountApplied: money.discountApplied,
+        estimatedHours,
+        ...(input.notes !== undefined ? { notes: mergeCustomerNotes(booking.notes, input.notes) } : {}),
+      });
+
+      // The same finalization a paid deposit goes through — the conditional
+      // claim inside makes a double-tapped CONFIRM button confirm exactly
+      // once, and the owner's "your link was completed" email rides along.
+      // With depositAmount at 0 no payment row is recorded.
+      await finalizeBooking(booking.id, null);
+
+      return { confirmed: true as const, reference: booking.reference };
     }),
 });

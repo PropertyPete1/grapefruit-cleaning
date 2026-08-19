@@ -2,6 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import {
   calculateQuote,
+  depositFor,
   EXTRA_IDS,
   generateBookingReference,
   parsePricingConfig,
@@ -334,7 +335,9 @@ export const bookingRouter = router({
         }
       }
 
-      const deposit = Math.max(1, Math.round(total * pricing.depositRate));
+      // Zero when the deposit dial is at 0 — the mode where checkout skips
+      // Stripe entirely and the booking confirms on submit.
+      const deposit = depositFor(total, pricing.depositRate);
       const reference = generateBookingReference();
 
       const customerId = await db.findOrCreateCustomer({
@@ -398,7 +401,10 @@ export const bookingRouter = router({
           locale: input.locale,
           totalAmount: total,
           depositAmount: deposit,
-          status: "pending_deposit",
+          // With no deposit to collect there is nothing to be pending about:
+          // the booking is confirmed by the insert itself. No Stripe session
+          // ever exists for it, so no stale-hold clock and no expiry either.
+          status: deposit > 0 ? "pending_deposit" : "confirmed",
           couponCode,
           discountApplied,
           verifiedSqft: property.verified ? property.sqft : undefined,
@@ -411,6 +417,29 @@ export const bookingRouter = router({
         // "pick another time" message, not a server error.
         if (db.isSlotTakenError(error)) throw slotUnavailable();
         throw error;
+      }
+
+      // Zero-deposit mode: the booking is already confirmed — run the same
+      // post-confirmation side effects a paid deposit would have triggered
+      // (minus the payment row) and hand the client its confirmation directly.
+      if (deposit === 0) {
+        const created = await db.getBookingById(bookingId);
+        if (created) await applyConfirmationSideEffects(created, null, false);
+        return {
+          bookingId,
+          reference,
+          checkoutUrl: null,
+          confirmed: true as const,
+          booking: {
+            reference,
+            serviceType: input.quote.type,
+            date: input.date,
+            time: input.time,
+            total,
+            deposit: 0,
+            customerFirstName: input.firstName,
+          },
+        };
       }
 
       // Create Stripe Checkout session for the deposit
@@ -465,7 +494,7 @@ export const bookingRouter = router({
 
       await db.updateBooking(bookingId, { stripeSessionId: session.id });
 
-      return { bookingId, reference, checkoutUrl: session.url };
+      return { bookingId, reference, checkoutUrl: session.url, confirmed: false as const };
     }),
 
   /** Confirm a booking after Stripe checkout succeeds (fallback to webhook). */
@@ -592,15 +621,35 @@ export async function finalizeBooking(bookingId: number, paymentIntentId: string
   });
   if (!claimed) return;
 
-  await db.createPayment({
-    bookingId,
-    customerId: booking.customerId,
-    amount: booking.depositAmount,
-    kind: "deposit",
-    method: "card",
-    stripePaymentIntentId: paymentIntentId ?? undefined,
-    status: "succeeded",
-  });
+  await applyConfirmationSideEffects(booking, paymentIntentId, slotConflict);
+}
+
+/**
+ * Everything that happens exactly once when a booking becomes confirmed:
+ * record the deposit payment (when one was actually owed — a zero-deposit
+ * booking confirms with no money changing hands and gets no payment row),
+ * redeem the coupon, and send the confirmation emails.
+ *
+ * Callers guarantee once-ness: finalizeBooking through its conditional claim,
+ * and the zero-deposit create path by running inline on a row it just made.
+ */
+export async function applyConfirmationSideEffects(
+  booking: Awaited<ReturnType<typeof db.getBookingById>>,
+  paymentIntentId: string | null,
+  slotConflict: boolean
+): Promise<void> {
+  const bookingId = booking.id;
+  if (booking.depositAmount > 0) {
+    await db.createPayment({
+      bookingId,
+      customerId: booking.customerId,
+      amount: booking.depositAmount,
+      kind: "deposit",
+      method: "card",
+      stripePaymentIntentId: paymentIntentId ?? undefined,
+      status: "succeeded",
+    });
+  }
 
   if (booking.couponCode) {
     const coupon = await db.getCouponByCode(booking.couponCode);

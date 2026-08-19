@@ -20,9 +20,12 @@
  * county context attached. Same posture as the CAD counties: a match proves
  * the address, the square footage stays customer-entered.
  *
+ * Hays County (San Marcos, Kyle, Buda, Dripping Springs) rides the same
+ * Census verify-only tier as Travis.
+ *
  * Every county hangs off COUNTY_ADAPTERS: one entry per county, each an
- * independent lookup function. Adding the next county (Hays is the likely
- * candidate) means adding ZIPs/cities for detection and one adapter entry.
+ * independent lookup function. Adding the next county means adding ZIPs/cities
+ * for detection and one adapter entry.
  *
  * The lookup is best-effort: when no record is found (outside Bexar County,
  * new construction, unparseable address) we return `verified: false` and the
@@ -93,7 +96,7 @@ const BEXAR_CITIES = new Set([
 
 export type Coverage = "in_coverage" | "outside_coverage" | "unknown";
 
-export type CountyKey = "bexar" | "comal" | "guadalupe" | "medina" | "kendall" | "travis";
+export type CountyKey = "bexar" | "comal" | "guadalupe" | "medina" | "kendall" | "travis" | "hays";
 
 export const COUNTY_NAMES: Record<CountyKey, string> = {
   bexar: "Bexar",
@@ -102,6 +105,7 @@ export const COUNTY_NAMES: Record<CountyKey, string> = {
   medina: "Medina",
   kendall: "Kendall",
   travis: "Travis",
+  hays: "Hays",
 };
 
 /**
@@ -155,6 +159,19 @@ const TRAVIS_CITIES = new Set([
   "hudson bend", "garfield", "webberville",
 ]);
 
+/**
+ * Hays County (San Marcos corridor), the second Census verify-only county.
+ * 78666 straddles the Guadalupe line — a straddler only orders the candidate
+ * list, and a miss in one county falls through to the next.
+ */
+const HAYS_ZIPS = new Set([
+  "78610", "78619", "78620", "78640", "78656", "78666", "78667", "78676",
+]);
+const HAYS_CITIES = new Set([
+  "san marcos", "kyle", "buda", "dripping springs", "wimberley", "driftwood",
+  "niederwald", "uhland", "mountain city", "hays city",
+]);
+
 const COUNTY_ZIPS: Record<CountyKey, Set<string>> = {
   bexar: BEXAR_ZIPS,
   comal: COMAL_ZIPS,
@@ -162,6 +179,7 @@ const COUNTY_ZIPS: Record<CountyKey, Set<string>> = {
   medina: MEDINA_ZIPS,
   kendall: KENDALL_ZIPS,
   travis: TRAVIS_ZIPS,
+  hays: HAYS_ZIPS,
 };
 const COUNTY_CITIES: Record<CountyKey, Set<string>> = {
   bexar: BEXAR_CITIES,
@@ -170,8 +188,9 @@ const COUNTY_CITIES: Record<CountyKey, Set<string>> = {
   medina: MEDINA_CITIES,
   kendall: KENDALL_CITIES,
   travis: TRAVIS_CITIES,
+  hays: HAYS_CITIES,
 };
-const COUNTY_ORDER: CountyKey[] = ["bexar", "comal", "guadalupe", "medina", "kendall", "travis"];
+const COUNTY_ORDER: CountyKey[] = ["bexar", "comal", "guadalupe", "medina", "kendall", "travis", "hays"];
 
 /**
  * Resolve candidate counties for an address. ZIP is the strongest signal;
@@ -358,7 +377,7 @@ export async function lookupBexarProperty(addressLine: string): Promise<Property
  * situs_zip. These layers do NOT publish living-area sqft — a match verifies
  * the address only.
  */
-const CAD_SERVICES: Record<Exclude<CountyKey, "bexar" | "travis">, { url: string; source: PropertySource }> = {
+const CAD_SERVICES: Record<Exclude<CountyKey, "bexar" | "travis" | "hays">, { url: string; source: PropertySource }> = {
   comal: {
     url: "https://services7.arcgis.com/Yz6eib2o8WvEgWq8/arcgis/rest/services/ComalCADWebService/FeatureServer/0/query",
     source: "comal_cad",
@@ -383,7 +402,7 @@ const CAD_SERVICES: Record<Exclude<CountyKey, "bexar" | "travis">, { url: string
  * available from these layers.
  */
 export async function lookupCadAddress(
-  county: Exclude<CountyKey, "bexar" | "travis">,
+  county: Exclude<CountyKey, "bexar" | "travis" | "hays">,
   addressLine: string,
   zip?: string
 ): Promise<PropertyLookupResult> {
@@ -563,9 +582,8 @@ interface CensusAddressMatch {
  * ADDRESS-VERIFY-ONLY by nature — the Census knows where addresses are, not
  * how big the homes on them are — so the outcome tier is exactly the CAD
  * counties': address_verified, entered sqft stands. Built as a per-county
- * helper rather than Travis-inline because it can back any future
- * verify-only county (Hays is the likely next) with one adapter-table entry;
- * this round wires ONLY Travis.
+ * helper rather than Travis-inline because it backs any verify-only county
+ * with one adapter-table entry — Travis first, Hays since.
  */
 export async function censusAddressVerify(
   county: CountyKey,
@@ -652,6 +670,7 @@ export const COUNTY_ADAPTERS: Record<
   medina: (addressLine, zip) => lookupCadAddress("medina", addressLine, zip),
   kendall: (addressLine, zip) => lookupCadAddress("kendall", addressLine, zip),
   travis: (addressLine, zip, city) => censusAddressVerify("travis", addressLine, zip, city),
+  hays: (addressLine, zip, city) => censusAddressVerify("hays", addressLine, zip, city),
 };
 
 /** In-memory cache so repeated lookups of the same address don't re-hit the county service. */
