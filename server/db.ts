@@ -758,6 +758,61 @@ export async function getInvoiceByPayToken(token: string) {
   return rows[0];
 }
 
+/** Every balance invoice whose payment link is out and unpaid — the daily reminder sweep's worklist. */
+export async function listSentBalanceInvoices() {
+  const db = requireDb(await getDb());
+  return db
+    .select()
+    .from(invoices)
+    .where(and(eq(invoices.kind, "balance"), eq(invoices.status, "sent"), isNotNull(invoices.payToken)))
+    .orderBy(invoices.createdAt)
+    .limit(500);
+}
+
+/**
+ * Claims one automatic balance reminder, atomically.
+ *
+ * The expected count is part of the WHERE alongside the status, so two
+ * overlapping cron runs cannot both send reminder N — and a payment landing
+ * mid-sweep (status no longer "sent") halts the sequence right here. The same
+ * write renews the link's validity window, so the reminder never points at a
+ * link that has already died of old age.
+ */
+export async function claimBalanceReminder(
+  id: number,
+  expectedCount: number,
+  data: { linkExpiresAt: Date; dueDate: string },
+  now: Date = new Date()
+): Promise<boolean> {
+  const db = requireDb(await getDb());
+  const result = await db
+    .update(invoices)
+    .set({
+      reminderCount: expectedCount + 1,
+      lastReminderAt: now,
+      linkExpiresAt: data.linkExpiresAt,
+      dueDate: data.dueDate,
+    })
+    .where(
+      and(eq(invoices.id, id), eq(invoices.status, "sent"), eq(invoices.reminderCount, expectedCount))
+    );
+  return affectedRows(result) > 0;
+}
+
+/**
+ * Claims the once-per-sequence owner alert for a balance that outlived both
+ * reminders unpaid. The alert field is nulled by a manual resend, which is
+ * what re-arms the whole sequence.
+ */
+export async function claimBalanceReminderExhaustedAlert(id: number, now: Date = new Date()): Promise<boolean> {
+  const db = requireDb(await getDb());
+  const result = await db
+    .update(invoices)
+    .set({ reminderExhaustedAlertAt: now })
+    .where(and(eq(invoices.id, id), eq(invoices.status, "sent"), isNull(invoices.reminderExhaustedAlertAt)));
+  return affectedRows(result) > 0;
+}
+
 /**
  * Balance invoices waiting on an admin's review, oldest first — the approval
  * queue behind the Invoices badge.

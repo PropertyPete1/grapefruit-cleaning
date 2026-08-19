@@ -392,6 +392,20 @@ export const invoices = mysqlTable("invoices", {
   /** How the invoice was settled — null for zero-balance invoices covered by the deposit. */
   paidVia: mysqlEnum("paidVia", ["stripe", "manual"]),
   /**
+   * Automatic follow-ups sent for an unpaid balance link (0–2). The count is
+   * the claim: each reminder's conditional UPDATE requires the expected count,
+   * so overlapping cron runs can never double-send. Reset to 0 by a manual
+   * resend, which restarts the whole sequence from its new linkSentAt.
+   */
+  reminderCount: int("reminderCount").default(0).notNull(),
+  /** When the most recent automatic reminder went out (null = none yet). */
+  lastReminderAt: timestamp("lastReminderAt"),
+  /**
+   * When the owner was told both reminders ran their course unpaid — the
+   * "time for a personal follow-up" alert, claimed once. Reset by a resend.
+   */
+  reminderExhaustedAlertAt: timestamp("reminderExhaustedAlertAt"),
+  /**
    * Set when a card payment landed on an invoice that was already settled
    * (collected in person, or paid twice). Manual payment always wins; this
    * flags the money that has to be refunded instead of double-marking paid.
