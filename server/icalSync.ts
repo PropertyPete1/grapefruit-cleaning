@@ -395,7 +395,7 @@ async function maybeSendPerCleanNotice(
     customerName: customer.firstName,
     locale,
   });
-  await deliverEmail(customer.email, subject, body);
+  await deliverEmail(customer.email, subject, body, undefined, { emailType: "ical_turnover" });
 }
 
 /** The hourly entry point: every active feed, one summary line each. */

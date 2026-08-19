@@ -10,6 +10,7 @@
  */
 import nodemailer, { type Transporter } from "nodemailer";
 import { notifyOwner } from "./_core/notification";
+import { logEmailAttempt } from "./emailLog";
 import { renderBrandedEmail, renderBrandedEmailText, type BrandedEmail } from "./emailShell";
 
 export interface BookingEmailData {
@@ -46,6 +47,24 @@ export interface BookingEmailData {
 }
 
 const fmtUsd = (n: number) => `$${n.toFixed(0)} USD`;
+
+/**
+ * Optional provenance for a send, recorded alongside it in the email log.
+ *
+ * Every field is optional and the whole argument may be omitted: an email that
+ * forgets to identify itself still gets logged, just as type "other" with no
+ * relations. Making this mandatory would have meant touching every one of the
+ * seventeen call sites in a round whose point was durable delivery history,
+ * and a half-updated call site that no longer compiles helps nobody.
+ */
+export interface EmailContext {
+  /** Which flow produced this message, e.g. "balance_due", "reminder". */
+  emailType?: string;
+  /** The invoice this send belongs to, when it belongs to one. */
+  invoiceId?: number | null;
+  /** The booking this send belongs to, when it belongs to one. */
+  bookingId?: number | null;
+}
 
 const BRAND_CORAL = "#F26D5B";
 const BRAND_CREAM = "#FDF8F3";
@@ -156,7 +175,8 @@ export async function deliverEmail(
   to: string | null | undefined,
   subject: string,
   body: string,
-  html?: string
+  html?: string,
+  context?: EmailContext
 ): Promise<boolean> {
   // Phone-only leads exist now: a customer row may have no email at all. One
   // guard here covers every flow — confirmation, reminders, balance, status —
@@ -164,11 +184,27 @@ export async function deliverEmail(
   // error in whichever flow forgot to check.
   if (!to) {
     console.log(`[Email] Skipped (no address): ${subject}`);
+    await logEmailAttempt({
+      recipient: null,
+      subject,
+      emailType: context?.emailType ?? "other",
+      outcome: "skipped",
+      invoiceId: context?.invoiceId ?? null,
+      bookingId: context?.bookingId ?? null,
+    });
     return false;
   }
   const transporter = getTransporter();
   if (!transporter) {
     console.log(`[Email fallback → ${to}] ${subject}\n${body}`);
+    await logEmailAttempt({
+      recipient: to,
+      subject,
+      emailType: context?.emailType ?? "other",
+      outcome: "log_only",
+      invoiceId: context?.invoiceId ?? null,
+      bookingId: context?.bookingId ?? null,
+    });
     return false;
   }
   try {
@@ -183,11 +219,30 @@ export async function deliverEmail(
     });
     console.log(`[Email] Delivered to ${to}: ${subject}`);
     _lastEmailError = null;
+    await logEmailAttempt({
+      recipient: to,
+      subject,
+      emailType: context?.emailType ?? "other",
+      outcome: "delivered",
+      smtpUser: smtpUser() ?? null,
+      invoiceId: context?.invoiceId ?? null,
+      bookingId: context?.bookingId ?? null,
+    });
     return true;
   } catch (error) {
     console.error(`[Email] Failed to deliver to ${to}:`, error);
     const err = error as { code?: string; responseCode?: number; response?: string; message?: string };
     _lastEmailError = (err.response || err.message || "Unknown SMTP error").split("\n")[0].trim();
+    await logEmailAttempt({
+      recipient: to,
+      subject,
+      emailType: context?.emailType ?? "other",
+      outcome: "error",
+      errorText: _lastEmailError,
+      smtpUser: smtpUser() ?? null,
+      invoiceId: context?.invoiceId ?? null,
+      bookingId: context?.bookingId ?? null,
+    });
     // An auth failure usually means the credentials changed under a
     // long-running process (the cached transport still holds the old mailbox).
     // Dropping it forces the next attempt to rebuild from current env.
@@ -436,16 +491,18 @@ export async function sendOwnerAlert(title: string, content: string): Promise<vo
   }
   const ownerEmail = process.env.OWNER_EMAIL;
   if (ownerEmail) {
-    await deliverEmail(ownerEmail, title, content);
+    await deliverEmail(ownerEmail, title, content, undefined, { emailType: "owner_alert" });
   } else if (smtpUser()) {
     // Default: send the owner copy to the business inbox itself.
-    await deliverEmail(smtpUser(), title, content);
+    await deliverEmail(smtpUser(), title, content, undefined, { emailType: "owner_alert" });
   }
 }
 
 export async function sendBookingEmails(data: BookingEmailData): Promise<void> {
   const customerEmail = buildCustomerConfirmation(data);
-  await deliverEmail(data.customerEmail, customerEmail.subject, customerEmail.body);
+  await deliverEmail(data.customerEmail, customerEmail.subject, customerEmail.body, undefined, {
+    emailType: "booking_confirmation",
+  });
 
   const ownerNote = buildOwnerNotification(data);
   await sendOwnerAlert(ownerNote.title, ownerNote.content);
@@ -665,10 +722,14 @@ export function buildBalanceReminderEmail(
 /** Emails one automatic balance reminder. Returns true when delivered. */
 export async function sendBalanceReminderEmail(
   data: BalanceEmailData,
-  reminderNumber: 1 | 2
+  reminderNumber: 1 | 2,
+  context?: EmailContext
 ): Promise<boolean> {
   const email = buildBalanceReminderEmail(data, reminderNumber);
-  return deliverEmail(data.customerEmail, email.subject, email.body);
+  return deliverEmail(data.customerEmail, email.subject, email.body, undefined, {
+    ...context,
+    emailType: `balance_reminder_${reminderNumber}`,
+  });
 }
 
 /**
@@ -797,9 +858,12 @@ export async function sendBalanceApprovalNeededAlert(data: BalanceEmailData): Pr
 }
 
 /** Emails the customer their balance payment link. Returns true when delivered. */
-export async function sendBalanceDueEmail(data: BalanceEmailData): Promise<boolean> {
+export async function sendBalanceDueEmail(data: BalanceEmailData, context?: EmailContext): Promise<boolean> {
   const email = buildBalanceDueEmail(data);
-  return deliverEmail(data.customerEmail, email.subject, email.body);
+  return deliverEmail(data.customerEmail, email.subject, email.body, undefined, {
+    ...context,
+    emailType: "balance_due",
+  });
 }
 
 /** Notifies the owner that a balance was paid online (notification + email copy). */
@@ -825,9 +889,9 @@ async function notifyOwnerWithEmailCopy(note: { title: string; content: string }
   }
   const ownerEmail = process.env.OWNER_EMAIL;
   if (ownerEmail) {
-    await deliverEmail(ownerEmail, note.title, note.content);
+    await deliverEmail(ownerEmail, note.title, note.content, undefined, { emailType: "owner_alert" });
   } else if (smtpUser()) {
-    await deliverEmail(smtpUser(), note.title, note.content);
+    await deliverEmail(smtpUser(), note.title, note.content, undefined, { emailType: "owner_alert" });
   }
 }
 
@@ -1002,13 +1066,17 @@ export function buildJobCompleteEmail(data: JobStatusEmailData): {
 /** Tells the customer their crew has arrived. Returns true when delivered. */
 export async function sendJobStartedEmail(data: JobStatusEmailData): Promise<boolean> {
   const email = buildJobStartedEmail(data);
-  return deliverEmail(data.customerEmail, email.subject, email.body, email.html);
+  return deliverEmail(data.customerEmail, email.subject, email.body, email.html, {
+    emailType: "job_started",
+  });
 }
 
 /** Thanks the customer for a job with nothing left to collect. */
 export async function sendJobCompleteEmail(data: JobStatusEmailData): Promise<boolean> {
   const email = buildJobCompleteEmail(data);
-  return deliverEmail(data.customerEmail, email.subject, email.body, email.html);
+  return deliverEmail(data.customerEmail, email.subject, email.body, email.html, {
+    emailType: "job_complete",
+  });
 }
 
 // ---------- Tip request (the settled-booking thank-you) ----------
@@ -1143,7 +1211,9 @@ export function buildTipRequestEmail(data: TipEmailData): {
 /** Sends the tip-request thank-you. Returns true when delivered. */
 export async function sendTipRequestEmail(data: TipEmailData): Promise<boolean> {
   const email = buildTipRequestEmail(data);
-  return deliverEmail(data.customerEmail, email.subject, email.body, email.html);
+  return deliverEmail(data.customerEmail, email.subject, email.body, email.html, {
+    emailType: "tip_request",
+  });
 }
 
 export interface TipPaidData {
@@ -1232,9 +1302,13 @@ export async function sendContactNotification(data: ContactEmailData): Promise<v
   }
   const ownerEmail = process.env.OWNER_EMAIL;
   if (ownerEmail) {
-    await deliverEmail(ownerEmail, `New contact message from ${data.name}`, contactBody);
+    await deliverEmail(ownerEmail, `New contact message from ${data.name}`, contactBody, undefined, {
+      emailType: "contact_message",
+    });
   } else if (smtpUser()) {
-    await deliverEmail(smtpUser(), `New contact message from ${data.name}`, contactBody);
+    await deliverEmail(smtpUser(), `New contact message from ${data.name}`, contactBody, undefined, {
+      emailType: "contact_message",
+    });
   }
 }
 
@@ -1450,7 +1524,7 @@ export function buildDepositLinkEmail(data: DepositLinkEmailData): {
 /** Sends the deposit link. Returns whether it was delivered. */
 export async function sendDepositLinkEmail(data: DepositLinkEmailData): Promise<boolean> {
   const { subject, body, html } = buildDepositLinkEmail(data);
-  return deliverEmail(data.customerEmail, subject, body, html);
+  return deliverEmail(data.customerEmail, subject, body, html, { emailType: "deposit_link" });
 }
 
 // ---------- Connected-property (Airbnb auto-booking) emails ----------
@@ -1540,7 +1614,7 @@ export function buildPropertyConnectedEmail(data: PropertyEmailData): {
 
 export async function sendPropertyConnectedEmail(data: PropertyEmailData): Promise<boolean> {
   const { subject, body, html } = buildPropertyConnectedEmail(data);
-  return deliverEmail(data.customerEmail, subject, body, html);
+  return deliverEmail(data.customerEmail, subject, body, html, { emailType: "property_connected" });
 }
 
 /** [ACTION NEEDED] — a turnover exists that the calendar could not place. */

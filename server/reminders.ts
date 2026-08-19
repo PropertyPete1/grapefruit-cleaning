@@ -100,7 +100,10 @@ export async function sendDueReminders(
     const customer = await db.getCustomerById(booking.customerId);
     if (!customer) continue;
     const email = buildReminderEmail(toEmailData(booking, customer, bizPhone), kind);
-    const delivered = await deliverEmail(customer.email, email.subject, email.body);
+    const delivered = await deliverEmail(customer.email, email.subject, email.body, undefined, {
+      emailType: `booking_reminder_${kind}`,
+      bookingId: booking.id,
+    });
     // Mark as sent even on fallback-log so a misconfigured mailbox can't spam customers later.
     await db.markReminderSent(booking.id, kind);
     sent += 1;

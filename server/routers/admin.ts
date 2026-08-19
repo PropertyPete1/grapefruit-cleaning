@@ -787,6 +787,19 @@ export const adminRouter = router({
       linkStatus: balanceLinkStatus({ status: invoice.status, payToken, linkExpiresAt: invoice.linkExpiresAt }, now),
     }));
   }),
+
+  // ---------- Email log ----------
+  /**
+   * Recent outbound email attempts, newest first.
+   *
+   * Production console logs are kept for about an hour; this reads the durable
+   * table instead, so "did the customer get it?" stays answerable days later.
+   */
+  emailLog: adminProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(200).default(50) }).optional())
+    .query(async ({ input }) => {
+      return db.listEmailLog(input?.limit ?? 50);
+    }),
   createInvoice: adminProcedure
     .input(
       z.object({

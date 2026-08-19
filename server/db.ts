@@ -8,6 +8,7 @@ import {
   contactMessages,
   coupons,
   customers,
+  emailLog,
   employees,
   galleryItems,
   invoices,
@@ -873,6 +874,35 @@ export async function createReview(data: typeof reviews.$inferInsert) {
   const db = requireDb(await getDb());
   const result = await db.insert(reviews).values(data);
   return Number(result[0].insertId);
+}
+
+// ---------- Email log ----------
+/**
+ * Records one email attempt.
+ *
+ * Never throws, and deliberately does not use requireDb: this is
+ * observability, and an observability failure must not be able to break the
+ * thing it observes. A confirmation that went out unrecorded is a bad day; a
+ * confirmation that failed BECAUSE the log insert failed is a worse one.
+ */
+export async function recordEmailAttempt(entry: typeof emailLog.$inferInsert): Promise<void> {
+  try {
+    const db = await getDb();
+    if (!db) return;
+    await db.insert(emailLog).values(entry);
+  } catch (error) {
+    console.warn("[EmailLog] Could not record send attempt:", error);
+  }
+}
+
+/** Most recent attempts, newest first — backs the admin email log page. */
+export async function listEmailLog(limit = 50) {
+  const db = requireDb(await getDb());
+  return db
+    .select()
+    .from(emailLog)
+    .orderBy(desc(emailLog.createdAt), desc(emailLog.id))
+    .limit(Math.min(Math.max(limit, 1), 200));
 }
 
 export async function updateReview(id: number, data: Partial<typeof reviews.$inferInsert>) {

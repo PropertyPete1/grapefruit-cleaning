@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   Loader2,
   LogOut,
+  Mail,
   Menu,
   MessageSquare,
   Newspaper,
@@ -45,6 +46,7 @@ const AdminSettings = lazy(() => import("./AdminSettings"));
 const AdminMessages = lazy(() => import("./AdminMessages"));
 const AdminBlog = lazy(() => import("./AdminBlog"));
 const AdminProperties = lazy(() => import("./AdminProperties"));
+const AdminEmailLog = lazy(() => import("./AdminEmailLog"));
 
 const NAV_ITEMS = [
   { path: "/admin", label: "Dashboard", icon: LayoutDashboard, exact: true },
@@ -55,6 +57,7 @@ const NAV_ITEMS = [
   { path: "/admin/messages", label: "Messages", icon: MessageSquare },
   { path: "/admin/invoices", label: "Invoices", icon: FileText },
   { path: "/admin/payments", label: "Payments", icon: CreditCard },
+  { path: "/admin/email-log", label: "Email log", icon: Mail },
   { path: "/admin/employees", label: "Employees", icon: UsersRound },
   { path: "/admin/statistics", label: "Statistics", icon: BarChart3 },
   { path: "/admin/reviews", label: "Reviews", icon: Star },
@@ -241,6 +244,7 @@ export default function AdminRoutes() {
           <Route path="/admin/messages" component={AdminMessages} />
           <Route path="/admin/properties" component={AdminProperties} />
           <Route path="/admin/invoices" component={AdminInvoices} />
+          <Route path="/admin/email-log" component={AdminEmailLog} />
           <Route path="/admin/payments" component={AdminPayments} />
           <Route path="/admin/employees" component={AdminEmployees} />
           <Route path="/admin/statistics" component={AdminStatistics} />

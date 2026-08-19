@@ -10,6 +10,7 @@ import { registerStripeWebhook } from "../stripeWebhook";
 import { registerSeoRoutes } from "../seoRoutes";
 import { registerScheduledRoutes } from "../scheduledRoutes";
 import { registerBalanceRoutes } from "../balanceRoutes";
+import { registerVersionRoutes } from "../versionRoutes";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 
@@ -39,6 +40,8 @@ async function startServer() {
   registerStripeWebhook(app);
   // SEO: robots.txt + sitemap.xml
   registerSeoRoutes(app);
+  // Deploy verification: which commit is this process running?
+  registerVersionRoutes(app);
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));

@@ -447,7 +447,8 @@ export async function approveBalanceInvoice(args: {
       balancePayUrl(origin, payToken),
       expiresAt,
       bizPhone
-    )
+    ),
+    { invoiceId, bookingId: booking.id }
   );
 
   return { outcome: "approved", invoiceId, amount, emailed, expiresOn: expiresAt.toISOString().slice(0, 10) };
@@ -523,7 +524,8 @@ export async function resendBalanceLink(invoiceId: number, origin: string): Prom
       payUrl,
       expiresAt,
       bizPhone
-    )
+    ),
+    { invoiceId: invoice.id, bookingId: booking.id }
   );
 
   return {
@@ -710,7 +712,8 @@ export async function sendDueBalanceReminders(
         expiresAt,
         bizPhone
       ),
-      due.reminderNumber
+      due.reminderNumber,
+      { invoiceId: invoice.id, bookingId: booking.id }
     );
     reminded += 1;
     details.push(

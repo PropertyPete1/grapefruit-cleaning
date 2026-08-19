@@ -249,3 +249,10 @@
 - [x] Standing rule recorded in PROJECT_NOTES.md: any "email is fixed" claim needs the production boot timestamp AND a real send through the production path — sandbox verification alone does not count
 - [x] Hotmail-era values audited out of every environment and out of source, docs, and test fixtures
 - [x] Deploy round: sync PR #13 (itemized balance invoices — named add-ons and custom lines), apply migration 0020 (invoices.lineItems, additive nullable text), force a genuine production restart, and prove the running commit is dea199a from production rather than the sandbox
+- [x] Add GET /api/version returning the running build's commit SHA, boot timestamp, uptime, and branch, with the SHA stamped in at build time (scripts/write-build-info.mjs → shared/buildInfo.ts, since the deploy build context excludes .git)
+- [x] Make /api/version uncacheable and cover it with tests (shape, SHA/short-SHA agreement, no-store, boot-time stability, uptime floor)
+- [x] Add the email_log table (migration 0021): recipient, subject, email type, outcome (delivered/log_only/error/skipped), real SMTP error text, sending mailbox, invoice/booking ids, timestamp
+- [x] Record every send attempt from deliverEmail, including failures and log-only fallbacks, via a dedicated emailLog module that degrades safely and never breaks a send
+- [x] Tag each email flow with its type (balance_due, booking_confirmation, reminders, tips, deposit links, owner alerts, contact, iCal turnovers) and attach invoice/booking ids on balance sends
+- [x] Add Admin → Email log page showing the last 50 attempts with outcome badges, the mail server's own error text, and a failure summary banner
+- [x] Restrict the email log to admins (staff and ordinary users rejected) and cap the page size

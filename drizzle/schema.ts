@@ -502,3 +502,45 @@ export const blogPosts = mysqlTable("blog_posts", {
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 export type BlogPost = typeof blogPosts.$inferSelect;
+
+/**
+ * Every outbound email attempt, recorded whether it succeeded or not.
+ *
+ * Production console logs are retained for roughly an hour, which is useless
+ * for answering "did the customer actually get it?" days later. This table is
+ * the durable answer: one row per attempt, written on the same path that sends
+ * the mail, so an absent row means no attempt was ever made.
+ *
+ * Deliberately does NOT store the message body. A support question needs to
+ * know whether a message left the building and where it went — not to become a
+ * second copy of every invoice, access code, and address the business sends.
+ */
+export const emailLog = mysqlTable("email_log", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Recipient address; NULL only when a send was skipped for having none. */
+  recipient: varchar("recipient", { length: 320 }),
+  subject: varchar("subject", { length: 500 }).notNull(),
+  /**
+   * Which flow produced the message (balance_due, booking_confirmation,
+   * reminder, staff_invite, ...). Free-form varchar rather than an enum on
+   * purpose: new email types appear often, and a forgotten enum migration must
+   * never be able to break an actual send.
+   */
+  emailType: varchar("emailType", { length: 60 }).default("other").notNull(),
+  /**
+   * delivered — the mail server accepted it
+   * log_only  — no SMTP credentials configured, so the body was logged instead
+   * error     — transport or auth failure; errorText holds what the server said
+   * skipped   — there was no address to send to
+   */
+  outcome: mysqlEnum("outcome", ["delivered", "log_only", "error", "skipped"]).notNull(),
+  /** The mail server's actual complaint, first line only, when it failed. */
+  errorText: varchar("errorText", { length: 500 }),
+  /** The mailbox the transport authenticated as — how a stale deploy gets spotted. */
+  smtpUser: varchar("smtpUser", { length: 320 }),
+  /** Related records, when the send belongs to one. */
+  invoiceId: int("invoiceId"),
+  bookingId: int("bookingId"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type EmailLogEntry = typeof emailLog.$inferSelect;
