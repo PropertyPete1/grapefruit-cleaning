@@ -31,6 +31,7 @@ import {
   sendBalanceReminderEmail,
   sendBalanceReminderExhaustedAlert,
   sendRefundNeededAlert,
+  lastEmailError,
   type BalanceEmailData,
 } from "./emails";
 import { SERVICE_NAMES } from "./routers/booking";
@@ -355,7 +356,7 @@ export type ResendOutcome =
   | { outcome: "voided" }
   | { outcome: "booking_not_found" }
   | { outcome: "customer_not_found" }
-  | { outcome: "resent"; payUrl: string; emailed: boolean; expiresOn: string };
+  | { outcome: "resent"; payUrl: string; emailed: boolean; expiresOn: string; emailError?: string };
 
 /**
  * Re-sends a balance payment link, reopening the 7-day window from now. Works
@@ -417,7 +418,15 @@ export async function resendBalanceLink(invoiceId: number, origin: string): Prom
     )
   );
 
-  return { outcome: "resent", payUrl, emailed, expiresOn: expiresAt.toISOString().slice(0, 10) };
+  return {
+    outcome: "resent",
+    payUrl,
+    emailed,
+    expiresOn: expiresAt.toISOString().slice(0, 10),
+    // On failure, hand back what the mail server actually said so the admin UI
+    // can show the real reason rather than a generic "not configured".
+    ...(emailed ? {} : { emailError: lastEmailError() ?? undefined }),
+  };
 }
 
 export type BalancePaymentOutcome =

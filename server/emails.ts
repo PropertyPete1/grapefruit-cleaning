@@ -84,6 +84,17 @@ export function wrapEmailHtml(subject: string, body: string): string {
 }
 
 let _transporter: Transporter | null = null;
+/**
+ * The SMTP error text from the most recent failed send, so callers (the admin
+ * panel) can show what the mail server actually said instead of a generic
+ * "couldn't send". Cleared on every successful delivery.
+ */
+let _lastEmailError: string | null = null;
+
+/** The real SMTP failure text from the last send attempt, if it failed. */
+export function lastEmailError(): string | null {
+  return _lastEmailError;
+}
 
 /**
  * The mailbox this app sends AS — the SMTP login, the From address, and the
@@ -109,6 +120,10 @@ function getTransporter(): Transporter | null {
   if (!_transporter) {
     const host = process.env.SMTP_HOST?.trim() || "smtp.gmail.com";
     const port = Number(process.env.SMTP_PORT) || (host === "smtp.gmail.com" ? 465 : 587);
+    // Logged so a misconfigured or stale deployment is visible in the runtime
+    // logs: this states which mailbox/host the process actually connected as,
+    // rather than which one the environment was meant to hold.
+    console.log(`[Email] SMTP transport built: ${user} via ${host}:${port} (secure=${port === 465})`);
     _transporter = nodemailer.createTransport({
       host,
       port,
@@ -124,6 +139,7 @@ function getTransporter(): Transporter | null {
 /** Test-only helper to reset the cached transporter. */
 export function __resetTransporter(): void {
   _transporter = null;
+  _lastEmailError = null;
 }
 
 /**
@@ -165,9 +181,19 @@ export async function deliverEmail(
       html: html ?? wrapEmailHtml(subject, body),
     });
     console.log(`[Email] Delivered to ${to}: ${subject}`);
+    _lastEmailError = null;
     return true;
   } catch (error) {
     console.error(`[Email] Failed to deliver to ${to}:`, error);
+    const err = error as { code?: string; responseCode?: number; response?: string; message?: string };
+    _lastEmailError = (err.response || err.message || "Unknown SMTP error").split("\n")[0].trim();
+    // An auth failure usually means the credentials changed under a
+    // long-running process (the cached transport still holds the old mailbox).
+    // Dropping it forces the next attempt to rebuild from current env.
+    if (err.code === "EAUTH" || err.responseCode === 535) {
+      console.error("[Email] Auth failure — dropping cached SMTP transport so the next send rebuilds it");
+      _transporter = null;
+    }
     return false;
   }
 }

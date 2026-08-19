@@ -239,3 +239,8 @@
 - [x] Promote Karyme (now karymeplata23@hotmail.com; formerly the dead grapefruitclean.com address) to Admin — role now 'admin' in users table, card shows "Admin — grapefruit"
 - [x] Tests: vitest coverage for promote/demote/last-admin guard/self-demotion guard (9 new tests, 144 total passing)
 - [x] TS check + full suite green; single checkpoint; GitHub push
+
+## Round 18 — Email failure visibility
+- [x] Rebuild the cached SMTP transport on an EAUTH/535 failure so a credential change takes effect without waiting for a redeploy
+- [x] Log which mailbox and host the transport actually connected as, each time it is built
+- [x] Admin → Invoices resend toast shows the real SMTP error text instead of "email not configured"

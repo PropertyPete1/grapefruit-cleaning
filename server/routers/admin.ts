@@ -903,7 +903,7 @@ export const adminRouter = router({
       const result = await resendBalanceLink(input.invoiceId, originFromRequest(ctx.req));
       switch (result.outcome) {
         case "resent":
-          return { emailed: result.emailed, expiresOn: result.expiresOn } as const;
+          return { emailed: result.emailed, expiresOn: result.expiresOn, emailError: result.emailError } as const;
         case "already_paid":
           throw new TRPCError({ code: "BAD_REQUEST", message: "This invoice is already paid." });
         case "voided":

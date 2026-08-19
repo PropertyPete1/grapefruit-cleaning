@@ -198,8 +198,18 @@ export default function AdminInvoices() {
   const resend = trpc.admin.resendBalanceLink.useMutation({
     onSuccess: r => {
       utils.admin.invoices.invalidate();
-      toast.success(
-        r.emailed ? `Payment link re-sent — valid through ${r.expiresOn}` : `Link regenerated (email not configured)`
+      if (r.emailed) {
+        toast.success(`Payment link re-sent — valid through ${r.expiresOn}`);
+        return;
+      }
+      // The link itself is valid either way; what failed is the email. Show
+      // what the mail server actually said so a broken mailbox is diagnosable
+      // from here instead of only in the server logs.
+      toast.error(
+        r.emailError
+          ? `Link regenerated, but the email did not send: ${r.emailError}`
+          : `Link regenerated, but no email was sent (email not configured)`,
+        { duration: 12000 }
       );
     },
     onError: e => toast.error(e.message || "Failed to resend payment link"),
