@@ -905,6 +905,90 @@ export async function listEmailLog(limit = 50) {
     .limit(Math.min(Math.max(limit, 1), 200));
 }
 
+/**
+ * Records one email attempt and returns its row id, so the caller can come
+ * back and mark it as the failure that raised the alert (or the one the cap
+ * suppressed). Same never-throws contract as recordEmailAttempt: a null id
+ * means "not recorded", which callers treat as "carry on".
+ */
+export async function recordEmailAttemptReturningId(
+  entry: typeof emailLog.$inferInsert
+): Promise<number | null> {
+  try {
+    const db = await getDb();
+    if (!db) return null;
+    const result = await db.insert(emailLog).values(entry);
+    return Number(result[0].insertId) || null;
+  } catch (error) {
+    console.warn("[EmailLog] Could not record send attempt:", error);
+    return null;
+  }
+}
+
+/**
+ * When the last failure alert actually went out, or null if never.
+ *
+ * Read from the table rather than a module-level timestamp because production
+ * runs more than one instance: an in-memory clock would let every instance
+ * send its own "hourly" alert, which is the flood the cap exists to prevent.
+ * Never throws; an unreadable rate limit must not break the send path.
+ */
+export async function lastEmailAlertAt(): Promise<Date | null> {
+  try {
+    const db = await getDb();
+    if (!db) return null;
+    const rows = await db
+      .select({ alertSentAt: emailLog.alertSentAt })
+      .from(emailLog)
+      .where(isNotNull(emailLog.alertSentAt))
+      .orderBy(desc(emailLog.alertSentAt))
+      .limit(1);
+    return rows[0]?.alertSentAt ?? null;
+  } catch (error) {
+    console.warn("[EmailLog] Could not read the last alert time:", error);
+    return null;
+  }
+}
+
+/** Marks a logged failure as the one that raised the owner alert. */
+export async function markEmailAlertSent(id: number, at: Date): Promise<void> {
+  try {
+    const db = await getDb();
+    if (!db) return;
+    await db.update(emailLog).set({ alertSentAt: at }).where(eq(emailLog.id, id));
+  } catch (error) {
+    console.warn("[EmailLog] Could not mark the alert as sent:", error);
+  }
+}
+
+/** Marks a logged failure as one whose alert the hourly cap swallowed. */
+export async function markEmailAlertSuppressed(id: number): Promise<void> {
+  try {
+    const db = await getDb();
+    if (!db) return;
+    await db.update(emailLog).set({ alertSuppressed: true }).where(eq(emailLog.id, id));
+  } catch (error) {
+    console.warn("[EmailLog] Could not mark the alert as suppressed:", error);
+  }
+}
+
+/** How many failures the cap has swallowed since a given moment — the outage's size. */
+export async function countSuppressedSince(since: Date): Promise<number> {
+  try {
+    const db = await getDb();
+    if (!db) return 0;
+    const rows = await db
+      .select({ id: emailLog.id })
+      .from(emailLog)
+      .where(and(eq(emailLog.alertSuppressed, true), gte(emailLog.createdAt, since)))
+      .limit(1000);
+    return rows.length;
+  } catch (error) {
+    console.warn("[EmailLog] Could not count suppressed alerts:", error);
+    return 0;
+  }
+}
+
 export async function updateReview(id: number, data: Partial<typeof reviews.$inferInsert>) {
   const db = requireDb(await getDb());
   await db.update(reviews).set(data).where(eq(reviews.id, id));

@@ -258,3 +258,7 @@
 - [x] Restrict the email log to admins (staff and ordinary users rejected) and cap the page size
 - [x] Fix /api/version reporting commit "unknown" in production: the deploy image re-runs `pnpm build` without .git, so the stamper now falls back to the committed SHA instead of overwriting it, with a regression test that simulates a git-less build
 - [x] Rename the /api/version SHA field to parentCommit (a commit cannot embed its own hash, so the stamped SHA is the parent of the deployed checkpoint), with a test guarding the name
+- [x] Alert the owner when a transactional email logs a transport error or falls back to log-only, reusing the existing owner-alert path
+- [x] Guard against recursion: an alert about email failure must never itself trigger an alert
+- [x] Rate-limit failure alerts to at most 1 per hour; record suppressed repeats in email_log rather than sending them
+- [x] Cover the guard, the rate limit, and suppression accounting with tests

@@ -541,6 +541,15 @@ export const emailLog = mysqlTable("email_log", {
   /** Related records, when the send belongs to one. */
   invoiceId: int("invoiceId"),
   bookingId: int("bookingId"),
+  /**
+   * True when this failure should have raised an owner alert but the hourly
+   * cap swallowed it. The cap stops a dead mailbox producing one alert per
+   * failed send; recording the suppression keeps the size of the outage
+   * countable, which the cap would otherwise hide.
+   */
+  alertSuppressed: boolean("alertSuppressed").default(false).notNull(),
+  /** Set on the failure that actually raised the owner alert — the audit trail. */
+  alertSentAt: timestamp("alertSentAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 export type EmailLogEntry = typeof emailLog.$inferSelect;
