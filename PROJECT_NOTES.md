@@ -1,5 +1,16 @@
 # Grapefruit Cleaning Co. — Build Notes (internal)
 
+## EMAIL PROVIDER SWITCH (Aug 18, 2026) — dead mailbox replaced
+- The old grapefruitclean.com Gmail mailbox is DEAD; the business mailbox is now karymeplata23@hotmail.com.
+- Code no longer assumes Gmail: server/emails.ts reads SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASSWORD
+  (legacy GMAIL_USER/GMAIL_APP_PASSWORD still honoured as fallbacks; host defaults to smtp.gmail.com).
+- DEPLOYMENT ENV VALUES NEEDED on Manus (no passwords in the repo, ever):
+  SMTP_HOST=smtp-mail.outlook.com  SMTP_PORT=587  SMTP_USER=karymeplata23@hotmail.com  SMTP_PASSWORD=<app password>
+  (Outlook personal accounts need 2FA + an app password for SMTP; plain account passwords are usually refused.)
+- ALSO DATA, NOT CODE: Admin → Settings business email (footer/contact/JSON-LD read the business_email
+  setting) and Karyme's admin login row in the users table still carry whatever address they were saved
+  with — update those in the running app, the repo cannot do it.
+
 ## ROUND 13 — TRUE ROOT CAUSE of "Unexpected token '<'" FOUND & FIXED (Jul 16 ~22:00)
 - User clarified: error appears ONLY in the Manus preview panel (dev server), not production browser tabs.
 - Repro in real browser on dev URL /en?from_webdev=1: fetch-probed all script tags → /__manus__/debug-collector.js returned
@@ -197,7 +208,7 @@ Site is PUBLISHED at grapeclean-skvabkkr.manus.space.
 - Stale vite error about AdminSettings/AdminCoupons imports in logs is old (files exist, tsc 0 errors, /admin 200).
 
 ## ROUND 2 FINAL STATE (Jul 16, 2026)
-- Emails now via Gmail SMTP (nodemailer) in server/emails.ts. Secrets set + live-verified: GMAIL_USER=grapefruit@grapefruitclean.com + GMAIL_APP_PASSWORD (app password). server/gmail.verify.test.ts PASSED against smtp.gmail.com.
+- Emails now via SMTP (nodemailer) in server/emails.ts. Originally GMAIL_USER=<the old grapefruitclean.com Gmail, now DEAD — replaced 2026-08-18 by karymeplata23@hotmail.com over Outlook SMTP, see the email-provider note at the top> + GMAIL_APP_PASSWORD (app password); server/gmail.verify.test.ts (now smtp.verify.test.ts) passed against smtp.gmail.com at the time.
 - Deposit confirmation email: triggered by Stripe webhook checkout.session.completed → finalizeBooking → sendBookingEmails (customer bilingual + owner copy to GMAIL_USER/OWNER_EMAIL).
 - Reminders: server/reminders.ts (dueReminderKind: week reminder 2-7 days out only if booked ≥7 days ahead; day reminder ≤1 day out; idempotent via bookings.weekReminderSentAt/dayReminderSentAt — migration applied). Handler POST /api/scheduled/sendReminders in server/scheduledRoutes.ts registered in _core/index.ts.
 - Heartbeat cron created: daily-booking-reminders, task_uid=jnGJSVTd5zwvu9vksDDRLm, cron "0 0 14 * * *" (14:00 UTC = 9am CDT daily).

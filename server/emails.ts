@@ -1,8 +1,9 @@
 /**
  * Bilingual transactional email content + delivery for Grapefruit Cleaning Co.
  * Emails are professionally written in EN and neutral Latin American Spanish.
- * Delivery: customer emails are sent through Gmail SMTP (nodemailer) using the
- * business Gmail account + app password (GMAIL_USER / GMAIL_APP_PASSWORD).
+ * Delivery: customer emails are sent through SMTP (nodemailer) as the business
+ * mailbox — SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASSWORD, with the legacy
+ * GMAIL_USER / GMAIL_APP_PASSWORD names still honoured for Gmail deployments.
  * Falls back to server logs when credentials are missing so booking flows
  * never fail because of email issues. Owner notifications additionally use the
  * built-in Manus notification API.
@@ -84,15 +85,36 @@ export function wrapEmailHtml(subject: string, body: string): string {
 
 let _transporter: Transporter | null = null;
 
+/**
+ * The mailbox this app sends AS — the SMTP login, the From address, and the
+ * owner-alert fallback inbox are all the same account.
+ *
+ * SMTP_USER/SMTP_PASSWORD are the generic names; GMAIL_USER/GMAIL_APP_PASSWORD
+ * remain as legacy fallbacks so an existing Gmail deployment keeps working
+ * untouched. The provider is decided by SMTP_HOST — the business inbox moved
+ * off Gmail once already (to Hotmail), and the transport must not assume.
+ */
+export function smtpUser(): string | undefined {
+  return process.env.SMTP_USER || process.env.GMAIL_USER;
+}
+
+function smtpPassword(): string | undefined {
+  return process.env.SMTP_PASSWORD || process.env.GMAIL_APP_PASSWORD;
+}
+
 function getTransporter(): Transporter | null {
-  const user = process.env.GMAIL_USER;
-  const pass = process.env.GMAIL_APP_PASSWORD;
+  const user = smtpUser();
+  const pass = smtpPassword();
   if (!user || !pass) return null;
   if (!_transporter) {
+    const host = process.env.SMTP_HOST?.trim() || "smtp.gmail.com";
+    const port = Number(process.env.SMTP_PORT) || (host === "smtp.gmail.com" ? 465 : 587);
     _transporter = nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      port: 465,
-      secure: true,
+      host,
+      port,
+      // 465 is implicit TLS; anything else (587 for Outlook/Hotmail) is
+      // STARTTLS, which nodemailer negotiates when secure is false.
+      secure: port === 465,
       auth: { user, pass },
     });
   }
@@ -106,8 +128,8 @@ export function __resetTransporter(): void {
 
 /**
  * Sends an email via Gmail SMTP. Returns true when delivered.
- * Falls back to logging when GMAIL_USER / GMAIL_APP_PASSWORD are not
- * configured so booking flows never fail because of email issues.
+ * Falls back to logging when no SMTP credentials are configured so booking
+ * flows never fail because of email issues.
  *
  * `html` overrides the generic line-styling wrapper for emails that lay
  * themselves out (see emailShell). `body` is still sent as the text part
@@ -134,7 +156,9 @@ export async function deliverEmail(
   }
   try {
     await transporter.sendMail({
-      from: `Grapefruit Cleaning Co. <${process.env.GMAIL_USER}>`,
+      // Outlook/Hotmail rejects a From that differs from the login, so the
+      // sender is always the authenticated account itself.
+      from: `Grapefruit Cleaning Co. <${smtpUser()}>`,
       to,
       subject,
       text: body,
@@ -386,9 +410,9 @@ export async function sendOwnerAlert(title: string, content: string): Promise<vo
   const ownerEmail = process.env.OWNER_EMAIL;
   if (ownerEmail) {
     await deliverEmail(ownerEmail, title, content);
-  } else if (process.env.GMAIL_USER) {
-    // Default: send the owner copy to the business Gmail inbox itself.
-    await deliverEmail(process.env.GMAIL_USER, title, content);
+  } else if (smtpUser()) {
+    // Default: send the owner copy to the business inbox itself.
+    await deliverEmail(smtpUser(), title, content);
   }
 }
 
@@ -742,8 +766,8 @@ async function notifyOwnerWithEmailCopy(note: { title: string; content: string }
   const ownerEmail = process.env.OWNER_EMAIL;
   if (ownerEmail) {
     await deliverEmail(ownerEmail, note.title, note.content);
-  } else if (process.env.GMAIL_USER) {
-    await deliverEmail(process.env.GMAIL_USER, note.title, note.content);
+  } else if (smtpUser()) {
+    await deliverEmail(smtpUser(), note.title, note.content);
   }
 }
 
@@ -1149,8 +1173,8 @@ export async function sendContactNotification(data: ContactEmailData): Promise<v
   const ownerEmail = process.env.OWNER_EMAIL;
   if (ownerEmail) {
     await deliverEmail(ownerEmail, `New contact message from ${data.name}`, contactBody);
-  } else if (process.env.GMAIL_USER) {
-    await deliverEmail(process.env.GMAIL_USER, `New contact message from ${data.name}`, contactBody);
+  } else if (smtpUser()) {
+    await deliverEmail(smtpUser(), `New contact message from ${data.name}`, contactBody);
   }
 }
 

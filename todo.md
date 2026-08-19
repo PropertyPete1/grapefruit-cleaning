@@ -95,7 +95,7 @@
 - [x] Update vitest tests for new pricing engine
 - [x] Staff role: extend user roles (admin/staff/user), staff dashboard with bookings list, calendar, schedule view
 - [x] Staff management in admin (assign staff role / link employee to user account)
-- [x] Gmail SMTP delivery via grapefruit@grapefruitclean.com app password (replace Resend approach)
+- [x] Gmail SMTP delivery via app password (replace Resend approach) — mailbox since moved to karymeplata23@hotmail.com over Outlook SMTP
 - [x] Deposit-paid confirmation email sent via Gmail (bilingual, already triggered by Stripe webhook)
 - [x] Reminder email 7 days before cleaning (only when booked ≥1 week out), bilingual
 - [x] Reminder email 1 day before cleaning, bilingual
@@ -236,6 +236,6 @@
 - [x] UI: Staff access dialog on Admin → Employees gains an access-level selector (Admin / Staff / No access)
 - [x] Employee card shows access level (Admin vs Staff) when connected
 - [x] Dialog copy updated to explain both roles
-- [x] Promote Karyme (grapefruit@grapefruitclean.com) to Admin — role now 'admin' in users table, card shows "Admin — grapefruit"
+- [x] Promote Karyme (now karymeplata23@hotmail.com; formerly the dead grapefruitclean.com address) to Admin — role now 'admin' in users table, card shows "Admin — grapefruit"
 - [x] Tests: vitest coverage for promote/demote/last-admin guard/self-demotion guard (9 new tests, 144 total passing)
 - [x] TS check + full suite green; single checkpoint; GitHub push
