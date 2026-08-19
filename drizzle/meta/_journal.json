@@ -127,6 +127,13 @@
       "when": 1787087850786,
       "tag": "0017_left_doctor_strange",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "5",
+      "when": 1787101286234,
+      "tag": "0018_nebulous_squirrel_girl",
+      "breakpoints": true
     }
   ]
 }

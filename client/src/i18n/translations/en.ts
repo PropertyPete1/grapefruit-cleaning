@@ -438,6 +438,11 @@ export const en = {
     depositDue: "Deposit due today",
     depositNote: "Your 20% deposit secures your slot and is applied to your final total. Fully refundable up to 24 hours before your appointment.",
     payDeposit: "Pay Deposit & Confirm",
+    confirmBooking: "Confirm Booking",
+    noDepositNote:
+      "No deposit is needed to book — your time is reserved the moment you confirm, and your total is due after your cleaning is complete.",
+    paymentLabel: "Payment",
+    dueAtCompletion: "Due at completion",
     processing: "Processing…",
     confirmedTitle: "You're booked!",
     confirmedSubtitle: "Your cleaning is confirmed. A confirmation email is on its way.",

@@ -149,6 +149,9 @@ export async function deliverEmail(
 }
 
 export function buildCustomerConfirmation(data: BookingEmailData): { subject: string; body: string } {
+  // Zero-deposit mode: nothing was paid today, so there is no "deposit paid"
+  // line to show — the payment story is simply "due at completion".
+  const noDeposit = data.deposit <= 0;
   if (data.locale === "es") {
     return {
       subject: `Su limpieza está confirmada — Reserva ${data.reference} | Grapefruit Cleaning Co.`,
@@ -168,8 +171,12 @@ export function buildCustomerConfirmation(data: BookingEmailData): { subject: st
         ``,
         `RESUMEN DE PAGO`,
         `Total estimado: ${fmtUsd(data.total)}`,
-        `Depósito pagado hoy: ${fmtUsd(data.deposit)}`,
-        `Saldo restante (se paga al completar el servicio): ${fmtUsd(data.total - data.deposit)}`,
+        ...(noDeposit
+          ? [`No se requiere depósito — el pago se realiza al completar el servicio.`]
+          : [
+              `Depósito pagado hoy: ${fmtUsd(data.deposit)}`,
+              `Saldo restante (se paga al completar el servicio): ${fmtUsd(data.total - data.deposit)}`,
+            ]),
         ``,
         `QUÉ SIGUE`,
         `• Le enviaremos un recordatorio 24 horas antes de su cita.`,
@@ -205,8 +212,12 @@ export function buildCustomerConfirmation(data: BookingEmailData): { subject: st
       ``,
       `PAYMENT SUMMARY`,
       `Estimated total: ${fmtUsd(data.total)}`,
-      `Deposit paid today: ${fmtUsd(data.deposit)}`,
-      `Remaining balance (due on completion): ${fmtUsd(data.total - data.deposit)}`,
+      ...(noDeposit
+        ? [`No deposit required — payment is due at completion.`]
+        : [
+            `Deposit paid today: ${fmtUsd(data.deposit)}`,
+            `Remaining balance (due on completion): ${fmtUsd(data.total - data.deposit)}`,
+          ]),
       ``,
       `WHAT'S NEXT`,
       `• We'll send you a reminder 24 hours before your appointment.`,
@@ -304,8 +315,9 @@ export function buildReminderEmail(
 }
 
 export function buildOwnerNotification(data: BookingEmailData): { title: string; content: string } {
+  const noDeposit = data.deposit <= 0;
   const headline = data.completedLink
-    ? `Deposit link completed ${data.reference} — ${data.serviceName} on ${data.date} at ${data.time}`
+    ? `${noDeposit ? "Booking link completed" : "Deposit link completed"} ${data.reference} — ${data.serviceName} on ${data.date} at ${data.time}`
     : `New booking ${data.reference} — ${data.serviceName} on ${data.date} at ${data.time}`;
   return {
     title: `${data.slotConflict ? "⚠️ SCHEDULING CONFLICT — " : ""}${headline}`,
@@ -318,14 +330,18 @@ export function buildOwnerNotification(data: BookingEmailData): { title: string;
         : []),
       ...(data.completedLink
         ? [
-            `${data.customerName} finished the booking link you sent and paid their deposit.`,
+            noDeposit
+              ? `${data.customerName} finished the booking link you sent and confirmed their booking (no deposit required).`
+              : `${data.customerName} finished the booking link you sent and paid their deposit.`,
             ...(data.completedLink.customerChose.length > 0
               ? [`They chose: ${data.completedLink.customerChose.join(", ")}.`]
               : []),
             ``,
           ]
         : []),
-      `A new booking was confirmed with a paid deposit.`,
+      noDeposit
+        ? `A new booking was confirmed. No deposit was required — the full amount is due at completion.`
+        : `A new booking was confirmed with a paid deposit.`,
       ``,
       `Reference: ${data.reference}`,
       `Service: ${data.serviceName}`,
@@ -341,7 +357,9 @@ export function buildOwnerNotification(data: BookingEmailData): { title: string;
       // on the crew's job card.
       ...(data.notes ? [``, `CUSTOMER NOTES`, data.notes] : []),
       ``,
-      `Total: ${fmtUsd(data.total)} | Deposit paid: ${fmtUsd(data.deposit)} | Balance due: ${fmtUsd(data.total - data.deposit)}`,
+      noDeposit
+        ? `Total: ${fmtUsd(data.total)} | No deposit — full amount due at completion`
+        : `Total: ${fmtUsd(data.total)} | Deposit paid: ${fmtUsd(data.deposit)} | Balance due: ${fmtUsd(data.total - data.deposit)}`,
     ]
       .filter(line => line !== undefined)
       .join("\n"),
@@ -789,6 +807,171 @@ export async function sendJobCompleteEmail(data: JobStatusEmailData): Promise<bo
   return deliverEmail(data.customerEmail, email.subject, email.body, email.html);
 }
 
+// ---------- Tip request (the settled-booking thank-you) ----------
+
+export interface TipEmailData {
+  reference: string;
+  serviceName: string;
+  /** Date the cleaning was performed (YYYY-MM-DD). */
+  date: string;
+  customerName: string;
+  customerEmail: string;
+  locale: "en" | "es";
+  bizPhone?: string;
+  /** Job total in whole dollars — what the presets are computed from. */
+  total: number;
+  /** Preset options, amounts computed SERVER-side in whole dollars. */
+  presets: { percent: number; amount: number }[];
+  /** The tip page (/pay/tip/:token). */
+  tipUrl: string;
+  /** Public review-form URL; omitted when no public origin is known. */
+  reviewUrl?: string;
+}
+
+/**
+ * The thank-you for a completed, fully settled booking — with a warm,
+ * no-pressure tip ask for the crew. This email replaces the plain
+ * "cleaning complete" note: every settled booking gets exactly one of the two,
+ * and from now on it is this one (see claimTipRequestEmail).
+ *
+ * The buttons carry preset percentages in the URL only as a page hint; every
+ * dollar figure is recomputed server-side when the customer actually pays.
+ */
+export function buildTipRequestEmail(data: TipEmailData): {
+  subject: string;
+  body: string;
+  html: string;
+} {
+  const spanish = data.locale === "es";
+  const presetUrl = (percent: number) => `${data.tipUrl}?p=${percent}`;
+  const [first, ...rest] = data.presets;
+  const presetLabel = (p: { percent: number; amount: number }) =>
+    spanish ? `Dejar ${fmtUsd(p.amount)} (${p.percent}%)` : `Tip ${fmtUsd(p.amount)} (${p.percent}%)`;
+  const tipCallout = first
+    ? {
+        text: spanish
+          ? "Si desea dejarle una propina al equipo, aquí puede hacerlo — 100% va para ellos. Completamente opcional, siempre apreciado."
+          : "If you'd like to leave the crew a tip, you can do it here — 100% goes to them. Completely optional, always appreciated.",
+        ctaLabel: presetLabel(first),
+        ctaUrl: presetUrl(first.percent),
+        extraCtas: [
+          ...rest.map(p => ({ label: presetLabel(p), url: presetUrl(p.percent) })),
+          {
+            label: spanish ? "Otra cantidad" : "Choose another amount",
+            url: `${data.tipUrl}?p=custom`,
+          },
+        ],
+      }
+    : undefined;
+  const reviewCallout = data.reviewUrl
+    ? {
+        text: spanish
+          ? "¿Nos ayuda con unas palabras? Su reseña le dice a otras familias qué esperar."
+          : "Would you share a few words? Your review tells other families what to expect.",
+        ctaLabel: spanish ? "Dejar una reseña" : "Leave a review",
+        ctaUrl: data.reviewUrl,
+      }
+    : undefined;
+
+  const email: BrandedEmail = spanish
+    ? {
+        preheader: `Su limpieza está completa y pagada — reserva ${data.reference}. ¡Gracias!`,
+        eyebrow: "Servicio completado",
+        headline: "Su limpieza está completa — ¡gracias! 🍊",
+        intro: [
+          `Hola ${data.customerName},`,
+          `Terminamos su limpieza y su cuenta está al día — no queda ningún saldo por pagar. Gracias por confiar su hogar a Grapefruit Cleaning Co.`,
+        ],
+        detailsTitle: "Resumen del servicio",
+        details: [
+          { label: "Servicio", value: data.serviceName },
+          { label: "Fecha", value: data.date },
+          { label: "Referencia", value: data.reference },
+        ],
+        callout: tipCallout,
+        secondaryCallout: reviewCallout,
+        outro: [
+          data.bizPhone
+            ? `¿Algo no quedó como esperaba? Llámenos al ${data.bizPhone} o responda a este correo y lo resolvemos.`
+            : `¿Algo no quedó como esperaba? Responda a este correo y lo resolvemos.`,
+        ],
+        signOff: ["Con aprecio,", "El equipo de Grapefruit Cleaning Co."],
+        footerNote: data.bizPhone
+          ? `Grapefruit Cleaning Co. · ${data.bizPhone}`
+          : `Grapefruit Cleaning Co.`,
+      }
+    : {
+        preheader: `Your cleaning is complete and paid in full — booking ${data.reference}. Thank you!`,
+        eyebrow: "Service complete",
+        headline: "Your cleaning is complete — thank you! 🍊",
+        intro: [
+          `Hi ${data.customerName},`,
+          `We've finished your cleaning and you're all settled up — there's no balance left to pay. Thank you for trusting your home to Grapefruit Cleaning Co.`,
+        ],
+        detailsTitle: "Service summary",
+        details: [
+          { label: "Service", value: data.serviceName },
+          { label: "Date", value: data.date },
+          { label: "Reference", value: data.reference },
+        ],
+        callout: tipCallout,
+        secondaryCallout: reviewCallout,
+        outro: [
+          data.bizPhone
+            ? `Anything not quite right? Call us at ${data.bizPhone} or reply to this email and we'll make it right.`
+            : `Anything not quite right? Reply to this email and we'll make it right.`,
+        ],
+        signOff: ["Warmly,", "The Grapefruit Cleaning Co. Team"],
+        footerNote: data.bizPhone
+          ? `Grapefruit Cleaning Co. · ${data.bizPhone}`
+          : `Grapefruit Cleaning Co.`,
+      };
+
+  return {
+    subject: spanish
+      ? `Su limpieza está completa — ¡gracias! | Grapefruit Cleaning Co.`
+      : `Your cleaning is complete — thank you | Grapefruit Cleaning Co.`,
+    body: renderBrandedEmailText(email),
+    html: renderBrandedEmail(email),
+  };
+}
+
+/** Sends the tip-request thank-you. Returns true when delivered. */
+export async function sendTipRequestEmail(data: TipEmailData): Promise<boolean> {
+  const email = buildTipRequestEmail(data);
+  return deliverEmail(data.customerEmail, email.subject, email.body, email.html);
+}
+
+export interface TipPaidData {
+  reference: string;
+  customerName: string;
+  serviceName: string;
+  date: string;
+  /** The tip, in whole dollars. */
+  amount: number;
+}
+
+/** The cheerful owner note for a tip landing. */
+export function buildTipReceivedNotification(data: TipPaidData): { title: string; content: string } {
+  return {
+    title: `🎉 Tip received — ${fmtUsd(data.amount)} from ${data.customerName} (booking ${data.reference})`,
+    content: [
+      `Great news — ${data.customerName} left the crew a ${fmtUsd(data.amount)} tip!`,
+      ``,
+      `Reference: ${data.reference}`,
+      `Service: ${data.serviceName}`,
+      `Service date: ${data.date}`,
+      ``,
+      `It's recorded in Admin → Payments as a tip. Pass it along to the crew — happy customers say it best.`,
+    ].join("\n"),
+  };
+}
+
+/** Notifies the owner that a tip was paid (notification + email copy). */
+export async function sendTipReceivedNotification(data: TipPaidData): Promise<void> {
+  await notifyOwnerWithEmailCopy(buildTipReceivedNotification(data));
+}
+
 export interface ContactEmailData {
   name: string;
   email: string;
@@ -893,6 +1076,10 @@ export function buildDepositLinkEmail(data: DepositLinkEmailData): {
 } {
   const spanish = data.locale === "es";
   const priced = data.basePrice != null && data.deposit != null;
+  // Zero-deposit mode: the link ends in a confirm button, not a pay button, so
+  // every "pay your deposit" phrase becomes "confirm your booking" and no
+  // deposit row is promised.
+  const zeroDeposit = priced && data.deposit === 0;
   const scheduled = Boolean(data.date && data.time);
   // Rows render only for the facts the owner actually locked; what is missing
   // is exactly what the page will ask for, and promising "$0" or "date TBD"
@@ -910,7 +1097,9 @@ export function buildDepositLinkEmail(data: DepositLinkEmailData): {
         ...(priced
           ? [
               { label: "Precio base", value: fmtUsd(data.basePrice!) },
-              { label: "Depósito para confirmar", value: fmtUsd(data.deposit!) },
+              ...(zeroDeposit
+                ? [{ label: "Depósito", value: "No se requiere" }]
+                : [{ label: "Depósito para confirmar", value: fmtUsd(data.deposit!) }]),
             ]
           : []),
         { label: "Referencia", value: data.reference },
@@ -927,7 +1116,9 @@ export function buildDepositLinkEmail(data: DepositLinkEmailData): {
         ...(priced
           ? [
               { label: "Base price", value: fmtUsd(data.basePrice!) },
-              { label: "Deposit to confirm", value: fmtUsd(data.deposit!) },
+              ...(zeroDeposit
+                ? [{ label: "Deposit", value: "None required" }]
+                : [{ label: "Deposit to confirm", value: fmtUsd(data.deposit!) }]),
             ]
           : []),
         { label: "Reference", value: data.reference },
@@ -936,15 +1127,21 @@ export function buildDepositLinkEmail(data: DepositLinkEmailData): {
   const email: BrandedEmail = spanish
     ? {
         preheader: scheduled
-          ? `Su horario está apartado — complete su reserva y pague su depósito.`
-          : `Complete su reserva en línea — elija lo que falta y pague su depósito.`,
+          ? zeroDeposit
+            ? `Su horario está apartado — complete y confirme su reserva.`
+            : `Su horario está apartado — complete su reserva y pague su depósito.`
+          : zeroDeposit
+            ? `Complete su reserva en línea — elija lo que falta y confirme.`
+            : `Complete su reserva en línea — elija lo que falta y pague su depósito.`,
         eyebrow: "Su reserva está lista",
         headline: scheduled ? "¡Su horario está apartado! 🍊" : "¡Empecemos su reserva! 🍊",
         intro: [
           `Hola ${data.customerName},`,
           `Gracias por comunicarse con nosotros. Preparamos su reserva con lo que conversamos.`,
           scheduled
-            ? `Solo falta un paso: abra su enlace, agregue los extras que desee y pague su depósito para confirmar.`
+            ? zeroDeposit
+              ? `Solo falta un paso: abra su enlace, agregue los extras que desee y confirme su reserva. No se requiere depósito — el pago se realiza al completar el servicio.`
+              : `Solo falta un paso: abra su enlace, agregue los extras que desee y pague su depósito para confirmar.`
             : `Abra su enlace para completar lo que falta — toma un par de minutos y el precio se muestra al instante.`,
         ],
         detailsTitle: "Su reserva",
@@ -953,13 +1150,21 @@ export function buildDepositLinkEmail(data: DepositLinkEmailData): {
           text: priced
             ? "Elija sus extras y vea su precio actualizarse al instante. Usted decide qué incluir — nosotros nos encargamos del resto."
             : "Complete los detalles a su ritmo y vea su precio en vivo antes de pagar. Sin sorpresas.",
-          ctaLabel: scheduled ? "Completar y pagar depósito" : "Completar mi reserva",
+          ctaLabel: zeroDeposit
+            ? scheduled
+              ? "Completar y confirmar"
+              : "Completar mi reserva"
+            : scheduled
+              ? "Completar y pagar depósito"
+              : "Completar mi reserva",
           ctaUrl: data.payUrl,
         },
         outro: [
-          priced
-            ? `El precio base cubre su limpieza tal como la conversamos. Si agrega extras, el total y el depósito se actualizan antes de pagar — sin sorpresas.`
-            : `Su precio se calcula mientras elige, y el total y el depósito se muestran antes de pagar — sin sorpresas.`,
+          zeroDeposit
+            ? `No se requiere depósito para confirmar. El total se paga al completar el servicio — sin sorpresas.`
+            : priced
+              ? `El precio base cubre su limpieza tal como la conversamos. Si agrega extras, el total y el depósito se actualizan antes de pagar — sin sorpresas.`
+              : `Su precio se calcula mientras elige, y el total y el depósito se muestran antes de pagar — sin sorpresas.`,
           scheduled
             ? `Su horario está apartado hasta el ${data.expiresOn}. Después de esa fecha podríamos ofrecerlo a otra persona.`
             : `Su enlace está disponible hasta el ${data.expiresOn}. Si expira, llámenos y le enviamos uno nuevo.`,
@@ -974,15 +1179,21 @@ export function buildDepositLinkEmail(data: DepositLinkEmailData): {
       }
     : {
         preheader: scheduled
-          ? `Your time is held — finish your booking and pay your deposit.`
-          : `Finish your booking online — choose what's missing and pay your deposit.`,
+          ? zeroDeposit
+            ? `Your time is held — finish and confirm your booking.`
+            : `Your time is held — finish your booking and pay your deposit.`
+          : zeroDeposit
+            ? `Finish your booking online — choose what's missing and confirm.`
+            : `Finish your booking online — choose what's missing and pay your deposit.`,
         eyebrow: "Your booking is ready",
         headline: scheduled ? "Your time is held! 🍊" : "Let's get you booked! 🍊",
         intro: [
           `Hi ${data.customerName},`,
           `Thanks for getting in touch. We've set up your booking from what we discussed.`,
           scheduled
-            ? `One step left: open your link, add any extras you'd like, and pay your deposit to confirm.`
+            ? zeroDeposit
+              ? `One step left: open your link, add any extras you'd like, and confirm your booking. No deposit is required — payment is due at completion.`
+              : `One step left: open your link, add any extras you'd like, and pay your deposit to confirm.`
             : `Open your link to fill in the rest — it takes a couple of minutes, and your price shows up as you go.`,
         ],
         detailsTitle: "Your booking",
@@ -991,13 +1202,21 @@ export function buildDepositLinkEmail(data: DepositLinkEmailData): {
           text: priced
             ? "Pick your extras and watch your price update instantly. You decide what's included — we'll handle the rest."
             : "Finish the details at your own pace and see your live price before you pay. No surprises.",
-          ctaLabel: scheduled ? "Finish & pay deposit" : "Finish my booking",
+          ctaLabel: zeroDeposit
+            ? scheduled
+              ? "Finish & confirm"
+              : "Finish my booking"
+            : scheduled
+              ? "Finish & pay deposit"
+              : "Finish my booking",
           ctaUrl: data.payUrl,
         },
         outro: [
-          priced
-            ? `The base price covers your cleaning exactly as we discussed. If you add extras, your total and deposit update before you pay — no surprises.`
-            : `Your price is worked out as you choose, and the total and deposit show before you pay — no surprises.`,
+          zeroDeposit
+            ? `No deposit is needed to confirm. Your total is due when the cleaning is complete — no surprises.`
+            : priced
+              ? `The base price covers your cleaning exactly as we discussed. If you add extras, your total and deposit update before you pay — no surprises.`
+              : `Your price is worked out as you choose, and the total and deposit show before you pay — no surprises.`,
           scheduled
             ? `We're holding your time through ${data.expiresOn}. After that we may need to offer it to someone else.`
             : `Your link is good through ${data.expiresOn}. If it expires, just call us and we'll send a fresh one.`,
@@ -1012,9 +1231,13 @@ export function buildDepositLinkEmail(data: DepositLinkEmailData): {
       };
 
   return {
-    subject: spanish
-      ? `Su reserva está lista — confirme con su depósito | Grapefruit Cleaning Co.`
-      : `Your booking is ready — confirm with your deposit | Grapefruit Cleaning Co.`,
+    subject: zeroDeposit
+      ? spanish
+        ? `Su reserva está lista — confírmela en línea | Grapefruit Cleaning Co.`
+        : `Your booking is ready — confirm it online | Grapefruit Cleaning Co.`
+      : spanish
+        ? `Su reserva está lista — confirme con su depósito | Grapefruit Cleaning Co.`
+        : `Your booking is ready — confirm with your deposit | Grapefruit Cleaning Co.`,
     body: renderBrandedEmailText(email),
     html: renderBrandedEmail(email),
   };

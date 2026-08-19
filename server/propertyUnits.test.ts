@@ -357,6 +357,95 @@ describe("Travis County via the US Census geocoder — address-verify-only", () 
   });
 });
 
+describe("Hays County — the second Census verify-only county", () => {
+  /**
+   * Fixture mirrors the real geocoder response shape (see the Travis fixtures
+   * above), with Hays County's own geography codes (GEOID 48209).
+   */
+  const haysMatch = (overrides: Record<string, unknown> = {}) => ({
+    tigerLine: { side: "L", tigerLineId: "63701277" },
+    geographies: {
+      Counties: [
+        {
+          GEOID: "48209",
+          STATE: "48",
+          BASENAME: "Hays",
+          NAME: "Hays County",
+          COUNTY: "209",
+          FUNCSTAT: "A",
+          MTFCC: "G4020",
+        },
+      ],
+    },
+    coordinates: { x: -97.9436, y: 29.8833 },
+    addressComponents: {
+      zip: "78666",
+      streetName: "LBJ",
+      preType: "",
+      city: "SAN MARCOS",
+      preDirection: "N",
+      suffixDirection: "",
+      fromAddress: "100",
+      state: "TX",
+      suffixType: "DR",
+      toAddress: "198",
+      suffixQualifier: "",
+      preQualifier: "",
+    },
+    matchedAddress: "100 N LBJ DR, SAN MARCOS, TX, 78666",
+    ...overrides,
+  });
+  const haysResponse = (matches: unknown[]) => ({
+    result: {
+      input: {
+        benchmark: { id: "4", benchmarkName: "Public_AR_Current", isDefault: true },
+        vintage: { id: "4", vintageName: "Current_Current", isDefault: true },
+      },
+      addressMatches: matches,
+    },
+  });
+
+  it("its cities and ZIPs detect to Hays, through the adapter table", () => {
+    expect(detectCounties("Kyle", "78640")).toEqual(["hays"]);
+    expect(detectCounties("Buda", "78610")).toEqual(["hays"]);
+    expect(detectCounties("Dripping Springs", "78620")).toEqual(["hays"]);
+    expect(detectCounties("San Marcos", undefined)).toEqual(["hays"]);
+    // 78666 straddles the Guadalupe line: Hays leads because the city agrees,
+    // and the miss in one county falls through to the other.
+    expect(detectCounties("San Marcos", "78666")[0]).toBe("hays");
+    expect(detectCounties("San Marcos", "78666")).toContain("guadalupe");
+    expect(COUNTY_ADAPTERS.hays).toBeTypeOf("function");
+  });
+
+  it("verifies a San Marcos address against the fixture, sqft staying customer-entered", async () => {
+    stubFetch(haysResponse([haysMatch()]));
+    const result = await censusAddressVerify("hays", "100 N LBJ Dr", "78666", "San Marcos");
+    expect(result).toMatchObject({
+      verified: false,
+      addressVerified: true,
+      reason: "address_verified",
+      source: "census_geocoder",
+      county: "Hays",
+      matchedAddress: "100 N LBJ DR, SAN MARCOS, TX, 78666",
+    });
+    expect(result.sqft).toBeUndefined();
+  });
+
+  it("refuses a plausible match the geocoder places outside Hays", async () => {
+    stubFetch(
+      haysResponse([
+        haysMatch({
+          geographies: {
+            Counties: [{ GEOID: "48453", BASENAME: "Travis", NAME: "Travis County" }],
+          },
+        }),
+      ])
+    );
+    const result = await censusAddressVerify("hays", "100 N LBJ Dr", "78666");
+    expect(result).toMatchObject({ verified: false, reason: "not_found" });
+  });
+});
+
 describe("the plausibility guard", () => {
   it("accepts a record up to 4x the entered figure", () => {
     expect(plausibleVerifiedSqft(800, 3200)).toBe(true);

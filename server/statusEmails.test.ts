@@ -19,6 +19,7 @@ const mockGetSetting = vi.fn();
 const mockUpdateBooking = vi.fn();
 const mockClaimStarted = vi.fn();
 const mockClaimCompleted = vi.fn();
+const mockClaimTip = vi.fn();
 const mockCreateInvoice = vi.fn();
 const mockGetBalanceInvoiceForBooking = vi.fn();
 const mockSendMail = vi.fn();
@@ -31,6 +32,8 @@ vi.mock("./db", () => ({
   updateBooking: (...args: unknown[]) => mockUpdateBooking(...args),
   claimJobStartedEmail: (...args: unknown[]) => mockClaimStarted(...args),
   claimJobCompletedEmail: (...args: unknown[]) => mockClaimCompleted(...args),
+  claimTipRequestEmail: (...args: unknown[]) => mockClaimTip(...args),
+  getConnectedPropertyById: vi.fn().mockResolvedValue(undefined),
   createInvoice: (...args: unknown[]) => mockCreateInvoice(...args),
   getBalanceInvoiceForBooking: (...args: unknown[]) => mockGetBalanceInvoiceForBooking(...args),
   getInvoiceById: vi.fn().mockResolvedValue(undefined),
@@ -123,6 +126,7 @@ beforeEach(() => {
   // Default: this caller wins the claim. Repeat-send tests override it.
   mockClaimStarted.mockReset().mockResolvedValue(true);
   mockClaimCompleted.mockReset().mockResolvedValue(true);
+  mockClaimTip.mockReset().mockResolvedValue(true);
   // The booking as it stands *before* the status change under test.
   mockGetBookingById.mockReset().mockResolvedValue({ ...BOOKING, status: "confirmed" });
 });
@@ -236,6 +240,8 @@ describe("an email failure never fails the status change", () => {
 describe("the completion email goes only to jobs with nothing left to collect", () => {
   it("thanks the customer when the deposit already covered the total", async () => {
     // Deposit equals total, so issueBalanceForCompletedBooking settles at zero.
+    // The thank-you is the tip-request email now — same moment, same claim
+    // discipline, with the tip ask riding in it.
     mockGetBookingById.mockResolvedValue({
       ...BOOKING,
       status: "completed",
@@ -248,6 +254,7 @@ describe("the completion email goes only to jobs with nothing left to collect", 
     expect(email!.to).toBe("ana@example.com");
     expect(email!.subject).toContain("complete");
     expect(email!.subject).toContain("thank you");
+    expect(email!.html).toContain("/pay/tip/");
     expect(mockCreateInvoice).toHaveBeenCalledWith(expect.objectContaining({ amount: 0, status: "paid" }));
   });
 
@@ -273,6 +280,7 @@ describe("the completion email goes only to jobs with nothing left to collect", 
     );
     expect(sentEmails().some(e => e.subject.includes("thank you"))).toBe(false);
     expect(mockClaimCompleted).not.toHaveBeenCalled();
+    expect(mockClaimTip).not.toHaveBeenCalled();
   });
 
   it("stays quiet on a re-completion, twice over", async () => {
@@ -288,7 +296,7 @@ describe("the completion email goes only to jobs with nothing left to collect", 
     // The invoice already exists, so nothing is re-issued; and even if it were,
     // the claim would refuse.
     mockGetBalanceInvoiceForBooking.mockResolvedValue({ id: 501, amount: 0 });
-    mockClaimCompleted.mockResolvedValue(false);
+    mockClaimTip.mockResolvedValue(false);
     await issueBalanceSafely(42, ORIGIN);
     expect(sentEmails()).toHaveLength(1);
   });

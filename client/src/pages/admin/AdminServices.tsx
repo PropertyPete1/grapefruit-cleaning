@@ -495,9 +495,10 @@ export default function AdminServices() {
   const problems = TIERED.flatMap(svc => tierProblems(draft.tiers[svc], svc));
 
   const handleSave = () => {
-    // Basic sanity: deposit rate 1–100%.
-    if (draft.depositRate <= 0 || draft.depositRate > 1) {
-      toast.error("Deposit rate must be between 1% and 100%");
+    // Basic sanity: deposit rate 0–100%. Zero is a real mode — no deposit is
+    // collected and bookings confirm without a Stripe step.
+    if (draft.depositRate < 0 || draft.depositRate > 1) {
+      toast.error("Deposit rate must be between 0% and 100%");
       return;
     }
     if (problems.length > 0) {
@@ -894,7 +895,10 @@ export default function AdminServices() {
           <div className="rounded-2xl bg-card shadow-sm ring-1 ring-border">
             <div className="border-b border-border px-6 py-4">
               <h2 className="font-semibold text-foreground">Booking deposit</h2>
-              <p className="mt-0.5 text-xs text-muted-foreground">Percentage of the estimated total collected at booking via Stripe.</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Percentage of the estimated total collected at booking via Stripe. Set to 0% to turn deposits off —
+                bookings then confirm without payment and the full amount is billed at completion.
+              </p>
             </div>
             <div className="flex items-center justify-between px-6 py-3 text-sm">
               <span className="font-medium text-foreground">Deposit rate</span>

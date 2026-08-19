@@ -35,6 +35,7 @@ import { balanceLinkStatus } from "../balanceRules";
 import { buildStaffInviteEmail, deliverEmail, sendDepositLinkEmail, sendPropertyConnectedEmail } from "../emails";
 import { loadDurationConfig, loadSchedulingRules, occupiedIntervals, SERVICE_NAMES, withDurationHours } from "./booking";
 import { sendJobStartedEmailSafely } from "../statusEmails";
+import { sendTipRequestEmailSafely } from "../tip";
 import { storagePut } from "../storage";
 import { getStripe } from "../stripe";
 import { protectedProcedure, router } from "../_core/trpc";
@@ -801,7 +802,7 @@ export const adminRouter = router({
     }),
   updateInvoiceStatus: adminProcedure
     .input(z.object({ id: z.number().int(), status: z.enum(["draft", "sent", "paid", "overdue", "void"]) }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const invoice = await db.getInvoiceById(input.id);
       await db.updateInvoice(input.id, {
         status: input.status,
@@ -819,6 +820,11 @@ export const adminRouter = router({
         } catch (error) {
           console.warn(`[Balance] Could not expire session for invoice ${input.id}:`, error);
         }
+      }
+      // Marking a balance paid by hand (collected in person, say) settles the
+      // customer — the thank-you with the tip ask goes out now, claimed once.
+      if (input.status === "paid" && invoice?.kind === "balance" && invoice.bookingId) {
+        await sendTipRequestEmailSafely(invoice.bookingId, originFromRequest(ctx.req));
       }
       return { success: true } as const;
     }),

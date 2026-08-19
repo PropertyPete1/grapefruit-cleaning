@@ -124,6 +124,27 @@ export const bookings = mysqlTable("bookings", {
   /** Timestamp when the standalone "cleaning complete" thank-you was sent (null = not sent yet). */
   completedEmailSentAt: timestamp("completedEmailSentAt"),
   /**
+   * Secret token behind the tip page (/pay/tip/:token), minted when the
+   * settled-and-complete thank-you goes out. Same bearer-token shape as the
+   * deposit and balance links; the page computes every dollar server-side.
+   */
+  tipToken: varchar("tipToken", { length: 64 }),
+  /**
+   * When the tip-request thank-you was sent (null = not sent yet). This is the
+   * once-per-booking claim for that email, exactly like startedEmailSentAt —
+   * and the claim also requires completedEmailSentAt to be unset, so a booking
+   * gets the tip email OR the plain thank-you, never both.
+   */
+  tipEmailSentAt: timestamp("tipEmailSentAt"),
+  /** When a tip payment landed (null = none). The claim against double-recording a redelivered webhook. */
+  tipPaidAt: timestamp("tipPaidAt"),
+  /** The tip actually paid, in whole dollars. */
+  tipAmount: int("tipAmount"),
+  /** Payment intent that paid the tip — how a redelivered event is told from a genuine second payment. */
+  tipStripePaymentIntentId: varchar("tipStripePaymentIntentId", { length: 255 }),
+  /** Set when the customer tapped "no tip, just say thanks" — the page stops asking. */
+  tipDeclinedAt: timestamp("tipDeclinedAt"),
+  /**
    * Hours the crew is expected to be on site, pinned when the booking was made.
    *
    * Stored rather than recomputed so that editing the duration ladder later
@@ -386,7 +407,7 @@ export const payments = mysqlTable("payments", {
   invoiceId: int("invoiceId"),
   customerId: int("customerId"),
   amount: int("amount").notNull(),
-  kind: mysqlEnum("kind", ["deposit", "balance", "full", "refund"]).default("deposit").notNull(),
+  kind: mysqlEnum("kind", ["deposit", "balance", "full", "refund", "tip"]).default("deposit").notNull(),
   method: varchar("method", { length: 40 }).default("card"),
   stripePaymentIntentId: varchar("stripePaymentIntentId", { length: 255 }),
   status: mysqlEnum("status", ["pending", "succeeded", "failed", "refunded"]).default("pending").notNull(),

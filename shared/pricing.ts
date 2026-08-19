@@ -131,8 +131,16 @@ export function applyCouponToTotal(
   return { total: Math.max(1, total - discountApplied), discountApplied };
 }
 
-/** The deposit owed on a total, in whole dollars — never less than $1. */
+/**
+ * The deposit owed on a total, in whole dollars.
+ *
+ * A positive rate never charges less than $1 (Stripe cannot mint a $0
+ * session). A rate of 0 is a real mode, not a degenerate rate: no deposit is
+ * owed, checkout skips Stripe, and the booking confirms on submit — so 0 must
+ * come back as 0, never rounded up to a dollar.
+ */
 export function depositFor(total: number, depositRate: number): number {
+  if (depositRate <= 0) return 0;
   return Math.max(1, Math.round(total * depositRate));
 }
 
@@ -283,7 +291,9 @@ const pricingConfigSchema = z.object({
     biweekly: z.number().min(0).max(0.95),
     monthly: z.number().min(0).max(0.95),
   }),
-  depositRate: z.number().min(0.01).max(1),
+  // 0 is deliberate: it turns deposits off entirely (bookings confirm without
+  // payment). The dial the owner can turn back up later.
+  depositRate: z.number().min(0).max(1),
 });
 
 // ---------------------------------------------------------------------------

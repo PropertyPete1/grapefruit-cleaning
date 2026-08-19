@@ -26,6 +26,7 @@ import Terms from "./pages/Terms";
 import NotFound from "./pages/NotFound";
 import NoAccess from "./pages/NoAccess";
 import PayDeposit from "./pages/PayDeposit";
+import PayTip from "./pages/PayTip";
 import AdminRoutes from "./pages/admin/AdminRoutes";
 import StaffRoutes from "./pages/staff/StaffRoutes";
 
@@ -107,6 +108,7 @@ function Router() {
         booking itself — whichever one the owner took the call in.
       */}
       <Route path="/pay/deposit/:token" component={PayDeposit} />
+      <Route path="/pay/tip/:token" component={PayTip} />
       <Route path="/admin/no-access" component={NoAccess} />
       <Route path="/admin/*?" component={AdminRoutes} />
       <Route path="/staff/*?" component={StaffRoutes} />
