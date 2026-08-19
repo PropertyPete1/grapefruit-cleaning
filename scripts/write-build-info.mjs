@@ -10,12 +10,13 @@
  * Run by `pnpm build:info`, which `pnpm build` invokes first. Also run before
  * checkpointing so the committed value matches the commit being deployed.
  *
- * Chicken-and-egg, stated honestly: this file records the commit that is
- * CURRENT when it runs, then becomes part of the NEXT commit. So the recorded
- * SHA is the parent of the deployed commit unless it is refreshed and amended.
- * We therefore also record the checkpoint-time HEAD as `builtFrom`, and treat
- * `/api/version` as answering "which build am I running", verified against the
- * deploy log, rather than pretending to a self-referential hash.
+ * Chicken-and-egg, stated honestly: a commit cannot contain its own hash. This
+ * runs BEFORE the checkpoint commit is created, so the SHA it records is the
+ * PARENT of the commit that ships. `/api/version` therefore reports it as
+ * `parentCommit` — the last commit whose code is fully in this build — rather
+ * than pretending to a self-referential hash. Two consecutive deploys always
+ * differ, so it still identifies a build exactly; it just names it by its
+ * predecessor.
  */
 import { execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -58,6 +59,10 @@ const contents = `/**
  * GENERATED FILE — do not edit by hand.
  * Written by scripts/write-build-info.mjs during \`pnpm build\`.
  * Exposed at runtime through GET /api/version.
+ *
+ * \`commit\` is the repository HEAD at stamping time, which is the PARENT of
+ * the checkpoint commit that deploys this build — a commit cannot embed its
+ * own hash.
  */
 export const BUILD_INFO = {
   commit: ${JSON.stringify(commit)},

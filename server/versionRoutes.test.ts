@@ -47,11 +47,11 @@ function callRoute() {
 }
 
 describe("GET /api/version", () => {
-  it("returns the commit, boot time, uptime, and environment", () => {
+  it("returns the parent commit, boot time, uptime, and environment", () => {
     const body = callRoute().body as Record<string, unknown>;
     expect(body).toMatchObject({
-      commit: expect.any(String),
-      shortCommit: expect.any(String),
+      parentCommit: expect.any(String),
+      shortParentCommit: expect.any(String),
       startedAt: expect.any(String),
       uptimeSeconds: expect.any(Number),
       env: expect.any(String),
@@ -59,7 +59,10 @@ describe("GET /api/version", () => {
   });
 
   it("reports a real 40-char SHA that the short form prefixes", () => {
-    const { commit, shortCommit } = callRoute().body as { commit: string; shortCommit: string };
+    const { parentCommit: commit, shortParentCommit: shortCommit } = callRoute().body as {
+      parentCommit: string;
+      shortParentCommit: string;
+    };
     if (commit === "unknown") {
       // Built outside the pipeline (bare checkout): degrade honestly rather
       // than inventing a SHA.
@@ -69,6 +72,14 @@ describe("GET /api/version", () => {
       expect(shortCommit).toHaveLength(7);
       expect(commit.startsWith(shortCommit)).toBe(true);
     }
+  });
+
+  it("names the SHA field parentCommit — a commit cannot embed its own hash", () => {
+    // Guards the naming itself: reverting to `commit` would revive the
+    // "production is one commit behind" misreading this rename exists to kill.
+    const body = callRoute().body as Record<string, unknown>;
+    expect(body).not.toHaveProperty("commit");
+    expect(body).toHaveProperty("parentCommit");
   });
 
   it("is never cached — a stale answer would defeat the endpoint's purpose", () => {

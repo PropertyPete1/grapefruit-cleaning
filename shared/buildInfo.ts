@@ -2,9 +2,13 @@
  * GENERATED FILE — do not edit by hand.
  * Written by scripts/write-build-info.mjs during `pnpm build`.
  * Exposed at runtime through GET /api/version.
+ *
+ * `commit` is the repository HEAD at stamping time, which is the PARENT of
+ * the checkpoint commit that deploys this build — a commit cannot embed its
+ * own hash.
  */
 export const BUILD_INFO = {
-  commit: "d6af22d662f7fd4903f8484770df4c02ae2b1c1f",
+  commit: "8faf2eb03959ea4338ca07a97aa95a78ffedea23",
   branch: "main",
-  builtAt: "2026-08-19T22:42:11.643Z",
+  builtAt: "2026-08-19T22:49:02.653Z",
 } as const;

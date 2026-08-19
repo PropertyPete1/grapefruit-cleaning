@@ -14,6 +14,13 @@
  * precedence. Either way the value is resolved at MODULE LOAD, not per
  * request, so what is reported is what the running process started with.
  *
+ * On naming: the stamper necessarily runs BEFORE the checkpoint commit exists
+ * (a commit cannot contain its own hash), so the SHA it captures is the parent
+ * of the deployed commit. The field is called `parentCommit` to say so plainly
+ * — it still identifies a build uniquely, because consecutive deploys always
+ * have different parents, but calling it `commit` invited exactly the
+ * misreading of "production is one commit behind".
+ *
  * Deliberately public and unauthenticated: it exposes nothing sensitive (a
  * commit SHA of a public repo, plus uptime), and gating it behind auth would
  * defeat its purpose of being checkable from anywhere at any time.
@@ -31,10 +38,13 @@ const BUILT_AT = (process.env.BUILD_TIME || BUILD_INFO.builtAt || "").trim();
 const BRANCH = (BUILD_INFO.branch || "").trim();
 
 export interface VersionInfo {
-  /** Full 40-char commit SHA, or "unknown" when built outside the deploy pipeline. */
-  commit: string;
+  /**
+   * Full 40-char SHA of the commit this build was stamped from — the PARENT of
+   * the checkpoint commit now deployed. "unknown" outside the pipeline.
+   */
+  parentCommit: string;
   /** First 7 chars, for eyeballing against `git log --oneline`. */
-  shortCommit: string;
+  shortParentCommit: string;
   /** ISO-8601 timestamp of when this process started. */
   startedAt: string;
   /** Whole seconds this process has been up. */
@@ -50,8 +60,8 @@ export interface VersionInfo {
 export function buildVersionInfo(now: Date = new Date()): VersionInfo {
   const commit = COMMIT || "unknown";
   return {
-    commit,
-    shortCommit: commit === "unknown" ? "unknown" : commit.slice(0, 7),
+    parentCommit: commit,
+    shortParentCommit: commit === "unknown" ? "unknown" : commit.slice(0, 7),
     startedAt: BOOT_TIME.toISOString(),
     uptimeSeconds: Math.max(0, Math.floor((now.getTime() - BOOT_TIME.getTime()) / 1000)),
     builtAt: BUILT_AT || null,
