@@ -24,7 +24,7 @@ const EMPLOYEE = {
   userId: null as number | null,
   firstName: "Karyme",
   lastName: "Plata",
-  email: "grapefruit@grapefruitclean.com",
+  email: "karymeplata23@hotmail.com",
   phone: null,
   role: "Cleaner",
   active: true,
@@ -36,7 +36,7 @@ const EMPLOYEE = {
 };
 
 const OWNER = { id: 1, name: "Peter Allen", email: "peter@example.com", role: "admin" as const };
-const KARYME = { id: 42, name: "grapefruit", email: "grapefruit@grapefruitclean.com", role: "staff" as const };
+const KARYME = { id: 42, name: "grapefruit", email: "karymeplata23@hotmail.com", role: "staff" as const };
 
 beforeEach(() => {
   vi.clearAllMocks();
