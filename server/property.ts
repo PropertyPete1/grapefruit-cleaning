@@ -11,11 +11,12 @@
  * verify the address exists in county records ("address_verified") while the
  * square footage remains customer-entered (confirmed at the appointment).
  *
- * Travis County (Austin) is covered through the Travis Central Appraisal
- * District's parcel data as published on the county's public ArcGIS server.
- * The adapter reads living area when the layer provides it and degrades to
- * address verification when it does not — schema drift on a county's side
- * must look like a failed lookup, never an error.
+ * Travis County (Austin) is covered through TCAD's public parcel layer on
+ * services.arcgis.com — ADDRESS VERIFICATION ONLY, because that layer
+ * publishes no living-area field (verified live in production; the county's
+ * own GIS host serves no public catalog at all). Same posture as the CAD
+ * counties: a match proves the address, the square footage stays
+ * customer-entered.
  *
  * Every county hangs off COUNTY_ADAPTERS: one entry per county, each an
  * independent lookup function. Adding the next county (Hays is the likely
@@ -509,35 +510,46 @@ export function pickBestCadMatch(
 }
 
 const TRAVIS_QUERY_URL =
-  "https://gis.traviscountytx.gov/server/rest/services/Base/Parcels/MapServer/0/query";
+  "https://services.arcgis.com/0L95CJ0VTaxqcmED/arcgis/rest/services/EXTERNAL_tcad_parcel/FeatureServer/0/query";
 
 /**
- * Attribute names TCAD-derived layers have used for living area and situs.
- * Read defensively: the county republishing under different field names must
- * degrade to address verification, never to an error or a wrong number.
- */
-const TRAVIS_SQFT_FIELDS = ["LIVING_AREA", "living_area", "IMPR_SQFT", "BLDG_SQFT", "TOT_LIV_AREA", "SQFT"];
-const TRAVIS_SITUS_FIELDS = ["SITUS_ADDRESS", "SITUS", "FULL_STREET_NAME", "situs_address"];
-
-/**
- * Query Travis County's public parcel layer (TCAD data) for a street address.
+ * Query the public TCAD parcel layer to verify an Austin-area address exists.
  *
- * Follows the Bexar shape — situs LIKE with the house number and street core —
- * because both are county-hosted ArcGIS MapServers over appraisal-district
- * parcels. Returns verified sqft when the layer carries a usable living area,
- * address verification alone when it does not, and a plain not_found on any
- * failure: the quote must never block on Austin's GIS having a bad day.
+ * ADDRESS-VERIFY-ONLY, like the Comal/Guadalupe/Medina/Kendall CAD layers —
+ * not by choice but by what Travis County actually publishes. Verified live
+ * in production (2026-08): the county's own GIS host (gis.traviscountytx.gov)
+ * does not serve a public ArcGIS catalog at all, and the reachable layer —
+ * EXTERNAL_tcad_parcel on services.arcgis.com — carries parcel/situs records
+ * with NO living-area or improvement-sqft field. TCAD's improvement square
+ * footage exists only behind its interactive property search, which is not an
+ * API. So a Travis match proves the address is real and the sqft stays
+ * customer-entered, confirmed at the appointment.
+ *
+ * FUTURE UPGRADE: to re-promote Travis to sqft-capable (Bexar-style), look
+ * for a public TCAD layer or joined table exposing a living/improvement area
+ * attribute (the certified-roll export carries `living_area` per improvement;
+ * it is published as bulk downloads, not a queryable service, as of this
+ * writing). The adapter seam is this one function — outcome tiers and
+ * callers need no change.
+ *
+ * The layer's SITUS field is house-number-centric ("1100 CONGRESS AVE",
+ * sometimes with trailing city/ZIP), so the query anchors on the house number
+ * prefix and the street core, and a candidate only counts when the situs
+ * starts with the house number and carries the street name as whole words.
  */
 export async function lookupTravisProperty(addressLine: string): Promise<PropertyLookupResult> {
   const parsed = parseStreetAddress(addressLine);
   if (!parsed) return { verified: false, reason: "unparseable" };
 
-  const safeStreet = parsed.streetCore.replace(/'/g, "''");
+  const variants = streetVariants(parsed.streetCore);
+  const likeClauses = variants
+    .map(v => `UPPER(SITUS) LIKE '%${v.replace(/'/g, "''")}%'`)
+    .join(" OR ");
   const params = new URLSearchParams({
-    where: `UPPER(SITUS_ADDRESS) LIKE '${parsed.houseNumber} %${safeStreet}%'`,
-    outFields: "*",
+    where: `UPPER(SITUS) LIKE '${parsed.houseNumber} %' AND (${likeClauses})`,
+    outFields: "SITUS",
     returnGeometry: "false",
-    resultRecordCount: "5",
+    resultRecordCount: "10",
     f: "json",
   });
 
@@ -554,46 +566,58 @@ export async function lookupTravisProperty(addressLine: string): Promise<Propert
     if (data.error || !Array.isArray(data.features) || data.features.length === 0) {
       return { verified: false, reason: "not_found" };
     }
-
-    const situsOf = (attrs: Record<string, unknown>): string | undefined => {
-      for (const field of TRAVIS_SITUS_FIELDS) {
-        const value = attrs[field];
-        if (typeof value === "string" && value.trim()) return value.replace(/\s+/g, " ").trim();
-      }
-      return undefined;
-    };
-
-    // Prefer a record with a usable living area — that is a full verification.
-    for (const feature of data.features) {
-      const attrs = feature.attributes ?? {};
-      for (const field of TRAVIS_SQFT_FIELDS) {
-        const sqft = parsePositiveInt(attrs[field]);
-        if (sqft && sqft >= 100) {
-          return {
-            verified: true,
-            sqft,
-            source: "travis_cad",
-            county: COUNTY_NAMES.travis,
-            matchedAddress: situsOf(attrs),
-          };
-        }
-      }
-    }
-
-    // Matched a parcel but no living-area field: the address exists in county
-    // records — same posture as the CAD-only counties.
-    const first = data.features[0]!.attributes ?? {};
+    const matched = pickBestTravisMatch(data.features, parsed, variants);
+    if (!matched) return { verified: false, reason: "not_found" };
     return {
       verified: false,
       addressVerified: true,
       reason: "address_verified",
       source: "travis_cad",
       county: COUNTY_NAMES.travis,
-      matchedAddress: situsOf(first),
+      matchedAddress: matched,
     };
   } catch {
     return { verified: false, reason: "not_found" };
   }
+}
+
+/**
+ * Confirm a TCAD candidate client-side: the situs must START with the house
+ * number (so 1100 never matches 11001) and carry a street variant as a whole
+ * word sequence (so core "CONGRESS" matches "1100 CONGRESS AVE" but not
+ * "1100 CONGRESSIONAL LOOP"). A directional prefix, when the caller gave one,
+ * prefers agreeing records and penalizes contradicting ones — the same
+ * scoring the BIS CAD matcher uses, adapted to a single combined field.
+ */
+export function pickBestTravisMatch(
+  features: BexarFeature[],
+  parsed: ParsedStreetAddress,
+  variants: string[]
+): string | null {
+  let best: string | null = null;
+  let bestScore = -1;
+  for (const f of features) {
+    const raw = f.attributes?.["SITUS"];
+    if (typeof raw !== "string") continue;
+    const situs = raw.toUpperCase().replace(/\s+/g, " ").trim();
+    if (!situs.startsWith(`${parsed.houseNumber} `)) continue;
+    const rest = situs.slice(parsed.houseNumber.length + 1);
+    const wordMatch = variants.find(
+      v => rest === v || rest.startsWith(`${v} `) || rest.endsWith(` ${v}`) || rest.includes(` ${v} `)
+    );
+    if (!wordMatch) continue;
+    let score = 1;
+    if (rest.startsWith(wordMatch)) score += 1;
+    if (parsed.prefix) {
+      if (rest.startsWith(`${parsed.prefix} `)) score += 2;
+      else if (/^(N|S|E|W|NE|NW|SE|SW) /.test(rest)) score -= 2;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      best = situs;
+    }
+  }
+  return bestScore >= 1 ? best : null;
 }
 
 /**
