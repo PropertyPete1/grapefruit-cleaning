@@ -102,8 +102,9 @@ export function lastEmailError(): string | null {
  *
  * SMTP_USER/SMTP_PASSWORD are the generic names; GMAIL_USER/GMAIL_APP_PASSWORD
  * remain as legacy fallbacks so an existing Gmail deployment keeps working
- * untouched. The provider is decided by SMTP_HOST — the business inbox moved
- * off Gmail once already (to Hotmail), and the transport must not assume.
+ * untouched. The provider is decided by SMTP_HOST rather than assumed: this
+ * business inbox has already changed hands more than once, so nothing here is
+ * allowed to hard-code a particular mail host.
  */
 export function smtpUser(): string | undefined {
   return process.env.SMTP_USER || process.env.GMAIL_USER;
@@ -127,8 +128,8 @@ function getTransporter(): Transporter | null {
     _transporter = nodemailer.createTransport({
       host,
       port,
-      // 465 is implicit TLS; anything else (587 for Outlook/Hotmail) is
-      // STARTTLS, which nodemailer negotiates when secure is false.
+      // 465 is implicit TLS; anything else (587 on most providers) is STARTTLS,
+      // which nodemailer negotiates when secure is false.
       secure: port === 465,
       auth: { user, pass },
     });
@@ -172,8 +173,8 @@ export async function deliverEmail(
   }
   try {
     await transporter.sendMail({
-      // Outlook/Hotmail rejects a From that differs from the login, so the
-      // sender is always the authenticated account itself.
+      // Providers routinely reject a From that differs from the SMTP login, so
+      // the sender is always the authenticated account itself.
       from: `Grapefruit Cleaning Co. <${smtpUser()}>`,
       to,
       subject,

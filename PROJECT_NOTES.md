@@ -1,15 +1,43 @@
 # Grapefruit Cleaning Co. — Build Notes (internal)
 
-## EMAIL PROVIDER SWITCH (Aug 18, 2026) — dead mailbox replaced
-- The old grapefruitclean.com Gmail mailbox is DEAD; the business mailbox is now karymeplata23@hotmail.com.
-- Code no longer assumes Gmail: server/emails.ts reads SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASSWORD
-  (legacy GMAIL_USER/GMAIL_APP_PASSWORD still honoured as fallbacks; host defaults to smtp.gmail.com).
-- DEPLOYMENT ENV VALUES NEEDED on Manus (no passwords in the repo, ever):
-  SMTP_HOST=smtp-mail.outlook.com  SMTP_PORT=587  SMTP_USER=karymeplata23@hotmail.com  SMTP_PASSWORD=<app password>
-  (Outlook personal accounts need 2FA + an app password for SMTP; plain account passwords are usually refused.)
+## STANDING RULE — what counts as proof that email works
+A claim that email is fixed is only credible when BOTH of these appear in the same report:
+1. The PRODUCTION process boot timestamp, showing the running container started AFTER the credential or code
+   change. Editing a secret does not restart anything on its own — see the Aug 19 incident below.
+2. A real send through the production path, with the production log line naming the mailbox and host the
+   transport actually connected as, plus the delivered/rejected result for that recipient.
+A sandbox `smtp.verify()` pass proves only that some credentials are valid somewhere. It says nothing about
+what the deployed container is holding, and it has been misleading here before. It does not count alone.
+
+## EMAIL PROVIDER — CURRENT (Aug 19, 2026): Gmail, proven in production
+- Production mailbox: **grapefruitcleaningc@gmail.com** over Gmail SMTP with a 16-character app password.
+- Deployment env values (no passwords in the repo, ever):
+  SMTP_HOST=smtp.gmail.com  SMTP_PORT=465  SMTP_USER=grapefruitcleaningc@gmail.com  SMTP_PASSWORD=<app password>
+- PROVEN IN PRODUCTION Aug 19 2026 on checkpoint 96c2237: container booted 16:51:12Z, and a real balance-link
+  resend for invoice INV-MSS5FMO8-B473 logged `[Email] SMTP transport built: … via …:465 (secure=true)`
+  followed by `[Email] Delivered to steven@lifestyledesignrealty.com`. Two sends, both delivered.
+- server/emails.ts is provider-agnostic: it reads SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASSWORD, with legacy
+  GMAIL_USER/GMAIL_APP_PASSWORD honoured as fallbacks and the host defaulting to smtp.gmail.com. Port 465 is
+  implicit TLS; any other port is STARTTLS.
+- The transport is cached module-scope, and an EAUTH/535 failure now drops that cache so the next attempt
+  rebuilds from current env. Every build logs the mailbox and host, so a stale deployment shows up in the logs
+  instead of having to be inferred.
+- Admin → Invoices resend surfaces the mail server's real error text when a send fails, replacing the old
+  generic "email not configured".
 - ALSO DATA, NOT CODE: Admin → Settings business email (footer/contact/JSON-LD read the business_email
-  setting) and Karyme's admin login row in the users table still carry whatever address they were saved
-  with — update those in the running app, the repo cannot do it.
+  setting) and Karyme's admin login row in the users table carry whatever address they were saved with —
+  update those in the running app, the repo cannot do it.
+
+### Provider history — why the setup looks like this
+- The old grapefruit@grapefruitclean.com Gmail is NOT dead: it still authenticates, and earlier notes calling
+  it "DEAD" were wrong. It survives only as the legacy GMAIL_* fallback.
+- A Microsoft mailbox (karymeplata23@hotmail.com) was tried Aug 18–19 and ABANDONED: Microsoft has disabled
+  basic authentication for SMTP on that account, so every app password returned `535 5.7.139`. Do not
+  reintroduce Outlook/Hotmail SMTP here unless Microsoft re-enables SMTP AUTH on it.
+- Aug 19 incident: replacing the SMTP_* secrets did NOT restart production (the checkpoint reported "no
+  changes to commit" because only env vars moved), so the cached Microsoft transport kept serving and a resend
+  failed with 535 long after the values had been swapped. Hence the standing rule above and the EAUTH
+  cache-bust.
 
 ## ROUND 13 — TRUE ROOT CAUSE of "Unexpected token '<'" FOUND & FIXED (Jul 16 ~22:00)
 - User clarified: error appears ONLY in the Manus preview panel (dev server), not production browser tabs.
@@ -208,7 +236,7 @@ Site is PUBLISHED at grapeclean-skvabkkr.manus.space.
 - Stale vite error about AdminSettings/AdminCoupons imports in logs is old (files exist, tsc 0 errors, /admin 200).
 
 ## ROUND 2 FINAL STATE (Jul 16, 2026)
-- Emails now via SMTP (nodemailer) in server/emails.ts. Originally GMAIL_USER=<the old grapefruitclean.com Gmail, now DEAD — replaced 2026-08-18 by karymeplata23@hotmail.com over Outlook SMTP, see the email-provider note at the top> + GMAIL_APP_PASSWORD (app password); server/gmail.verify.test.ts (now smtp.verify.test.ts) passed against smtp.gmail.com at the time.
+- Emails now via SMTP (nodemailer) in server/emails.ts. Originally GMAIL_USER (the grapefruitclean.com Gmail, still a working mailbox and still honoured as a fallback) + GMAIL_APP_PASSWORD; production has since moved to the SMTP_* variables on grapefruitcleaningc@gmail.com — see the email-provider section at the top of this file for the current, production-proven setup. server/gmail.verify.test.ts (now smtp.verify.test.ts) passed against smtp.gmail.com.
 - Deposit confirmation email: triggered by Stripe webhook checkout.session.completed → finalizeBooking → sendBookingEmails (customer bilingual + owner copy to GMAIL_USER/OWNER_EMAIL).
 - Reminders: server/reminders.ts (dueReminderKind: week reminder 2-7 days out only if booked ≥7 days ahead; day reminder ≤1 day out; idempotent via bookings.weekReminderSentAt/dayReminderSentAt — migration applied). Handler POST /api/scheduled/sendReminders in server/scheduledRoutes.ts registered in _core/index.ts.
 - Heartbeat cron created: daily-booking-reminders, task_uid=jnGJSVTd5zwvu9vksDDRLm, cron "0 0 14 * * *" (14:00 UTC = 9am CDT daily).

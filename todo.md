@@ -95,7 +95,7 @@
 - [x] Update vitest tests for new pricing engine
 - [x] Staff role: extend user roles (admin/staff/user), staff dashboard with bookings list, calendar, schedule view
 - [x] Staff management in admin (assign staff role / link employee to user account)
-- [x] Gmail SMTP delivery via app password (replace Resend approach) — mailbox since moved to karymeplata23@hotmail.com over Outlook SMTP
+- [x] Gmail SMTP delivery via app password (replace Resend approach) — production mailbox is now grapefruitcleaningc@gmail.com over Gmail SMTP (a Microsoft mailbox was tried and abandoned; Microsoft has SMTP basic auth disabled on it)
 - [x] Deposit-paid confirmation email sent via Gmail (bilingual, already triggered by Stripe webhook)
 - [x] Reminder email 7 days before cleaning (only when booked ≥1 week out), bilingual
 - [x] Reminder email 1 day before cleaning, bilingual
@@ -236,7 +236,7 @@
 - [x] UI: Staff access dialog on Admin → Employees gains an access-level selector (Admin / Staff / No access)
 - [x] Employee card shows access level (Admin vs Staff) when connected
 - [x] Dialog copy updated to explain both roles
-- [x] Promote Karyme (now karymeplata23@hotmail.com; formerly the dead grapefruitclean.com address) to Admin — role now 'admin' in users table, card shows "Admin — grapefruit"
+- [x] Promote Karyme to Admin — role now 'admin' in users table, card shows "Admin — grapefruit"
 - [x] Tests: vitest coverage for promote/demote/last-admin guard/self-demotion guard (9 new tests, 144 total passing)
 - [x] TS check + full suite green; single checkpoint; GitHub push
 
@@ -244,3 +244,7 @@
 - [x] Rebuild the cached SMTP transport on an EAUTH/535 failure so a credential change takes effect without waiting for a redeploy
 - [x] Log which mailbox and host the transport actually connected as, each time it is built
 - [x] Admin → Invoices resend toast shows the real SMTP error text instead of "email not configured"
+- [x] Prove the Gmail transport from PRODUCTION: container booted 16:51:12Z, real resend of INV-MSS5FMO8-B473 logged the transport build and `[Email] Delivered to steven@lifestyledesignrealty.com`
+- [x] PROJECT_NOTES.md corrected: current mailbox is grapefruitcleaningc@gmail.com via Gmail SMTP (Aug 19 2026), the old grapefruitclean.com Gmail is NOT dead, Microsoft SMTP abandoned
+- [x] Standing rule recorded in PROJECT_NOTES.md: any "email is fixed" claim needs the production boot timestamp AND a real send through the production path — sandbox verification alone does not count
+- [x] Hotmail-era values audited out of every environment and out of source, docs, and test fixtures

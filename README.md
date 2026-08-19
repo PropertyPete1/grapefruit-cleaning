@@ -13,7 +13,7 @@ commercial cleaning company serving the San Antonio, TX metro area.
 | Database | MySQL/TiDB via Drizzle ORM |
 | Auth | Manus OAuth (role-based: `admin` / `user`, plus employee-linked staff access) |
 | Payments | Stripe Checkout (booking deposits, webhook at `/api/stripe/webhook`) |
-| Email | SMTP via nodemailer — Outlook/Hotmail or Gmail (confirmations, reminders, staff invites) |
+| Email | SMTP via nodemailer — Gmail in production (confirmations, reminders, staff invites) |
 | Scheduled jobs | Daily reminder emails (7-day / 1-day before appointments) |
 | Tests | Vitest (`pnpm test`) |
 
@@ -34,7 +34,7 @@ All secrets are injected as environment variables — never committed. The impor
 |---|---|
 | `DATABASE_URL` | MySQL/TiDB connection string |
 | `STRIPE_SECRET_KEY` / `VITE_STRIPE_PUBLISHABLE_KEY` / `STRIPE_WEBHOOK_SECRET` | Stripe payments |
-| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` | Outbound email (confirmations, reminders, invites). Hotmail/Outlook: `smtp-mail.outlook.com` / `587`. Legacy `GMAIL_USER` / `GMAIL_APP_PASSWORD` still work as fallbacks (defaults to Gmail's server). |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` | Outbound email (confirmations, reminders, invites). Gmail: `smtp.gmail.com` / `465` with an app password. Port 465 is implicit TLS; any other port is negotiated as STARTTLS. Legacy `GMAIL_USER` / `GMAIL_APP_PASSWORD` still work as fallbacks. |
 | `JWT_SECRET` | Session cookie signing |
 | `VITE_APP_ID`, `OAUTH_SERVER_URL`, `VITE_OAUTH_PORTAL_URL` | Manus OAuth |
 
