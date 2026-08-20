@@ -43,6 +43,30 @@ handled explicitly rather than left to produce nonsense:
 - Admin → Settings still carries `karymeplata23@hotmail.com` as the public business email; it appears in the
   footer, contact page and JSON-LD. That is data in the running app, which the repo cannot change.
 
+## STANDING RULE — never touch a live scheduled job without asking
+Do NOT modify, repoint, pause, delete or otherwise alter a production cron job, heartbeat/scheduled task or
+webhook without proposing the change and receiving explicit approval first. This holds even when the change is
+temporary, and even when its only purpose is diagnosis. Propose, wait, then act.
+
+There is no "just for a minute" exemption. A repointed cron is a cron that does not do its job, and the
+failure is silent: nobody notices a reminder that was never sent. The window also outlives the diagnosis if
+anything interrupts the session — a crash, a timeout, a lost context — and the job is then left aimed at the
+wrong endpoint indefinitely.
+
+Diagnosis that genuinely requires touching a live job is still propose-then-approve; it is not an exception,
+it is precisely the case the rule exists for.
+
+Origin, Aug 19 2026: while diagnosing why newly created heartbeat jobs would not register, the live
+`daily-booking-reminders` job was temporarily repointed from `/api/scheduled/sendReminders` to the new digest
+endpoint to test whether pre-existing jobs still fired. It confirmed the diagnosis and was restored and
+verified the same minute — but it was the customer-reminder cron, changed in production, without asking. The
+right move was to propose the test and wait.
+
+Current jobs, for reference when verifying a restore:
+- `daily-booking-reminders` → POST `/api/scheduled/sendReminders`, cron `0 0 14 * * *` (14:00 UTC). Also
+  carries the balance reminders, marketing nudges, daily health check and the Monday digest.
+- `hourly-ical-sync` → POST `/api/scheduled/icalSync`, cron `0 5 * * * *` (hourly at :05).
+
 ## STANDING RULE — what counts as proof that email works
 A claim that email is fixed is only credible when BOTH of these appear in the same report:
 1. The PRODUCTION process boot timestamp, showing the running container started AFTER the credential or code
