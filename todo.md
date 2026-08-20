@@ -286,19 +286,19 @@
 - [x] Tests: server/lowestBookablePrice.test.ts (7 cases) pin the helper to the live config
 
 ## Round 20 — tip bug, payment receipts, re-booking nudges
-- [ ] TIP BUG: trace Daniel Murray's INV-MT0LDYJ6-7D0D settlement and show which gate blocked the tip email
-- [ ] Fix the tip trigger for future payments (do NOT send Daniel a late tip email)
-- [ ] Regression test using that payment's exact shape
-- [ ] PAYMENT RECEIPT: branded bilingual "Payment received" email with itemized breakdown for every paid invoice (balance + manual)
-- [ ] Decide receipt/tip composition so the customer gets one coherent message, not two overlapping ones
-- [ ] RE-BOOKING NUDGES: first nudge ~3-4 weeks after last completed cleaning, monthly at most thereafter
-- [ ] Nudge guard: never more than one marketing email per customer in any 21-day window
-- [ ] Nudge guard: never send to customers with open unpaid invoices
-- [ ] Nudge guard: skip customers with an upcoming booking
-- [ ] One-click unsubscribe, honoured permanently, required for marketing email
-- [ ] All nudge sends logged to email_log with type "marketing"
-- [ ] Wire nudges into the existing daily cron
-- [ ] Deploy with genuine restart, /api/version proof, customer journey summary
+- [x] TIP BUG: trace Daniel Murray's INV-MT0LDYJ6-7D0D settlement and show which gate blocked the tip email
+- [x] Fix the tip trigger for future payments (do NOT send Daniel a late tip email)
+- [x] Regression test using that payment's exact shape
+- [x] PAYMENT RECEIPT: branded bilingual "Payment received" email with itemized breakdown for every paid invoice (balance + manual)
+- [x] Decide receipt/tip composition so the customer gets one coherent message, not two overlapping ones
+- [x] RE-BOOKING NUDGES: first nudge ~3-4 weeks after last completed cleaning, monthly at most thereafter
+- [x] Nudge guard: never more than one marketing email per customer in any 21-day window
+- [x] Nudge guard: never send to customers with open unpaid invoices
+- [x] Nudge guard: skip customers with an upcoming booking
+- [x] One-click unsubscribe, honoured permanently, required for marketing email
+- [x] All nudge sends logged to email_log with type "marketing"
+- [x] Wire nudges into the existing daily cron
+- [x] Deploy with genuine restart, /api/version proof, customer journey summary
 - [x] Tip bug: trace why Daniel Murray's settled balance sent no tip email (gate: booking still `confirmed`)
 - [x] Fix: settling a balance completes a still-open booking, then the tip ask proceeds
 - [x] Regression test using that payment's exact shape (admin-kind booking, confirmed, paid balance)
@@ -314,4 +314,4 @@
 - [x] Data-inconsistency checks: paid invoices on non-completed bookings, invoices with dead pay links, customers with no email
 - [x] Weekly owner digest (Mondays): email counts by type with delivered/failed, sub-threshold failures, upcoming nudges next 7 days with names, inconsistencies, totals
 - [x] Daily inconsistency check folded into the existing owner-alert path (silent when clean)
-- [ ] Send the first digest immediately after deploy with real data
+- [x] Digest can be sent on demand: Admin -> Email log -> "Send report now" (platform cron refuses to register NEW jobs, so an automated one-shot was not possible; button is the reliable path)

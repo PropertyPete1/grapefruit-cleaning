@@ -7,8 +7,10 @@
  * every attempt is recorded in the database as it happens — including the
  * failures, which is the half that used to be invisible.
  */
-import { AlertTriangle, CheckCircle2, FileWarning, Mail, MinusCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, FileWarning, Mail, MinusCircle, Send } from "lucide-react";
+import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeader } from "./adminShared";
 
@@ -68,12 +70,43 @@ export default function AdminEmailLog() {
   const rows = log.data ?? [];
   const failures = rows.filter(r => r.outcome === "error" || r.outcome === "log_only").length;
 
+  // The weekly report normally arrives on Monday by itself. This button is for
+  // wanting it now — and it doubles as a way to confirm the reporting path
+  // still works, rather than waiting a week to discover it doesn't.
+  const utils = trpc.useUtils();
+  const sendReport = trpc.admin.sendWeeklyDigestNow.useMutation({
+    onSuccess: r => {
+      toast.success(
+        `Report sent — ${r.emailsThisWeek} email${r.emailsThisWeek === 1 ? "" : "s"} this week, ` +
+          `${r.upcomingNudges} invitation${r.upcomingNudges === 1 ? "" : "s"} due, ` +
+          `${r.problems} problem${r.problems === 1 ? "" : "s"} found`,
+        { duration: 8000 }
+      );
+      void utils.admin.emailLog.invalidate();
+    },
+    onError: e => toast.error(`Could not send the report: ${e.message}`, { duration: 10000 }),
+  });
+
   return (
     <div>
       <PageHeader
         title="Email log"
         subtitle="Every message the site tried to send, and what the mail server said back"
       />
+
+      <div className="mb-6 flex flex-wrap items-center gap-3 rounded-2xl bg-card p-4 shadow-sm ring-1 ring-border">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold">Weekly report</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Arrives every Monday: what was sent, what failed, who is due a re-booking invitation, and anything
+            inconsistent in the data. Send it now to see the current picture.
+          </p>
+        </div>
+        <Button onClick={() => sendReport.mutate()} disabled={sendReport.isPending} className="shrink-0 gap-2">
+          <Send className="h-4 w-4" />
+          {sendReport.isPending ? "Sending…" : "Send report now"}
+        </Button>
+      </div>
 
       {log.isLoading ? (
         <div className="space-y-3">
