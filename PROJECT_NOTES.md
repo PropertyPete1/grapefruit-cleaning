@@ -1,5 +1,48 @@
 # Grapefruit Cleaning Co. — Build Notes (internal)
 
+## STATE OF PLAY — end of Aug 19, 2026
+Five things shipped today. Together they close a loop that had been open for weeks: email works, and more
+importantly it is now *observable*, so the next failure announces itself instead of surfacing as a customer
+saying they never got a link.
+
+| Area | Where it lives | What to know |
+|---|---|---|
+| Email transport | `server/emails.ts` | Gmail (grapefruitcleaningc@gmail.com) over SMTP 465, proven by a real production send — see the section below. |
+| Deploy proof | `GET /api/version` | Returns `parentCommit`, boot time, build time, branch, env. REPLACES bundle fingerprinting; every deploy report quotes it. |
+| Email log | `email_log` table, Admin → Email log | Every send attempt: recipient, subject, type, outcome, mail-server error text, related invoice/booking. Records from Aug 19 ~22:00Z forward — nothing earlier exists, and nothing was backfilled. |
+| Failure alerts | `server/emailLog.ts` | A transport error or log-only fallback emails the owner. Capped at 1/hour, read from the DB so multiple instances share the cap, with a re-entrancy latch so an alert can never alert about itself. Suppressed failures are counted into the next alert. |
+| Itemized invoices | `shared/invoiceItems.ts`, `client/src/pages/admin/InvoiceItemsEditor.tsx` | Add-ons at live catalog prices plus named one-off lines, snapshotted at issue time. ONE shared editor serves both the balance-approval and manual-create dialogs. |
+| Billable manual invoices | `issueManualInvoice()` in `server/balance.ts` | Manual invoices mint a pay token, build a Stripe session, email a branded itemized link, accept resends, and get the same 3/7-day reminders. |
+
+1073 tests passing, 1 skipped. Migrations applied through 0022. Production and GitHub main both at `b98d5ea`.
+
+### Two design decisions worth not re-litigating
+- **`/api/version` reports `parentCommit`, not `commit`.** A commit cannot contain its own hash, and the SHA
+  must be stamped into a source file before the checkpoint commit exists. The value is the parent of the
+  deployed commit; verify by checking that the deployed checkpoint's parent in `git log` matches. Renaming it
+  to `commit` would be a lie that reads like a bug ("production is one commit behind").
+- **The reminder sweep gates on holding a live payment link, not on invoice kind.** That is what lets manual
+  invoices be chased identically while automatically excluding pre-feature manual rows, which never had a
+  token. Do not "tidy" this back into a `kind = 'balance'` filter.
+
+### Manual invoices have no booking — the guards that depend on it
+A manual invoice is billable but has no job behind it, so the balance machinery's booking assumptions are
+handled explicitly rather than left to produce nonsense:
+- The email omits the reference and service date, and suppresses the deposit block entirely. Printing
+  "Deposit already paid: $0" would read as a credit the customer never made.
+- No tip is requested on settlement: no completed job, no crew to tip. The test asserting this is paired with
+  a positive control proving tips still fire for real balance invoices — without that control the test would
+  pass even if tipping were broken outright.
+- Stripe metadata omits the `booking_*` keys rather than stubbing them, while keeping `payment_type: balance`
+  so the webhook routes settlement through the same path.
+- Creating a manual invoice for a customer with no email address is refused BEFORE a row is written. An
+  undeliverable payment link is not an invoice.
+
+### Still outstanding — owner actions, not code
+- Revoke the four Hotmail-era app passwords in the Microsoft account.
+- Admin → Settings still carries `karymeplata23@hotmail.com` as the public business email; it appears in the
+  footer, contact page and JSON-LD. That is data in the running app, which the repo cannot change.
+
 ## STANDING RULE — what counts as proof that email works
 A claim that email is fixed is only credible when BOTH of these appear in the same report:
 1. The PRODUCTION process boot timestamp, showing the running container started AFTER the credential or code
