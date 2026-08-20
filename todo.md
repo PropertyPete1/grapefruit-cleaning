@@ -322,3 +322,14 @@
 - [x] Cancellation alert to owner through the existing owner-alert path
 - [x] Both cancellation emails logged to email_log
 - [x] Keep cancellation safety rules untouched: confirmed-only, future-only, never override a human
+
+## Round: brain read API deploy (PR #14)
+- [x] Fast-forward stale checkout (66f0d82) to origin/main f17c742 -- 18 commits behind, NOT 2 as handoff said
+- [x] Verify tree byte-identical to github/main before any checkpoint
+- [x] tsc clean, 1169 passed / 1 skipped, brain route tests 20/20, build clean
+- [ ] Deploy PR #14 to production
+- [ ] Verify live /api/brain/ping returns 503 before the token is set
+- [ ] Set BRAIN_READ_TOKEN in production env (never print the value)
+- [ ] Explicit redeploy after the env change (env-only checkpoint reports "no changes" and keeps the old process)
+- [ ] Verify live: 401 wrong bearer, 200 correct bearer, POST -> 404
+- [ ] Confirm rest of CRM unaffected: site 200, booking flow, admin
