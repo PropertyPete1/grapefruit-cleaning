@@ -1529,3 +1529,87 @@ export async function getBookingsByService() {
     .from(bookings)
     .groupBy(bookings.serviceType);
 }
+
+// ---------- Brain read API (paged, filtered reads — see server/brainRoutes.ts) ----------
+
+/**
+ * Each pager returns `{ rows, total }` where `total` is the full count under
+ * the same filters, not the page size — the brain compares it against what it
+ * received to detect a truncated read. Ordering is newest-first with `id` as
+ * the tiebreak so offset pagination walks a stable sequence.
+ */
+export type BrainPageArgs = { limit: number; offset: number };
+
+export async function pageCustomersForBrain({ limit, offset }: BrainPageArgs) {
+  const db = requireDb(await getDb());
+  const rows = await db
+    .select()
+    .from(customers)
+    .orderBy(desc(customers.createdAt), desc(customers.id))
+    .limit(limit)
+    .offset(offset);
+  const [count] = await db.select({ total: sql<number>`COUNT(*)` }).from(customers);
+  return { rows, total: Number(count?.total ?? 0) };
+}
+
+export async function pageBookingsForBrain({
+  limit,
+  offset,
+  since,
+  customerId,
+}: BrainPageArgs & { since?: Date; customerId?: number }) {
+  const db = requireDb(await getDb());
+  const conditions = [];
+  if (since) conditions.push(gte(bookings.createdAt, since));
+  if (customerId !== undefined) conditions.push(eq(bookings.customerId, customerId));
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+  const rows = await db
+    .select()
+    .from(bookings)
+    .where(where)
+    .orderBy(desc(bookings.createdAt), desc(bookings.id))
+    .limit(limit)
+    .offset(offset);
+  const [count] = await db.select({ total: sql<number>`COUNT(*)` }).from(bookings).where(where);
+  return { rows, total: Number(count?.total ?? 0) };
+}
+
+export async function pageContactMessagesForBrain({
+  limit,
+  offset,
+  since,
+}: BrainPageArgs & { since?: Date }) {
+  const db = requireDb(await getDb());
+  const where = since ? gte(contactMessages.createdAt, since) : undefined;
+  const rows = await db
+    .select()
+    .from(contactMessages)
+    .where(where)
+    .orderBy(desc(contactMessages.createdAt), desc(contactMessages.id))
+    .limit(limit)
+    .offset(offset);
+  const [count] = await db.select({ total: sql<number>`COUNT(*)` }).from(contactMessages).where(where);
+  return { rows, total: Number(count?.total ?? 0) };
+}
+
+export async function pagePaymentsForBrain({
+  limit,
+  offset,
+  since,
+  customerId,
+}: BrainPageArgs & { since?: Date; customerId?: number }) {
+  const db = requireDb(await getDb());
+  const conditions = [];
+  if (since) conditions.push(gte(payments.createdAt, since));
+  if (customerId !== undefined) conditions.push(eq(payments.customerId, customerId));
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+  const rows = await db
+    .select()
+    .from(payments)
+    .where(where)
+    .orderBy(desc(payments.createdAt), desc(payments.id))
+    .limit(limit)
+    .offset(offset);
+  const [count] = await db.select({ total: sql<number>`COUNT(*)` }).from(payments).where(where);
+  return { rows, total: Number(count?.total ?? 0) };
+}
