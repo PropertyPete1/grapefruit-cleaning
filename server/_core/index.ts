@@ -10,6 +10,7 @@ import { registerStripeWebhook } from "../stripeWebhook";
 import { registerSeoRoutes } from "../seoRoutes";
 import { registerScheduledRoutes } from "../scheduledRoutes";
 import { registerBalanceRoutes } from "../balanceRoutes";
+import { registerMarketingRoutes } from "../marketingRoutes";
 import { registerVersionRoutes } from "../versionRoutes";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
@@ -49,6 +50,9 @@ async function startServer() {
   registerScheduledRoutes(app);
   // Customer-facing balance payment links (/api/pay/balance/:token)
   registerBalanceRoutes(app);
+  // One-click unsubscribe from re-booking nudges (/unsubscribe/:token).
+  // Must precede the SPA catch-all so the branded confirmation page wins.
+  registerMarketingRoutes(app);
   registerStorageProxy(app);
   registerOAuthRoutes(app);
   // tRPC API

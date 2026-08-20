@@ -284,3 +284,28 @@
 - [x] Added lowestBookablePrice() helper (tiered services only, custom-quote tiers excluded)
 - [x] Swept EN/ES translations, SEO/JSON-LD, manifests, meta tags: no other hardcoded starting price found
 - [x] Tests: server/lowestBookablePrice.test.ts (7 cases) pin the helper to the live config
+
+## Round 20 — tip bug, payment receipts, re-booking nudges
+- [ ] TIP BUG: trace Daniel Murray's INV-MT0LDYJ6-7D0D settlement and show which gate blocked the tip email
+- [ ] Fix the tip trigger for future payments (do NOT send Daniel a late tip email)
+- [ ] Regression test using that payment's exact shape
+- [ ] PAYMENT RECEIPT: branded bilingual "Payment received" email with itemized breakdown for every paid invoice (balance + manual)
+- [ ] Decide receipt/tip composition so the customer gets one coherent message, not two overlapping ones
+- [ ] RE-BOOKING NUDGES: first nudge ~3-4 weeks after last completed cleaning, monthly at most thereafter
+- [ ] Nudge guard: never more than one marketing email per customer in any 21-day window
+- [ ] Nudge guard: never send to customers with open unpaid invoices
+- [ ] Nudge guard: skip customers with an upcoming booking
+- [ ] One-click unsubscribe, honoured permanently, required for marketing email
+- [ ] All nudge sends logged to email_log with type "marketing"
+- [ ] Wire nudges into the existing daily cron
+- [ ] Deploy with genuine restart, /api/version proof, customer journey summary
+- [x] Tip bug: trace why Daniel Murray's settled balance sent no tip email (gate: booking still `confirmed`)
+- [x] Fix: settling a balance completes a still-open booking, then the tip ask proceeds
+- [x] Regression test using that payment's exact shape (admin-kind booking, confirmed, paid balance)
+- [x] Payment receipt email: branded, bilingual, itemized, for balance AND manual invoices
+- [x] Receipt on every settle path: webhook, return page, admin mark-paid
+- [x] Re-booking nudges: cadence rules (24d first, 30d repeat, 21d hard floor, max 6)
+- [x] Nudge exclusions: unsubscribed, upcoming booking, open invoice, no email, never completed
+- [x] One-click unsubscribe route + branded bilingual confirmation page, honoured forever
+- [x] Nudges logged to email_log as type "marketing"; sweep runs last on the daily cron
+- [x] Migration 0023: marketing consent + nudge tracking columns on customers

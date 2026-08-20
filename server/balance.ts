@@ -30,6 +30,7 @@ import {
   sendBalancePaidNotification,
   sendBalanceReminderEmail,
   sendBalanceReminderExhaustedAlert,
+  sendPaymentReceiptEmail,
   sendRefundNeededAlert,
   lastEmailError,
   type BalanceEmailData,
@@ -663,6 +664,10 @@ export async function applyBalancePayment(
         status: "succeeded",
       });
       await notifyOwnerOfBalance(invoice, sendBalancePaidNotification);
+      // Every settled invoice earns a receipt — balance or manual, in the
+      // customer's language. Sent before the tip ask so the proof of payment
+      // lands first and the optional ask follows it.
+      await sendPaymentReceiptSafely({ ...invoice, paidAt: new Date() }, "card");
       // The balance landing is the moment the customer owes nothing — time
       // for the thank-you with the tip ask. Claimed once inside; a webhook
       // redelivery loses the settle claim above and never reaches this line.
@@ -836,6 +841,46 @@ async function notifyOwnerOfBalance(
     );
   } catch (error) {
     console.error(`[Balance] Failed to notify owner for invoice ${invoice.id}:`, error);
+  }
+}
+
+/**
+ * Sends the customer their receipt for a settled invoice.
+ *
+ * Every paid invoice earns one, balance or manual, in the customer's language.
+ * Best-effort throughout: the money has already moved by the time this runs, so
+ * a mail problem must never fail the settlement that produced it.
+ *
+ * Kept separate from the tip ask on purpose — see buildPaymentReceiptEmail.
+ */
+export async function sendPaymentReceiptSafely(
+  invoice: Invoice,
+  paidVia: "card" | "manual"
+): Promise<void> {
+  try {
+    const booking = invoice.bookingId ? await db.getBookingById(invoice.bookingId) : undefined;
+    const customer = await db.getCustomerById(invoice.customerId);
+    if (!customer?.email) return;
+    const data = toInvoiceEmailData(
+      booking,
+      customer,
+      { number: invoice.number, amount: invoice.amount, items: parseLineItems(invoice.lineItems) },
+      // A receipt carries no payment link: the invoice is settled, and a live
+      // "pay now" URL on a receipt invites a second payment.
+      "",
+      new Date(),
+      (await db.getSetting("business_phone"))?.trim() || undefined
+    );
+    await sendPaymentReceiptEmail(
+      {
+        ...data,
+        paidOn: (invoice.paidAt ? new Date(invoice.paidAt) : new Date()).toISOString().slice(0, 10),
+        paidVia,
+      },
+      { invoiceId: invoice.id, bookingId: invoice.bookingId ?? null }
+    );
+  } catch (error) {
+    console.error(`[Balance] Failed to send receipt for invoice ${invoice.id}:`, error);
   }
 }
 

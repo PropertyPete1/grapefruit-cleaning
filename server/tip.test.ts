@@ -22,6 +22,7 @@ const mockGetBookingByTipToken = vi.fn();
 const mockGetCustomerById = vi.fn();
 const mockGetConnectedPropertyById = vi.fn();
 const mockClaimTipEmail = vi.fn();
+const mockClaimCompletedBySettlement = vi.fn();
 const mockClaimTipPayment = vi.fn();
 const mockDeclineTip = vi.fn();
 const mockClaimJobCompleted = vi.fn();
@@ -37,6 +38,7 @@ vi.mock("./db", () => ({
   getCustomerById: (...a: unknown[]) => mockGetCustomerById(...a),
   getConnectedPropertyById: (...a: unknown[]) => mockGetConnectedPropertyById(...a),
   claimTipRequestEmail: (...a: unknown[]) => mockClaimTipEmail(...a),
+  claimBookingCompletedBySettlement: (...a: unknown[]) => mockClaimCompletedBySettlement(...a),
   claimTipPayment: (...a: unknown[]) => mockClaimTipPayment(...a),
   declineTip: (...a: unknown[]) => mockDeclineTip(...a),
   claimJobCompletedEmail: (...a: unknown[]) => mockClaimJobCompleted(...a),
@@ -123,6 +125,8 @@ beforeEach(() => {
   mockGetCustomerById.mockResolvedValue(CUSTOMER);
   mockGetConnectedPropertyById.mockResolvedValue(undefined);
   mockClaimTipEmail.mockResolvedValue(true);
+  // Default: nothing to complete. Tests that settle an open booking say so.
+  mockClaimCompletedBySettlement.mockResolvedValue(false);
   mockClaimTipPayment.mockResolvedValue(true);
   mockDeclineTip.mockResolvedValue(true);
   mockClaimJobCompleted.mockResolvedValue(true);
@@ -205,10 +209,62 @@ describe("the tip-request thank-you", () => {
     expect(mockSendMail).not.toHaveBeenCalled();
   });
 
-  it("waits for completion — a merely confirmed booking gets nothing", async () => {
+  /**
+   * Regression: booking GFC-WH33YS, invoice INV-MT0LDYJ6-7D0D.
+   *
+   * An admin-created booking was invoiced and paid ($170, stripe) while its
+   * status still read `confirmed`, because nobody flipped it in Admin →
+   * Appointments first. The old gate — `if (status !== "completed") return` —
+   * swallowed the tip ask in silence: no email, no log line, no email_log row.
+   * A paid balance is proof the job happened, so settlement now records the
+   * completion and carries on to the thank-you.
+   */
+  it("completes a still-confirmed booking whose balance just settled, then tips", async () => {
+    mockGetBookingById.mockResolvedValue({
+      ...BOOKING,
+      // Daniel's exact shape: admin-created, still confirmed, never thanked.
+      id: 150001,
+      reference: "GFC-WH33YS",
+      status: "confirmed",
+      kind: "admin",
+      totalAmount: 170,
+      tipToken: null,
+      tipEmailSentAt: null,
+    });
+    mockClaimCompletedBySettlement.mockResolvedValue(true);
+
+    await sendTipRequestEmailSafely(150001, ORIGIN);
+
+    expect(mockClaimCompletedBySettlement).toHaveBeenCalledWith(150001);
+    expect(mockClaimTipEmail).toHaveBeenCalled();
+    // 15/20/25% of $170, the figures Daniel should have been offered.
+    const [email] = sentEmails();
+    for (const amount of ["$26 USD", "$34 USD", "$43 USD"]) {
+      expect(email!.html).toContain(amount);
+    }
+  });
+
+  it("tips an in-progress booking whose balance settled", async () => {
+    mockGetBookingById.mockResolvedValue({ ...BOOKING, status: "in_progress" });
+    mockClaimCompletedBySettlement.mockResolvedValue(true);
+    await sendTipRequestEmailSafely(42, ORIGIN);
+    expect(mockSendMail).toHaveBeenCalled();
+  });
+
+  it("stays silent when the completion claim is lost to a concurrent settle", async () => {
+    // A cancelled row, or one another handler completed and thanked a moment
+    // earlier: either way the claim reports no change and nothing is sent.
     mockGetBookingById.mockResolvedValue({ ...BOOKING, status: "confirmed" });
+    mockClaimCompletedBySettlement.mockResolvedValue(false);
     await sendTipRequestEmailSafely(42, ORIGIN);
     expect(mockClaimTipEmail).not.toHaveBeenCalled();
+    expect(mockSendMail).not.toHaveBeenCalled();
+  });
+
+  it("leaves an already-completed booking's status alone", async () => {
+    await sendTipRequestEmailSafely(42, ORIGIN);
+    expect(mockClaimCompletedBySettlement).not.toHaveBeenCalled();
+    expect(mockSendMail).toHaveBeenCalled();
   });
 
   it("stays quiet for auto-booked turnovers unless the host asked for per-clean notices", async () => {

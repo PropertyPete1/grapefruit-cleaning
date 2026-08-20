@@ -8,6 +8,7 @@ import type { Express, Request, Response } from "express";
 import { sendDueBalanceReminders } from "./balance";
 import { sdk } from "./_core/sdk";
 import { syncAllProperties } from "./icalSync";
+import { sendDueRebookingNudges } from "./marketing";
 import { publicOrigin } from "./publicOrigin";
 import { sendDueReminders } from "./reminders";
 
@@ -40,7 +41,23 @@ async function sendRemindersHandler(req: Request, res: Response) {
       `[BalanceReminders] Scanned ${balances.scanned} open balance link(s), sent ${balances.reminded}, alerted owner on ${balances.alerted}.`,
       balances.details.join(" | ") || "none due"
     );
-    return res.json({ ok: true, ...summary, balanceReminders: balances });
+    // Marketing rides the same daily beat and runs LAST on purpose: a
+    // transactional reminder must never be delayed or dropped because a
+    // promotional sweep ahead of it was slow or threw. Its own failure is
+    // caught here for the same reason — no nudge is worth a 500 on the cron.
+    let nudges;
+    try {
+      nudges = await sendDueRebookingNudges(publicOrigin(req));
+      console.log(
+        `[Marketing] Scanned ${nudges.scanned} customer(s), sent ${nudges.sent} nudge(s).`,
+        Object.entries(nudges.skipped)
+          .map(([reason, count]) => `${reason}:${count}`)
+          .join(" ") || "no skips"
+      );
+    } catch (error) {
+      console.error("[Marketing] Nudge sweep failed:", error);
+    }
+    return res.json({ ok: true, ...summary, balanceReminders: balances, nudges });
   } catch (error) {
     // Stack traces stay in the server log; the response carries only the
     // message, so the endpoint can't be used to map the filesystem.

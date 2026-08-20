@@ -37,6 +37,7 @@ import {
   issueManualInvoice,
   originFromRequest,
   resendBalanceLink,
+  sendPaymentReceiptSafely,
 } from "../balance";
 import { balanceLinkStatus } from "../balanceRules";
 import { buildStaffInviteEmail, deliverEmail, sendDepositLinkEmail, sendPropertyConnectedEmail } from "../emails";
@@ -897,6 +898,17 @@ export const adminRouter = router({
       // Marking a balance paid by hand (collected in person, say) settles the
       // customer — the thank-you with the tip ask goes out now, claimed once.
       // Balance only: a manual invoice has no finished job to tip a crew for.
+      //
+      // The receipt goes first, and unlike the tip it covers BOTH kinds: cash
+      // in hand is still a payment the customer deserves proof of. Only a
+      // genuine transition into `paid` sends one, so re-saving an already-paid
+      // invoice does not receipt it twice.
+      if (input.status === "paid" && invoice && invoice.status !== "paid") {
+        await sendPaymentReceiptSafely(
+          { ...invoice, paidAt: new Date() },
+          invoice.paidVia === "stripe" ? "card" : "manual"
+        );
+      }
       if (input.status === "paid" && invoice?.kind === "balance" && invoice.bookingId) {
         await sendTipRequestEmailSafely(invoice.bookingId, originFromRequest(ctx.req));
       }

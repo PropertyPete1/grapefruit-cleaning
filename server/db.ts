@@ -269,6 +269,33 @@ export async function confirmUnpaidBooking(
 }
 
 /**
+ * Marks a booking completed because its balance was paid, atomically.
+ *
+ * A paid balance invoice is proof the job happened — nobody bills a balance
+ * for work that was not done. Admin-created bookings are routinely invoiced
+ * without anyone first flipping the status in Admin → Appointments, which left
+ * finished jobs sitting at `confirmed` and silently suppressed the tip ask,
+ * whose gate reads the booking's status rather than the payment's.
+ *
+ * Only `confirmed` and `in_progress` are claimable. `cancelled` and `expired`
+ * are deliberately excluded: a settled invoice against a cancelled booking is
+ * a refund or an out-of-band void, and resurrecting it as completed would both
+ * misstate the record and fire a tip request for a job that never happened.
+ * `pending_deposit` is excluded too — a balance cannot legitimately settle
+ * before the deposit that precedes it.
+ *
+ * Returns true only for the caller that actually made the change.
+ */
+export async function claimBookingCompletedBySettlement(id: number): Promise<boolean> {
+  const db = requireDb(await getDb());
+  const result = await db
+    .update(bookings)
+    .set({ status: "completed" })
+    .where(and(eq(bookings.id, id), inArray(bookings.status, ["confirmed", "in_progress"])));
+  return affectedRows(result) > 0;
+}
+
+/**
  * SQL for "this unpaid booking has held its slot for long enough".
  *
  * The window is per row — 24 hours for an admin-created booking, one for the
@@ -1196,6 +1223,99 @@ export async function setSetting(key: string, value: string) {
 export async function listSettings() {
   const db = requireDb(await getDb());
   return db.select().from(siteSettings);
+}
+
+// ---------- Marketing (re-booking nudges) ----------
+
+/**
+ * Every customer the nudge sweep should consider, with the three facts the
+ * decision turns on: when they last had a cleaning, whether they have one
+ * coming, and whether they owe us anything.
+ *
+ * Computed in SQL as correlated subqueries rather than by loading bookings and
+ * invoices into memory — the list grows with the business, and the sweep runs
+ * daily forever. Customers with no email are excluded here rather than later:
+ * there is no point carrying them through the cadence at all.
+ *
+ * Unsubscribed customers ARE returned, so the sweep can count and log them.
+ * nudgeDecision refuses them; this keeps "we skipped 12 unsubscribed" visible
+ * instead of silently invisible.
+ */
+export async function listNudgeCandidates(limit = 500) {
+  const db = requireDb(await getDb());
+  const today = new Date().toISOString().slice(0, 10);
+  return db
+    .select({
+      customerId: customers.id,
+      firstName: customers.firstName,
+      email: customers.email,
+      preferredLocale: customers.preferredLocale,
+      marketingUnsubscribedAt: customers.marketingUnsubscribedAt,
+      marketingToken: customers.marketingToken,
+      lastMarketingEmailAt: customers.lastMarketingEmailAt,
+      marketingEmailCount: customers.marketingEmailCount,
+      lastCompletedDate: sql<string | null>`(
+        SELECT MAX(b.scheduledDate) FROM bookings b
+        WHERE b.customerId = ${customers.id} AND b.status = 'completed'
+      )`,
+      upcomingCount: sql<number>`(
+        SELECT COUNT(*) FROM bookings b
+        WHERE b.customerId = ${customers.id}
+          AND b.status IN ('pending_deposit','confirmed','in_progress')
+          AND (b.scheduledDate IS NULL OR b.scheduledDate >= ${today})
+      )`,
+      openInvoiceCount: sql<number>`(
+        SELECT COUNT(*) FROM invoices i
+        WHERE i.customerId = ${customers.id}
+          AND i.status IN ('sent','overdue','awaiting_approval','draft')
+      )`,
+    })
+    .from(customers)
+    .where(isNotNull(customers.email))
+    .limit(limit);
+}
+
+/** The customer behind an unsubscribe link, or undefined for an unknown token. */
+export async function getCustomerByMarketingToken(token: string) {
+  const db = requireDb(await getDb());
+  const rows = await db.select().from(customers).where(eq(customers.marketingToken, token)).limit(1);
+  return rows[0];
+}
+
+/**
+ * Records that a nudge went out: bumps the count and stamps the clock, and
+ * stores the unsubscribe token if this was the customer's first.
+ *
+ * The count is incremented in SQL rather than written from a value read
+ * earlier, so two sweeps overlapping cannot both write "1".
+ */
+export async function recordMarketingEmailSent(
+  customerId: number,
+  marketingToken: string,
+  now: Date = new Date()
+): Promise<void> {
+  const db = requireDb(await getDb());
+  await db
+    .update(customers)
+    .set({
+      lastMarketingEmailAt: now,
+      marketingEmailCount: sql`${customers.marketingEmailCount} + 1`,
+      marketingToken,
+    })
+    .where(eq(customers.id, customerId));
+}
+
+/**
+ * Honours an unsubscribe. Idempotent, and deliberately one-way: nothing in the
+ * automated paths ever clears this column, so consent withdrawn stays
+ * withdrawn. Re-subscribing is a human action through the admin, by request.
+ */
+export async function unsubscribeFromMarketing(customerId: number, now: Date = new Date()): Promise<void> {
+  const db = requireDb(await getDb());
+  await db
+    .update(customers)
+    .set({ marketingUnsubscribedAt: now })
+    .where(and(eq(customers.id, customerId), isNull(customers.marketingUnsubscribedAt)));
 }
 
 // ---------- Statistics ----------

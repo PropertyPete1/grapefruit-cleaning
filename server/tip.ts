@@ -93,7 +93,16 @@ export async function sendTipRequestEmailSafely(bookingId: number, origin: strin
     if (!booking) return;
     // Only a completed job is thanked; a cancelled booking's settled invoice
     // (refunded, voided out-of-band) must never produce a tip ask.
-    if (booking.status !== "completed") return;
+    //
+    // A booking still sitting at `confirmed`/`in_progress` when its balance is
+    // paid IS a completed job — an admin-created booking gets invoiced without
+    // anyone flipping the status first, and this gate used to swallow the tip
+    // ask silently (booking GFC-WH33YS, invoice INV-MT0LDYJ6-7D0D). Record the
+    // truth, then carry on. Cancelled and expired stay excluded by the claim.
+    if (booking.status !== "completed") {
+      if (!(await db.claimBookingCompletedBySettlement(bookingId))) return;
+      console.log(`[Tip] Booking ${bookingId} settled while ${booking.status} → marked completed`);
+    }
     // Auto-booked turnovers stay quiet unless the host opted into per-clean
     // notices — same rule as every other per-clean email.
     if (booking.kind === "ical_auto") {

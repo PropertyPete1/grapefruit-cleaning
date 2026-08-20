@@ -662,6 +662,234 @@ export function buildBalanceDueEmail(data: BalanceEmailData): { subject: string;
  * already delivered; this is a nudge with the link, not a second invoice.
  * The link's validity is renewed with each reminder, so the URL always works.
  */
+
+/**
+ * The receipt every settled invoice earns: "Payment received — thank you",
+ * with the same itemized breakdown the invoice carried and the amount paid.
+ *
+ * Deliberately NOT merged with the tip ask. A balance invoice's tip email is
+ * the warm, optional, action-seeking message; this is the dry proof of payment
+ * a customer files or forwards to an accountant. Folding a "please tip your
+ * crew" call-to-action into a receipt makes the receipt feel like a solicitation
+ * and buries the number people actually came for. They arrive together for a
+ * balance settlement, each doing one job well.
+ *
+ * Works for manual invoices too, where `jobless` drops the booking reference
+ * and service date rather than printing them empty.
+ */
+export function buildPaymentReceiptEmail(
+  data: BalanceEmailData & { paidOn: string; paidVia: "card" | "manual" }
+): { subject: string; body: string } {
+  const jobless = data.reference === "";
+  const method =
+    data.paidVia === "card"
+      ? { en: "Card (online)", es: "Tarjeta (en línea)" }
+      : { en: "Recorded by our team", es: "Registrado por nuestro equipo" };
+  // A deposit line only makes sense when one was actually taken; on a manual
+  // invoice, or in zero-deposit mode, printing "$0 deposit" invents a credit.
+  const showDeposit = data.deposit > 0;
+
+  if (data.locale === "es") {
+    return {
+      subject: `Pago recibido — gracias | Grapefruit Cleaning Co.`,
+      body: [
+        `Hola ${data.customerName},`,
+        ``,
+        `Recibimos su pago de ${fmtUsd(data.balance)}. ¡Muchas gracias!`,
+        ``,
+        `COMPROBANTE DE PAGO`,
+        `Factura: ${data.invoiceNumber}`,
+        jobless ? undefined : `Referencia: ${data.reference}`,
+        `Servicio: ${data.serviceName}`,
+        jobless ? undefined : `Fecha del servicio: ${data.date}`,
+        data.address ? `Dirección: ${data.address}` : undefined,
+        `Fecha de pago: ${data.paidOn}`,
+        `Método de pago: ${method.es}`,
+        ``,
+        `DETALLE`,
+        ...balanceChargeLines(data, "es"),
+        showDeposit ? `Total del servicio: ${fmtUsd(data.total)}` : undefined,
+        showDeposit ? `Depósito pagado anteriormente: ${fmtUsd(data.deposit)}` : undefined,
+        `Monto pagado: ${fmtUsd(data.balance)}`,
+        `Saldo pendiente: ${fmtUsd(0)}`,
+        ``,
+        `Su cuenta queda saldada. Guarde este correo como comprobante.`,
+        ``,
+        data.bizPhone
+          ? `¿Preguntas? Responda a este correo o llámenos al ${data.bizPhone}.`
+          : `¿Preguntas? Simplemente responda a este correo.`,
+        ``,
+        `Con aprecio,`,
+        `El equipo de Grapefruit Cleaning Co.`,
+      ]
+        .filter(line => line !== undefined)
+        .join("\n"),
+    };
+  }
+  return {
+    subject: `Payment received — thank you | Grapefruit Cleaning Co.`,
+    body: [
+      `Hi ${data.customerName},`,
+      ``,
+      `We've received your payment of ${fmtUsd(data.balance)}. Thank you!`,
+      ``,
+      `PAYMENT RECEIPT`,
+      `Invoice: ${data.invoiceNumber}`,
+      jobless ? undefined : `Reference: ${data.reference}`,
+      `Service: ${data.serviceName}`,
+      jobless ? undefined : `Service date: ${data.date}`,
+      data.address ? `Address: ${data.address}` : undefined,
+      `Payment date: ${data.paidOn}`,
+      `Payment method: ${method.en}`,
+      ``,
+      `BREAKDOWN`,
+      ...balanceChargeLines(data, "en"),
+      showDeposit ? `Service total: ${fmtUsd(data.total)}` : undefined,
+      showDeposit ? `Deposit paid earlier: ${fmtUsd(data.deposit)}` : undefined,
+      `Amount paid: ${fmtUsd(data.balance)}`,
+      `Balance remaining: ${fmtUsd(0)}`,
+      ``,
+      `Your account is settled in full. Keep this email for your records.`,
+      ``,
+      data.bizPhone
+        ? `Questions? Reply to this email or call us at ${data.bizPhone}.`
+        : `Questions? Just reply to this email.`,
+      ``,
+      `Warmly,`,
+      `The Grapefruit Cleaning Co. Team`,
+    ]
+      .filter(line => line !== undefined)
+      .join("\n"),
+  };
+}
+
+/** Sends the receipt. Never throws — a receipt must not fail a settlement. */
+export async function sendPaymentReceiptEmail(
+  data: BalanceEmailData & { paidOn: string; paidVia: "card" | "manual" },
+  context?: EmailContext
+): Promise<boolean> {
+  const email = buildPaymentReceiptEmail(data);
+  return deliverEmail(data.customerEmail, email.subject, email.body, undefined, {
+    emailType: "payment_receipt",
+    ...context,
+  });
+}
+
+export interface RebookingNudgeData {
+  customerName: string;
+  customerEmail: string;
+  /** Date of their last completed cleaning (YYYY-MM-DD). */
+  lastServiceDate: string;
+  /** Whole months since that cleaning, for the copy. */
+  monthsSince: number;
+  /** Absolute URL of the booking page in their language. */
+  bookUrl: string;
+  /** Absolute one-click unsubscribe URL. Required — see below. */
+  unsubscribeUrl: string;
+  locale: "en" | "es";
+  bizPhone?: string;
+}
+
+/**
+ * The re-booking nudge: an invitation to book again, not an invoice.
+ *
+ * This is the only MARKETING message the system sends, and it is held to a
+ * different standard than the transactional mail around it. Every copy carries
+ * a working one-click unsubscribe in plain sight — not buried, not a "manage
+ * preferences" maze — because that is what the law requires of commercial
+ * email and what a decent business does anyway.
+ *
+ * The tone shifts with the count: the first is warm and specific about their
+ * last visit; later ones get shorter, on the principle that someone who has
+ * ignored three invitations should be nudged more quietly, not more loudly.
+ */
+export function buildRebookingNudgeEmail(
+  data: RebookingNudgeData,
+  nudgeNumber: number
+): { subject: string; body: string } {
+  const first = nudgeNumber === 1;
+  if (data.locale === "es") {
+    return {
+      subject: first
+        ? `¿Le gustaría otra limpieza? | Grapefruit Cleaning Co.`
+        : `Aquí cuando nos necesite | Grapefruit Cleaning Co.`,
+      body: [
+        `Hola ${data.customerName},`,
+        ``,
+        first
+          ? `Fue un gusto limpiar su hogar el ${data.lastServiceDate}. Si le gustaría volver a ese nivel de limpieza, con gusto lo agendamos cuando usted diga.`
+          : `Solo un recordatorio breve: seguimos aquí cuando necesite otra limpieza.`,
+        ``,
+        `RESERVE EN LÍNEA`,
+        `Elija su fecha y hora aquí:`,
+        `${data.bookUrl}`,
+        ``,
+        data.bizPhone
+          ? `¿Prefiere hablar con alguien? Llámenos al ${data.bizPhone} o responda a este correo.`
+          : `¿Prefiere hablar con alguien? Simplemente responda a este correo.`,
+        ``,
+        `Con aprecio,`,
+        `El equipo de Grapefruit Cleaning Co.`,
+        ``,
+        `—`,
+        `¿No desea recibir más correos como este? Cancele su suscripción con un clic:`,
+        `${data.unsubscribeUrl}`,
+        `(Seguirá recibiendo confirmaciones y facturas de los servicios que reserve.)`,
+      ].join("\n"),
+    };
+  }
+  return {
+    subject: first
+      ? `Ready for another cleaning? | Grapefruit Cleaning Co.`
+      : `Here whenever you need us | Grapefruit Cleaning Co.`,
+    body: [
+      `Hi ${data.customerName},`,
+      ``,
+      first
+        ? `It was a pleasure cleaning your home on ${data.lastServiceDate}. If you'd like to get back to that just-cleaned feeling, we'd love to schedule your next visit whenever suits you.`
+        : `Just a quick note: we're still here whenever you'd like another cleaning.`,
+      ``,
+      `BOOK ONLINE`,
+      `Pick your date and time here:`,
+      `${data.bookUrl}`,
+      ``,
+      data.bizPhone
+        ? `Prefer to talk to someone? Call us at ${data.bizPhone} or just reply to this email.`
+        : `Prefer to talk to someone? Just reply to this email.`,
+      ``,
+      `Warmly,`,
+      `The Grapefruit Cleaning Co. Team`,
+      ``,
+      `—`,
+      `Don't want emails like this? Unsubscribe in one click:`,
+      `${data.unsubscribeUrl}`,
+      `(You'll still get confirmations and invoices for any service you book.)`,
+    ].join("\n"),
+  };
+}
+
+/**
+ * Sends a re-booking nudge. Logged as type "marketing" so the email log can
+ * separate promotional volume from transactional mail at a glance.
+ *
+ * Refuses outright without an unsubscribe URL. A marketing email that cannot be
+ * unsubscribed from is one we must not send, so this is a hard guard rather
+ * than a caller's responsibility.
+ */
+export async function sendRebookingNudgeEmail(
+  data: RebookingNudgeData,
+  nudgeNumber: number
+): Promise<boolean> {
+  if (!data.unsubscribeUrl) {
+    console.error("[Marketing] Refusing to send a nudge with no unsubscribe link");
+    return false;
+  }
+  const email = buildRebookingNudgeEmail(data, nudgeNumber);
+  return deliverEmail(data.customerEmail, email.subject, email.body, undefined, {
+    emailType: "marketing",
+  });
+}
+
 export function buildBalanceReminderEmail(
   data: BalanceEmailData,
   reminderNumber: 1 | 2

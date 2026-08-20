@@ -52,6 +52,25 @@ export const customers = mysqlTable("customers", {
   zip: varchar("zip", { length: 20 }),
   preferredLocale: mysqlEnum("preferredLocale", ["en", "es"]).default("en").notNull(),
   notes: text("notes"),
+  /**
+   * Marketing consent and the state behind the re-booking nudges.
+   *
+   * `marketingUnsubscribedAt` is the one that carries legal weight: once set,
+   * no automated path ever clears it, so an unsubscribe is honoured forever
+   * rather than lapsing after some window. Transactional mail — invoices,
+   * receipts, reminders about a job they actually booked — is unaffected, and
+   * deliberately so: a customer cannot opt out of being told what they owe.
+   *
+   * `marketingToken` is the bearer credential in the unsubscribe URL, minted
+   * with the first nudge and never rotated (an old email's link must keep
+   * working years later). `lastMarketingEmailAt` enforces the 21-day floor
+   * between marketing sends, and `marketingEmailCount` distinguishes the first
+   * warm "we'd love to have you back" from the monthly ones that follow.
+   */
+  marketingUnsubscribedAt: timestamp("marketingUnsubscribedAt"),
+  marketingToken: varchar("marketingToken", { length: 64 }).unique(),
+  lastMarketingEmailAt: timestamp("lastMarketingEmailAt"),
+  marketingEmailCount: int("marketingEmailCount").default(0).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
