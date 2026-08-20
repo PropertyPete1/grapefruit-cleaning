@@ -237,6 +237,22 @@ async function listPaymentsHandler(req: Request, res: Response) {
 }
 
 export function registerBrainRoutes(app: Express): void {
+  // A POST/PUT/PATCH/DELETE to a brain path would otherwise fall through every
+  // GET registration and land on the SPA catch-all, answering 200 with the
+  // marketing site's HTML. Nothing is written either way — this module
+  // registers no write handlers — but a 200 tells PRIMARY's adapter the method
+  // was accepted, which is the opposite of the truth. Answer 405 with an Allow
+  // header so the read-only contract is stated in the protocol rather than
+  // merely implied by what is absent.
+  //
+  // Deliberately ahead of auth: the method is wrong regardless of the token, and
+  // a caller fixing a verb should not first have to fix a credential. This
+  // leaks only the fact that /api/brain/* exists, which the 503/401 already do.
+  app.all(/^\/api\/brain(\/|$)/, (req, res, next) => {
+    if (req.method === "GET" || req.method === "HEAD") return next();
+    res.setHeader("Allow", "GET, HEAD");
+    return res.status(405).json({ error: "method not allowed" });
+  });
   app.get("/api/brain/ping", guarded(pingHandler));
   app.get("/api/brain/customers", guarded(listCustomersHandler));
   app.get("/api/brain/customers/:id", guarded(getCustomerHandler));

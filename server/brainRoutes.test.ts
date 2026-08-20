@@ -31,17 +31,22 @@ type Handler = (req: Request, res: Response) => Promise<unknown>;
 
 /**
  * Registers the routes against a stub app that records every registration.
- * Anything registered through a mutating verb (or middleware) lands in
- * `mutating` — the read-only-by-construction claim is that it stays empty.
+ * Anything registered through a mutating verb lands in `mutating` — the
+ * read-only-by-construction claim is that it stays empty. `app.all` is captured
+ * separately: it is how the method guard is installed, and installing a guard
+ * is not the same as registering a write handler.
  */
 function captureRoutes() {
   const routes = new Map<string, Handler>();
   const mutating: string[] = [];
+  const guards: { path: unknown; handler: unknown }[] = [];
   const record =
     (method: string) =>
     (path: string, ...rest: unknown[]) => {
       if (method === "get") {
         routes.set(path, rest[rest.length - 1] as Handler);
+      } else if (method === "all") {
+        guards.push({ path, handler: rest[rest.length - 1] });
       } else {
         mutating.push(`${method} ${path}`);
       }
@@ -56,7 +61,7 @@ function captureRoutes() {
     use: record("use"),
   } as unknown as Express;
   registerBrainRoutes(app);
-  return { routes, mutating };
+  return { routes, mutating, guards };
 }
 
 function fakeReq(over: { authorization?: string | null; params?: object; query?: object } = {}) {
@@ -196,6 +201,85 @@ describe("read-only by construction", () => {
     const { routes, mutating } = captureRoutes();
     expect(mutating).toEqual([]);
     expect(Array.from(routes.keys()).sort()).toEqual([...ALL_PATHS].sort());
+  });
+
+  /**
+   * Without this guard a POST falls through every GET registration to the SPA
+   * catch-all and answers 200 with the marketing site's HTML — telling PRIMARY's
+   * adapter the write was accepted. Nothing is ever written either way; the
+   * point is that the protocol should say so.
+   */
+  describe("write methods are refused with 405", () => {
+    const guard = () => {
+      const { guards } = captureRoutes();
+      expect(guards).toHaveLength(1);
+      return guards[0]!;
+    };
+
+    const runGuard = (method: string) => {
+      const { handler } = guard();
+      const res = fakeRes();
+      const headers: Record<string, string> = {};
+      let nextCalled = false;
+      (handler as (req: Request, res: Response, next: () => void) => unknown)(
+        { method, headers: {}, params: {}, query: {}, socket: { remoteAddress: "10.1.2.3" } } as unknown as Request,
+        {
+          ...res,
+          status: res.status,
+          json: res.json,
+          setHeader: (k: string, v: string) => {
+            headers[k] = v;
+          },
+        } as unknown as Response,
+        () => {
+          nextCalled = true;
+        }
+      );
+      return { res, headers, nextCalled };
+    };
+
+    it("covers the whole /api/brain namespace, not one path at a time", () => {
+      const { path } = guard();
+      expect(path).toBeInstanceOf(RegExp);
+      const re = path as RegExp;
+      for (const p of ALL_PATHS) expect(re.test(p), p).toBe(true);
+      expect(re.test("/api/brain")).toBe(true);
+      // Must not swallow neighbouring APIs.
+      expect(re.test("/api/version")).toBe(false);
+      expect(re.test("/api/trpc/booking.pricingConfig")).toBe(false);
+      expect(re.test("/api/brainstorm")).toBe(false);
+    });
+
+    it("answers 405 with Allow: GET, HEAD on every write verb", () => {
+      for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+        const { res, headers, nextCalled } = runGuard(method);
+        expect(res.statusCode, method).toBe(405);
+        expect(res.body, method).toEqual({ error: "method not allowed" });
+        expect(headers.Allow, method).toBe("GET, HEAD");
+        expect(nextCalled, method).toBe(false);
+      }
+    });
+
+    it("lets GET and HEAD through to the real handlers", () => {
+      for (const method of ["GET", "HEAD"]) {
+        const { nextCalled, res } = runGuard(method);
+        expect(nextCalled, method).toBe(true);
+        expect(res.statusCode, method).toBe(200); // untouched by the guard
+      }
+    });
+
+    it("refuses the verb without consulting the token, and touches no data", () => {
+      // No BRAIN_READ_TOKEN in the environment here: a wrong verb is wrong
+      // whether or not the caller is authenticated, and a caller fixing a verb
+      // should not first have to fix a credential.
+      const { res } = runGuard("POST");
+      expect(res.statusCode).toBe(405);
+      expect(mockPageCustomers).not.toHaveBeenCalled();
+      expect(mockPageBookings).not.toHaveBeenCalled();
+      expect(mockPagePayments).not.toHaveBeenCalled();
+      expect(mockPageContactMessages).not.toHaveBeenCalled();
+      expect(mockGetCustomerById).not.toHaveBeenCalled();
+    });
   });
 });
 

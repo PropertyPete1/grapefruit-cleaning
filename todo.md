@@ -327,9 +327,11 @@
 - [x] Fast-forward stale checkout (66f0d82) to origin/main f17c742 -- 18 commits behind, NOT 2 as handoff said
 - [x] Verify tree byte-identical to github/main before any checkpoint
 - [x] tsc clean, 1169 passed / 1 skipped, brain route tests 20/20, build clean
-- [ ] Deploy PR #14 to production
-- [ ] Verify live /api/brain/ping returns 503 before the token is set
-- [ ] Set BRAIN_READ_TOKEN in production env (never print the value)
-- [ ] Explicit redeploy after the env change (env-only checkpoint reports "no changes" and keeps the old process)
-- [ ] Verify live: 401 wrong bearer, 200 correct bearer, POST -> 404
-- [ ] Confirm rest of CRM unaffected: site 200, booking flow, admin
+- [x] Deploy PR #14 to production
+- [x] Verify live /api/brain/ping returns 503 before the token is set
+- [x] BRAIN_READ_TOKEN saved by owner in Settings -> Secrets (value never seen by me)
+- [x] Explicit redeploy after the env change (env-only checkpoint reports "no changes" and keeps the old process)
+- [ ] BLOCKED: live still 503 after genuine restart -> secret not reaching the runtime; also POST to a brain route returns the SPA (200), not 404
+- [x] Confirm rest of CRM unaffected: site 200, booking flow, admin
+- [x] Write methods on /api/brain/* return 405 with Allow: GET, HEAD (was falling through to the SPA catch-all as 200)
+- [x] 405 test coverage: namespace regex scope, every write verb, GET/HEAD pass-through, refusal without consulting the token
