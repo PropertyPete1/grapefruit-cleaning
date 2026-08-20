@@ -200,7 +200,9 @@ describe("read-only by construction", () => {
   it("registers exactly the six spec routes, all through GET", () => {
     const { routes, mutating } = captureRoutes();
     expect(mutating).toEqual([]);
-    expect(Array.from(routes.keys()).sort()).toEqual([...ALL_PATHS].sort());
+    // The regex entry is the unknown-path fallback, not a seventh endpoint.
+    const literal = Array.from(routes.keys()).filter((k) => typeof k === "string");
+    expect(literal.sort()).toEqual([...ALL_PATHS].sort());
   });
 
   /**
@@ -517,5 +519,65 @@ describe("failure shield", () => {
     const res = await call("/api/brain/customers");
     expect(res.statusCode).toBe(500);
     expect(res.body).toEqual({ error: "internal error" });
+  });
+});
+
+/**
+ * An unknown brain path used to fall through to the SPA catch-all and answer
+ * 200 with the marketing site's HTML, so a caller checking only status codes
+ * read a typo'd URL as a healthy endpoint. That is exactly how a probe list
+ * came to report /api/brain/invoices, /api/brain/properties and
+ * /api/brain/summary as live when none of the three exist.
+ */
+describe("unknown paths 404 instead of reaching the SPA", () => {
+  const fallback = () => {
+    const { routes } = captureRoutes();
+    const entry = Array.from(routes.entries()).find(([k]) => (k as unknown) instanceof RegExp);
+    expect(entry, "a regex GET fallback should be registered").toBeDefined();
+    return entry!;
+  };
+
+  it("is registered last, so the six real routes win", () => {
+    const { routes } = captureRoutes();
+    const keys = Array.from(routes.keys());
+    const regexAt = keys.findIndex((k) => (k as unknown) instanceof RegExp);
+    expect(regexAt).toBe(keys.length - 1);
+  });
+
+  it("matches the brain namespace without swallowing neighbours", () => {
+    const [pattern] = fallback();
+    const re = pattern as unknown as RegExp;
+    expect(re.test("/api/brain/invoices")).toBe(true);
+    expect(re.test("/api/brain/properties")).toBe(true);
+    expect(re.test("/api/brain/summary")).toBe(true);
+    expect(re.test("/api/brain/typo")).toBe(true);
+    // Neighbouring APIs and the public site must stay untouched.
+    expect(re.test("/api/version")).toBe(false);
+    expect(re.test("/api/trpc/booking.pricingConfig")).toBe(false);
+    expect(re.test("/api/brainstorm")).toBe(false);
+    expect(re.test("/en/book")).toBe(false);
+  });
+
+  it("answers 404 JSON, never HTML, and reads no data", async () => {
+    const [, handler] = fallback();
+    const res = fakeRes();
+    await (handler as Handler)(fakeReq(), res as unknown as Response);
+    expect(res.statusCode).toBe(404);
+    expect(res.body).toEqual({ error: "unknown brain endpoint" });
+    expect(mockPageCustomers).not.toHaveBeenCalled();
+    expect(mockPageBookings).not.toHaveBeenCalled();
+    expect(mockPagePayments).not.toHaveBeenCalled();
+    expect(mockPageContactMessages).not.toHaveBeenCalled();
+    expect(mockGetCustomerById).not.toHaveBeenCalled();
+  });
+
+  it("404s a wrong path without consulting the token", async () => {
+    // A path is wrong whatever the credential is; a caller fixing a URL should
+    // not first have to fix a token. Mirrors the 405 guard's ordering.
+    const [, handler] = fallback();
+    const res = fakeRes();
+    await (handler as Handler)(fakeReq({ authorization: null }), res as unknown as Response);
+    expect(res.statusCode).toBe(404);
+    expect(res.body).toEqual({ error: "unknown brain endpoint" });
   });
 });
