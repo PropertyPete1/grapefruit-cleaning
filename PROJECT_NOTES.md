@@ -438,3 +438,27 @@ Endpoint: GET https://maps.bexar.org/arcgis/rest/services/Parcels/MapServer/0/qu
 - DONE: AdminRoutes.tsx + StaffRoutes.tsx mobile top bars now: hamburger (Sheet side=left w-72) + current-section icon+label in bar; drawer mirrors desktop sidebar (logo header, nav with active bg-primary/10, user footer w/ logout); drawer closes on item click. Both files use useState drawerOpen.
 - Remaining: tsc + tests, mobile screenshots (375x812) of /admin and /staff, checkpoint, GitHub push.
 - Note: admin/staff area labels are intentionally English (internal tool); public site is the bilingual surface. Round 6-14 details above still accurate. Live domain: grapeclean-skvabkkr.manus.space. GitHub: PropertyPete1/grapefruit-cleaning (public), remote name "github".
+
+### Brain Read API (PR #14, deployed Aug 20 2026)
+
+Six read-only, token-authenticated REST routes under `/api/brain` for PRIMARY's
+grapefruit adapter: `ping`, `customers`, `customers/:id`, `bookings`,
+`inquiries`, `payments`. GET handlers only; every response is built from an
+explicit field allowlist, so street addresses, notes, message bodies, Stripe ids
+and pay/tip tokens are never copied out of a row.
+
+Credential is `Authorization: Bearer $BRAIN_READ_TOKEN`, compared with
+`timingSafeEqual` over sha256 digests of both sides. The token is read at
+request time rather than module load, so provisioning it needs no code change —
+but it DOES need a container restart, which is not the same thing (see below).
+Token unset => 503 "not configured" on every route, which is why a dormant
+deploy is safe.
+
+**Deploy note, and a second instance of the Aug 19 env trap.** Saving a secret
+does not restart the running container, and a checkpoint with no file changes
+reports "No changes to commit" and does not deploy — so the old process keeps
+serving with the old environment. Observed here exactly: after BRAIN_READ_TOKEN
+was saved, `/api/brain/ping` still answered 503, and an env-only checkpoint left
+`startedAt` unchanged at 18:33:53Z. A genuine redeploy requires a committable
+file change. If a future round changes only environment values, touch a file (a
+notes entry like this one counts) or the deploy is a no-op.
