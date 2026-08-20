@@ -259,4 +259,19 @@ export function registerBrainRoutes(app: Express): void {
   app.get("/api/brain/bookings", guarded(listBookingsHandler));
   app.get("/api/brain/inquiries", guarded(listInquiriesHandler));
   app.get("/api/brain/payments", guarded(listPaymentsHandler));
+
+  // Registered LAST, so it only sees GETs that matched none of the six routes
+  // above. Without it an unknown path (a typo, or a route an adapter assumes
+  // exists) falls through to the SPA catch-all and answers 200 with the
+  // marketing site's HTML — a caller checking status codes alone reads that as
+  // a healthy endpoint and only discovers the truth when JSON parsing fails on
+  // "<!doctype html>". This turns a silent wrong-shape success into a loud 404.
+  //
+  // Ahead of the auth guard for the same reason as the 405 above: the path is
+  // wrong whatever the token is, and a caller fixing a URL should not first
+  // have to fix a credential. It reveals only that /api/brain/* exists, which
+  // the existing 503/401/405 responses already do.
+  app.get(/^\/api\/brain(\/|$)/, (_req, res) => {
+    return res.status(404).json({ error: "unknown brain endpoint" });
+  });
 }
