@@ -336,4 +336,4 @@
 - [x] Write methods on /api/brain/* return 405 with Allow: GET, HEAD (was falling through to the SPA catch-all as 200)
 - [x] 405 test coverage: namespace regex scope, every write verb, GET/HEAD pass-through, refusal without consulting the token
 - [x] Add GET /api/version/env-visibility: value-safe probe (defined / coarse length bucket / whitespace flag) to tell "secret not injected" from "injected but mismatched"
-- [ ] Verify from production: env-visibility shows BRAIN_READ_TOKEN defined, 401 on wrong bearer, 200 on correct bearer
+- [x] Verified from production: env-visibility defined:true; no/wrong bearer -> 401; correct bearer -> 200 {"ok":true,"business":"Grapefruit Cleaning Co."}; /api/brain/customers returns 4 real rows with no email/phone/address in the bulk shape (confirmed by DB cross-check that those columns ARE populated)
