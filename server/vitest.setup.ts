@@ -20,6 +20,7 @@
 /** Deployment-supplied variables that must never leak into a test run. */
 export const GUARDED_ENV_KEYS = [
   "PUBLIC_BASE_URL",
+  "BRAIN_READ_TOKEN",
   "DATABASE_URL",
   "GMAIL_USER",
   "GMAIL_APP_PASSWORD",

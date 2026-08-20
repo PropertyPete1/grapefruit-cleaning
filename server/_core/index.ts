@@ -10,6 +10,7 @@ import { registerStripeWebhook } from "../stripeWebhook";
 import { registerSeoRoutes } from "../seoRoutes";
 import { registerScheduledRoutes } from "../scheduledRoutes";
 import { registerBalanceRoutes } from "../balanceRoutes";
+import { registerBrainRoutes } from "../brainRoutes";
 import { registerMarketingRoutes } from "../marketingRoutes";
 import { registerVersionRoutes } from "../versionRoutes";
 import { createContext } from "./context";
@@ -50,6 +51,8 @@ async function startServer() {
   registerScheduledRoutes(app);
   // Customer-facing balance payment links (/api/pay/balance/:token)
   registerBalanceRoutes(app);
+  // Read-only, token-authenticated REST surface for the brain (/api/brain/*)
+  registerBrainRoutes(app);
   // One-click unsubscribe from re-booking nudges (/unsubscribe/:token).
   // Must precede the SPA catch-all so the branded confirmation page wins.
   registerMarketingRoutes(app);
