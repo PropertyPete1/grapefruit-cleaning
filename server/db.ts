@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, isNotNull, isNull, like, lte, notInArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, like, lte, ne, notInArray, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
@@ -292,6 +292,33 @@ export async function claimBookingCompletedBySettlement(id: number): Promise<boo
     .update(bookings)
     .set({ status: "completed" })
     .where(and(eq(bookings.id, id), inArray(bookings.status, ["confirmed", "in_progress"])));
+  return affectedRows(result) > 0;
+}
+
+/**
+ * Claims the host's "cleaning scheduled" notice FOR A SPECIFIC DATE.
+ *
+ * Keyed on the date rather than on a boolean, because the hourly sweep re-places
+ * turnovers that could not find a slot the first time. Re-announcing the same
+ * date is noise; announcing a NEW date is the reschedule a host most needs to
+ * hear about. `turnoverNoticeDate <> date` in the WHERE draws exactly that line,
+ * and being a conditional UPDATE it also settles two syncs racing on one
+ * reservation — only one can claim.
+ *
+ * An unplaced turnover is announced with its checkout date and no time, so the
+ * date is always known even when the slot is not.
+ */
+export async function claimTurnoverNotice(id: number, date: string): Promise<boolean> {
+  const db = requireDb(await getDb());
+  const result = await db
+    .update(bookings)
+    .set({ turnoverNoticeDate: date })
+    .where(
+      and(
+        eq(bookings.id, id),
+        or(isNull(bookings.turnoverNoticeDate), ne(bookings.turnoverNoticeDate, date))
+      )
+    );
   return affectedRows(result) > 0;
 }
 

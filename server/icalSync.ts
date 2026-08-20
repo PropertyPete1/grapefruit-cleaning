@@ -34,6 +34,8 @@ import { slotHour } from "@shared/availability";
 import type { ConnectedProperty } from "../drizzle/schema";
 import * as db from "./db";
 import {
+  buildAutoCleanCancelledAlert,
+  buildAutoCleanCancelledEmail,
   buildAutoCleanScheduledEmail,
   buildFeedFailureAlert,
   buildUnplacedCleanAlert,
@@ -219,6 +221,12 @@ export async function syncConnectedProperty(
       if (!stillAhead) continue;
       await db.updateBooking(row.id, { status: "cancelled" });
       summary.cancelled += 1;
+      // Somebody has to be told. Cancelling silently leaves the host assuming a
+      // clean is booked for a unit that may now be occupied or unsold, and
+      // leaves the crew watching a job vanish from the schedule with no
+      // explanation. Both notices are best-effort: a mail failure must not stop
+      // the rest of the reconciliation.
+      await notifyTurnoverCancelled(property, row);
     }
   }
 
@@ -302,8 +310,8 @@ async function createAutoBooking(
   let unplacedReason: string | null = null;
   if (time) {
     try {
-      await insert({ date: reservation.checkoutDate, time });
-      await maybeSendPerCleanNotice(property, reservation.checkoutDate, time);
+      const id = await insert({ date: reservation.checkoutDate, time });
+      await sendTurnoverScheduledNotice(property, id, reservation.checkoutDate, time, false);
       return "created";
     } catch (error) {
       // Two syncs racing on the same NEW reservation: the loser's insert hits
@@ -318,8 +326,9 @@ async function createAutoBooking(
     unplacedReason = `No slot at or after ${property.defaultTime} fits a ${jobHours}h clean that day.`;
   }
 
+  let unplacedId: number;
   try {
-    await insert(null);
+    unplacedId = await insert(null);
   } catch (error) {
     if (db.isDuplicateUidError(error)) return "created";
     throw error;
@@ -331,7 +340,9 @@ async function createAutoBooking(
     reason: unplacedReason ?? "No slot available.",
   });
   await sendOwnerAlert(alert.title, alert.content);
-  await maybeSendPerCleanNotice(property, reservation.checkoutDate, null);
+  // The host still hears that the checkout is covered — the date is known even
+  // when the time is not, and the template says so rather than implying a slot.
+  await sendTurnoverScheduledNotice(property, unplacedId, reservation.checkoutDate, null, false);
   return "unplaced";
 }
 
@@ -359,7 +370,12 @@ async function placeBooking(
   if (time) {
     try {
       await db.updateBooking(bookingId, { scheduledDate: date, scheduledTime: time, estimatedHours: jobHours });
-      await maybeSendPerCleanNotice(property, date, time);
+      // `quiet` marks the hourly retry of an already-announced turnover. The
+      // date-keyed claim inside the notice is what actually prevents a repeat,
+      // but the flag carries the intent: a retry landing on the SAME date is
+      // silent, while a reservation that genuinely MOVED is a reschedule and
+      // says so.
+      await sendTurnoverScheduledNotice(property, bookingId, date, time, !options.quiet);
       return "placed";
     } catch (error) {
       if (!db.isSlotTakenError(error)) throw error;
@@ -378,24 +394,92 @@ async function placeBooking(
   return "unplaced";
 }
 
-/** The optional per-clean notice, for hosts who asked for one. */
-async function maybeSendPerCleanNotice(
+/**
+ * Tells the host a turnover is on the schedule — ALWAYS, and at most once per
+ * scheduled date.
+ *
+ * Unconditional by design: scheduling confirmation is not a per-clean report,
+ * so `perCleanEmails` does not gate it. "Your next guest is covered" is the one
+ * message a host actually needs from this system, and a host who declined
+ * running commentary on each clean has not declined that.
+ *
+ * The dedupe is a date-keyed claim rather than a boolean flag, because the
+ * hourly sweep re-places turnovers that could not find a slot. Claiming the
+ * date means: same date, already announced → silent; new date → this is a
+ * reschedule and the host hears it. The claim is also the race guard for two
+ * syncs hitting one reservation.
+ */
+async function sendTurnoverScheduledNotice(
   property: ConnectedProperty,
+  bookingId: number,
   date: string,
-  time: string | null
+  time: string | null,
+  rescheduled: boolean
 ): Promise<void> {
-  if (!property.perCleanEmails) return;
-  const customer = await db.getCustomerById(property.customerId);
-  if (!customer?.email) return;
-  const locale = (customer.preferredLocale as "en" | "es") ?? "en";
-  const { subject, body } = buildAutoCleanScheduledEmail({
-    label: property.label,
-    date,
-    time,
-    customerName: customer.firstName,
-    locale,
-  });
-  await deliverEmail(customer.email, subject, body, undefined, { emailType: "ical_turnover" });
+  try {
+    if (!(await db.claimTurnoverNotice(bookingId, date))) return;
+    const customer = await db.getCustomerById(property.customerId);
+    if (!customer?.email) return;
+    const locale = (customer.preferredLocale as "en" | "es") ?? "en";
+    const { subject, body } = buildAutoCleanScheduledEmail({
+      label: property.label,
+      date,
+      time,
+      customerName: customer.firstName,
+      locale,
+      rescheduled,
+      addressLine: property.addressLine,
+    });
+    await deliverEmail(customer.email, subject, body, undefined, {
+      emailType: rescheduled ? "ical_turnover_moved" : "ical_turnover_scheduled",
+      bookingId,
+    });
+  } catch (error) {
+    // One host's mail problem must not abort the reconciliation of the rest of
+    // the feed — the booking itself is already correct in the database.
+    console.error(`[iCalSync] Turnover notice failed for booking ${bookingId}:`, error);
+  }
+}
+
+/**
+ * Tells the host, and the owner, that a cancelled reservation took its cleaning
+ * off the schedule.
+ *
+ * Also unconditional, for the same reason as the scheduling notice: the crew is
+ * no longer coming, and silence there is the expensive kind. The owner alert
+ * rides the existing owner-alert path so it lands wherever the other operational
+ * alerts land.
+ */
+async function notifyTurnoverCancelled(
+  property: ConnectedProperty,
+  row: { id: number; reference: string; scheduledDate: string | null; scheduledTime: string | null }
+): Promise<void> {
+  try {
+    const customer = await db.getCustomerById(property.customerId);
+    if (customer?.email) {
+      const locale = (customer.preferredLocale as "en" | "es") ?? "en";
+      const { subject, body } = buildAutoCleanCancelledEmail({
+        label: property.label,
+        date: row.scheduledDate,
+        time: row.scheduledTime,
+        customerName: customer.firstName,
+        locale,
+      });
+      await deliverEmail(customer.email, subject, body, undefined, {
+        emailType: "ical_turnover_cancelled",
+        bookingId: row.id,
+      });
+    }
+    const alert = buildAutoCleanCancelledAlert({
+      label: property.label,
+      reference: row.reference,
+      date: row.scheduledDate,
+      time: row.scheduledTime,
+    });
+    await sendOwnerAlert(alert.title, alert.content);
+  } catch (error) {
+    console.error(`[iCalSync] Cancellation notice failed for booking ${row.id}:`, error);
+  }
 }
 
 /** The hourly entry point: every active feed, one summary line each. */

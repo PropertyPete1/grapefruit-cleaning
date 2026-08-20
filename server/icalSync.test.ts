@@ -14,6 +14,7 @@ const mockUpdateBooking = vi.fn();
 const mockListAutoBookings = vi.fn();
 const mockUpdateProperty = vi.fn();
 const mockGetCustomerById = vi.fn();
+const mockClaimTurnoverNotice = vi.fn();
 const mockSendMail = vi.fn();
 const mockNotifyOwner = vi.fn();
 
@@ -30,6 +31,7 @@ vi.mock("./db", async () => {
     listAutoBookingsForProperty: (...a: unknown[]) => mockListAutoBookings(...a),
     updateConnectedProperty: (...a: unknown[]) => mockUpdateProperty(...a),
     getCustomerById: (...a: unknown[]) => mockGetCustomerById(...a),
+    claimTurnoverNotice: (...a: unknown[]) => mockClaimTurnoverNotice(...a),
     listActiveSyncProperties: vi.fn().mockResolvedValue([]),
   };
 });
@@ -155,6 +157,8 @@ beforeEach(() => {
     email: "hank@example.com",
     preferredLocale: "en",
   });
+  // The claim succeeds by default: a fresh reservation has never been announced.
+  mockClaimTurnoverNotice.mockResolvedValue(true);
   mockNotifyOwner.mockResolvedValue(undefined);
   mockSendMail.mockResolvedValue({ messageId: "1" });
 });
@@ -205,20 +209,172 @@ describe("creating cleanings from reservations", () => {
     );
   });
 
-  it("sends no per-clean email unless the host opted in", async () => {
+  /**
+   * The scheduling notice is NOT a per-clean report, so perCleanEmails must not
+   * gate it — a host who declined running commentary still needs to know their
+   * next guest is covered. perCleanEmails is false on the default fixture, so
+   * this asserts the unconditional behaviour directly.
+   */
+  it("always tells the host a new reservation was scheduled, even with per-clean emails off", async () => {
+    stubFeed(feedWith([{ uid: "res-1", checkout: MONDAY }]));
+    await syncConnectedProperty(property({ perCleanEmails: false }));
+    const subjects = mockSendMail.mock.calls.map(c => (c[0] as { subject: string }).subject);
+    expect(subjects.some(s => s.includes("New booking detected"))).toBe(true);
+    expect(subjects.some(s => s.includes(MONDAY))).toBe(true);
+    // Claimed for the announced date, which is what keeps the retry quiet.
+    expect(mockClaimTurnoverNotice).toHaveBeenCalledWith(99, MONDAY);
+  });
+
+  it("names the property address and admits when the time is not settled yet", async () => {
+    // A fully-booked day: the turnover is created unscheduled, so the notice has
+    // a date but no time.
+    stubFeed(feedWith([{ uid: "res-1", checkout: MONDAY }]));
+    // getOccupiedBookings returns {time, serviceType, sqft, estimatedHours} —
+    // one job spanning the whole day leaves nowhere for this turnover to go.
+    mockGetOccupiedBookings.mockResolvedValue([
+      { time: "08:00", serviceType: "airbnb", sqft: 900, estimatedHours: 14 },
+    ]);
+    const summary = await syncConnectedProperty(property());
+    expect(summary.unplaced).toBe(1);
+    // The owner alert also mentions "turnover", so match on the host copy.
+    const body = mockSendMail.mock.calls
+      .map(c => (c[0] as { text: string }).text)
+      .find(t => t.includes("Your next guest is covered"));
+    expect(body).toBeTruthy();
+    expect(body).toContain("100 River St");
+    expect(body).toContain("still confirming the exact time");
+  });
+
+  it("sends the notice in the host's language", async () => {
+    mockGetCustomerById.mockResolvedValue({
+      id: 7,
+      firstName: "Hank",
+      email: "hank@example.com",
+      preferredLocale: "es",
+    });
     stubFeed(feedWith([{ uid: "res-1", checkout: MONDAY }]));
     await syncConnectedProperty(property());
-    expect(mockSendMail).not.toHaveBeenCalled();
-    vi.clearAllMocks();
-    mockCreateBooking.mockResolvedValue(99);
-    mockListAutoBookings.mockResolvedValue([]);
-    mockGetOccupiedBookings.mockResolvedValue([]);
-    mockGetSetting.mockResolvedValue(null);
-    mockGetCustomerById.mockResolvedValue({ id: 7, firstName: "Hank", email: "hank@example.com", preferredLocale: "en" });
-    stubFeed(feedWith([{ uid: "res-1", checkout: MONDAY }]));
-    await syncConnectedProperty(property({ perCleanEmails: true }));
     const subjects = mockSendMail.mock.calls.map(c => (c[0] as { subject: string }).subject);
-    expect(subjects.some(s => s.includes("Cleaning scheduled"))).toBe(true);
+    expect(subjects.some(s => s.includes("Nueva reserva detectada"))).toBe(true);
+  });
+});
+
+describe("scheduling-notice dedupe", () => {
+  /**
+   * The regression that motivated the date-keyed claim: an unplaced turnover is
+   * retried every hour, and the retry used to re-email the host each time it
+   * finally landed. Same date already announced → the claim refuses → silence.
+   */
+  it("does not re-email when the hourly retry places a turnover on the date already announced", async () => {
+    stubFeed(feedWith([{ uid: "res-1@airbnb.com", checkout: MONDAY }]));
+    // An existing turnover for that reservation, unplaced, already announced for
+    // MONDAY — exactly the state the retry path picks up.
+    mockListAutoBookings.mockResolvedValue([
+      autoRow({ scheduledDate: null, scheduledTime: null, turnoverNoticeDate: MONDAY }),
+    ]);
+    mockClaimTurnoverNotice.mockResolvedValue(false); // already claimed for MONDAY
+    const summary = await syncConnectedProperty(property());
+    expect(summary.moved).toBe(1); // it DID get placed
+    expect(mockClaimTurnoverNotice).toHaveBeenCalledWith(42, MONDAY);
+    const subjects = mockSendMail.mock.calls.map(c => (c[0] as { subject: string }).subject);
+    expect(subjects.filter(s => s.includes("turnover") || s.includes("booking detected"))).toHaveLength(0);
+  });
+
+  it("still notifies when the reservation genuinely moves to a new date", async () => {
+    // Feed now says WEDNESDAY; the booking sits on MONDAY and was announced for MONDAY.
+    stubFeed(feedWith([{ uid: "res-1@airbnb.com", checkout: WEDNESDAY }]));
+    mockListAutoBookings.mockResolvedValue([
+      autoRow({ scheduledDate: MONDAY, scheduledTime: "11:00", turnoverNoticeDate: MONDAY }),
+    ]);
+    const summary = await syncConnectedProperty(property());
+    expect(summary.moved).toBe(1);
+    // A different date, so the claim is asked for the NEW one and succeeds.
+    expect(mockClaimTurnoverNotice).toHaveBeenCalledWith(42, WEDNESDAY);
+    const subjects = mockSendMail.mock.calls.map(c => (c[0] as { subject: string }).subject);
+    expect(subjects.some(s => s.includes("Turnover rescheduled") && s.includes(WEDNESDAY))).toBe(true);
+  });
+
+  it("a mail failure never breaks the sync — the booking still stands", async () => {
+    mockSendMail.mockRejectedValue(new Error("mailbox unavailable"));
+    stubFeed(feedWith([{ uid: "res-1", checkout: MONDAY }]));
+    const summary = await syncConnectedProperty(property());
+    expect(summary).toMatchObject({ ok: true, created: 1 });
+  });
+});
+
+describe("cancelled reservations", () => {
+  it("tells the host and alerts the owner when a dropped reservation cancels its cleaning", async () => {
+    // Feed no longer carries res-1: the guest cancelled.
+    stubFeed(feedWith([]));
+    mockListAutoBookings.mockResolvedValue([autoRow()]);
+    const summary = await syncConnectedProperty(property());
+    expect(summary.cancelled).toBe(1);
+    expect(mockUpdateBooking).toHaveBeenCalledWith(42, { status: "cancelled" });
+    const subjects = mockSendMail.mock.calls.map(c => (c[0] as { subject: string }).subject);
+    expect(subjects.some(s => s.includes("Reservation cancelled") && s.includes(MONDAY))).toBe(true);
+    expect(ownerAlerts().some(t => t.includes("Turnover cancelled"))).toBe(true);
+  });
+
+  it("names the removed date and time in the host's notice", async () => {
+    stubFeed(feedWith([]));
+    mockListAutoBookings.mockResolvedValue([autoRow()]);
+    await syncConnectedProperty(property());
+    const body = mockSendMail.mock.calls
+      .map(c => (c[0] as { text: string }).text)
+      .find(t => t.includes("no longer shows that reservation"));
+    expect(body).toBeTruthy();
+    expect(body).toContain(MONDAY);
+    expect(body).toContain("11:00");
+    expect(body).toContain("won't be charged");
+  });
+
+  it("cancels and notifies regardless of the per-clean setting", async () => {
+    stubFeed(feedWith([]));
+    mockListAutoBookings.mockResolvedValue([autoRow()]);
+    await syncConnectedProperty(property({ perCleanEmails: false }));
+    const subjects = mockSendMail.mock.calls.map(c => (c[0] as { subject: string }).subject);
+    expect(subjects.some(s => s.includes("Reservation cancelled"))).toBe(true);
+  });
+
+  it("says nothing about a past cleaning, and does not touch it", async () => {
+    stubFeed(feedWith([]));
+    mockListAutoBookings.mockResolvedValue([autoRow({ scheduledDate: "2020-01-06" })]);
+    const summary = await syncConnectedProperty(property());
+    expect(summary.cancelled).toBe(0);
+    expect(mockUpdateBooking).not.toHaveBeenCalled();
+    const subjects = mockSendMail.mock.calls.map(c => (c[0] as { subject: string }).subject);
+    expect(subjects.some(s => s.includes("Reservation cancelled"))).toBe(false);
+  });
+
+  it("says nothing when a human already cancelled or the job is under way", async () => {
+    for (const status of ["cancelled", "in_progress", "completed"]) {
+      vi.clearAllMocks();
+      mockGetSetting.mockResolvedValue(null);
+      mockGetOccupiedBookings.mockResolvedValue([]);
+      mockUpdateProperty.mockResolvedValue(undefined);
+      mockGetCustomerById.mockResolvedValue({
+        id: 7,
+        firstName: "Hank",
+        email: "hank@example.com",
+        preferredLocale: "en",
+      });
+      mockSendMail.mockResolvedValue({ messageId: "1" });
+      stubFeed(feedWith([]));
+      mockListAutoBookings.mockResolvedValue([autoRow({ status })]);
+      const summary = await syncConnectedProperty(property());
+      expect(summary.cancelled, status).toBe(0);
+      expect(mockUpdateBooking, status).not.toHaveBeenCalled();
+      expect(mockSendMail.mock.calls.length, status).toBe(0);
+    }
+  });
+
+  it("a cancellation-notice failure still leaves the booking cancelled", async () => {
+    mockSendMail.mockRejectedValue(new Error("mailbox unavailable"));
+    stubFeed(feedWith([]));
+    mockListAutoBookings.mockResolvedValue([autoRow()]);
+    const summary = await syncConnectedProperty(property());
+    expect(summary.cancelled).toBe(1);
+    expect(mockUpdateBooking).toHaveBeenCalledWith(42, { status: "cancelled" });
   });
 });
 

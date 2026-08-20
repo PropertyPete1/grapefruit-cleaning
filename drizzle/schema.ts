@@ -270,6 +270,19 @@ export const bookings = mysqlTable("bookings", {
    * racing — same philosophy as slotKey.
    */
   icalUid: varchar("icalUid", { length: 255 }),
+  /**
+   * The scheduled date the host was last told about for this turnover, or NULL
+   * if they have not been told yet.
+   *
+   * This is what makes the scheduling notice deduped BY DATE rather than by a
+   * boolean. An hourly sweep re-placing a turnover that could not find a slot
+   * lands on the same date it already announced, so it stays quiet; a
+   * reservation genuinely moving to a new checkout day is a different date, so
+   * the host hears about it. A plain "notified" flag could not tell those two
+   * apart, and would silence the reschedule — the one message the host most
+   * needs.
+   */
+  turnoverNoticeDate: varchar("turnoverNoticeDate", { length: 10 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, table => [

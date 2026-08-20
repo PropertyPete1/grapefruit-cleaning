@@ -169,6 +169,13 @@
       "when": 1787186092112,
       "tag": "0023_stormy_captain_america",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "5",
+      "when": 1787191071150,
+      "tag": "0024_bumpy_vance_astro",
+      "breakpoints": true
     }
   ]
 }

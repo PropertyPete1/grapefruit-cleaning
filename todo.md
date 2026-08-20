@@ -315,3 +315,10 @@
 - [x] Weekly owner digest (Mondays): email counts by type with delivered/failed, sub-threshold failures, upcoming nudges next 7 days with names, inconsistencies, totals
 - [x] Daily inconsistency check folded into the existing owner-alert path (silent when clean)
 - [x] Digest can be sent on demand: Admin -> Email log -> "Send report now" (platform cron refuses to register NEW jobs, so an automated one-shot was not possible; button is the reliable path)
+- [x] Turnover scheduling email sends ALWAYS on auto-book, regardless of perCleanEmails
+- [x] Dedupe: one scheduling email per reservation, not per placement retry
+- [x] Dedupe must still notify on a genuine date CHANGE, with the new date
+- [x] Cancellation notice to host when a dropped reservation cancels its cleaning
+- [x] Cancellation alert to owner through the existing owner-alert path
+- [x] Both cancellation emails logged to email_log
+- [x] Keep cancellation safety rules untouched: confirmed-only, future-only, never override a human

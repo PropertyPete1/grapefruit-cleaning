@@ -1917,23 +1917,107 @@ export function buildFeedFailureAlert(args: {
   };
 }
 
-/** Optional per-clean notice for hosts who asked for one. */
+/**
+ * Tells the host their next turnover is on the schedule.
+ *
+ * Sends ALWAYS, not only when per-clean notices are on: this is scheduling
+ * confirmation, not a per-clean report. A host whose calendar just took a
+ * booking needs to know the checkout is covered, and that is true whether or
+ * not they asked for running commentary on each clean. Deduped by date at the
+ * call site (see claimTurnoverNotice), so a placement retry stays quiet while a
+ * genuine reschedule still lands.
+ */
 export function buildAutoCleanScheduledEmail(args: {
   label: string;
   date: string;
   time: string | null;
   customerName: string;
   locale: "en" | "es";
+  /** True when the reservation moved and this is the NEW date, not the first notice. */
+  rescheduled?: boolean;
+  addressLine?: string | null;
 }): { subject: string; body: string } {
   const spanish = args.locale === "es";
   const when = args.time ? `${args.date} · ${args.time}` : args.date;
+  const where = args.addressLine ? `\n${spanish ? "Dirección" : "Address"}: ${args.addressLine}` : "";
+  // An unplaced turnover has a date but no time yet. Saying so is better than
+  // implying a time was assigned, and better than staying silent.
+  const timeNote = args.time
+    ? ""
+    : spanish
+      ? `\n\nAún estamos confirmando la hora exacta de ese día; se la enviaremos en breve.`
+      : `\n\nWe're still confirming the exact time that day and will follow up shortly.`;
+  if (args.rescheduled) {
+    return spanish
+      ? {
+          subject: `Limpieza reprogramada — ${args.label} el ${args.date} | Grapefruit Cleaning Co.`,
+          body: `Hola ${args.customerName},\n\nLa reserva en su calendario cambió de fecha, así que movimos la limpieza de ${args.label}.\n\nNueva fecha: ${when}${where}${timeNote}\n\nNo necesita hacer nada.\n\nEl equipo de Grapefruit Cleaning Co.`,
+        }
+      : {
+          subject: `Turnover rescheduled — ${args.label} on ${args.date} | Grapefruit Cleaning Co.`,
+          body: `Hi ${args.customerName},\n\nThe reservation on your calendar moved, so we've moved the ${args.label} turnover to match it.\n\nNew date: ${when}${where}${timeNote}\n\nNothing for you to do.\n\nThe Grapefruit Cleaning Co. Team`,
+        };
+  }
   return spanish
     ? {
-        subject: `Limpieza agendada — ${args.label} el ${args.date} | Grapefruit Cleaning Co.`,
-        body: `Hola ${args.customerName},\n\nSu calendario marcó una salida y agendamos la limpieza de ${args.label}: ${when}.\n\nNo necesita hacer nada — este es el aviso por limpieza que usted pidió.\n\nEl equipo de Grapefruit Cleaning Co.`,
+        subject: `Nueva reserva detectada — limpieza agendada para el ${args.date} | Grapefruit Cleaning Co.`,
+        body: `Hola ${args.customerName},\n\nSu calendario marcó una nueva salida, así que ya agendamos la limpieza de ${args.label}.\n\nFecha: ${when}${where}${timeNote}\n\nSu próximo huésped está cubierto. No necesita hacer nada.\n\nEl equipo de Grapefruit Cleaning Co.`,
       }
     : {
-        subject: `Cleaning scheduled — ${args.label} on ${args.date} | Grapefruit Cleaning Co.`,
-        body: `Hi ${args.customerName},\n\nYour calendar showed a checkout, so we've scheduled the ${args.label} clean: ${when}.\n\nNothing to do — this is the per-clean notice you asked for.\n\nThe Grapefruit Cleaning Co. Team`,
+        subject: `New booking detected — turnover cleaning scheduled for ${args.date} | Grapefruit Cleaning Co.`,
+        body: `Hi ${args.customerName},\n\nYour calendar showed a new checkout, so we've scheduled the ${args.label} turnover cleaning.\n\nDate: ${when}${where}${timeNote}\n\nYour next guest is covered — nothing for you to do.\n\nThe Grapefruit Cleaning Co. Team`,
       };
+}
+
+/**
+ * Tells the host their guest cancelled and the turnover came off the schedule.
+ *
+ * The counterpart to the scheduling notice, and it sends on the same terms:
+ * always. A host whose reservation disappears needs to know the crew is no
+ * longer coming, or they are left assuming a clean is booked for a unit that
+ * may now be occupied or unsold.
+ */
+export function buildAutoCleanCancelledEmail(args: {
+  label: string;
+  date: string | null;
+  time: string | null;
+  customerName: string;
+  locale: "en" | "es";
+}): { subject: string; body: string } {
+  const spanish = args.locale === "es";
+  const dateLabel = args.date ?? (spanish ? "sin fecha asignada" : "not yet scheduled");
+  const when = args.date && args.time ? `${args.date} · ${args.time}` : dateLabel;
+  return spanish
+    ? {
+        subject: `Reserva cancelada — limpieza del ${dateLabel} retirada | Grapefruit Cleaning Co.`,
+        body: `Hola ${args.customerName},\n\nSu calendario ya no muestra esa reserva, así que retiramos la limpieza de ${args.label} que estaba agendada para ${when}.\n\nNo se le cobrará nada por esta limpieza. Si la reserva vuelve a su calendario, la agendaremos de nuevo automáticamente; y si aún desea que limpiemos la unidad, respóndanos y lo programamos.\n\nEl equipo de Grapefruit Cleaning Co.`,
+      }
+    : {
+        subject: `Reservation cancelled — turnover on ${dateLabel} removed | Grapefruit Cleaning Co.`,
+        body: `Hi ${args.customerName},\n\nYour calendar no longer shows that reservation, so we've removed the ${args.label} turnover that was scheduled for ${when}.\n\nYou won't be charged for this clean. If the reservation comes back to your calendar we'll schedule it again automatically — and if you'd still like the unit cleaned, just reply and we'll book it.\n\nThe Grapefruit Cleaning Co. Team`,
+      };
+}
+
+/** The owner's side of the same event: a job left the schedule unattended. */
+export function buildAutoCleanCancelledAlert(args: {
+  label: string;
+  reference: string;
+  date: string | null;
+  time: string | null;
+}): { title: string; content: string } {
+  const when = args.date
+    ? args.time
+      ? `${args.date} at ${args.time}`
+      : `${args.date} (no time was assigned)`
+    : "never scheduled";
+  return {
+    title: `Turnover cancelled — ${args.label} ${args.date ?? "unscheduled"}`,
+    content: [
+      `The reservation behind ${args.reference} disappeared from the ${args.label} calendar, so its cleaning was cancelled.`,
+      ``,
+      `Was scheduled: ${when}`,
+      ``,
+      `The crew is no longer expected, and the host has been told. Nothing to do unless you want to keep the slot for someone else.`,
+    ].join("\n"),
+  };
 }
