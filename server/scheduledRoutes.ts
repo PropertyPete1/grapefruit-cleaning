@@ -132,7 +132,51 @@ async function icalSyncHandler(req: Request, res: Response) {
   }
 }
 
+/**
+ * Sends the weekly owner report on demand.
+ *
+ * The digest normally rides the daily reminders beat and only fires on a
+ * Monday. This endpoint exists so the report can be produced deliberately —
+ * after a deploy, or whenever the owner wants the current picture — without
+ * waiting for the calendar or hand-running the whole reminders sweep, which
+ * would also send real customer email as a side effect.
+ */
+async function weeklyDigestHandler(req: Request, res: Response) {
+  let isCron = false;
+  try {
+    isCron = (await sdk.authenticateRequest(req)).isCron === true;
+  } catch {
+    isCron = false;
+  }
+  if (!isCron) {
+    return res.status(403).json({ error: "cron-only endpoint" });
+  }
+  try {
+    const data = await sendWeeklyDigest();
+    console.log(
+      `[Digest] Sent on demand: ${data.totalSent} email(s) this week, ${data.failures.length} failure(s), ` +
+        `${data.nudges.length} nudge(s) due, ${data.health.paidOnOpenBookings.length + data.health.deadLinks.length} problem(s).`
+    );
+    return res.json({
+      ok: true,
+      emailsThisWeek: data.totalSent,
+      failures: data.failures.length,
+      quietFailures: data.quietFailures,
+      upcomingNudges: data.nudges.length,
+      problems: data.health.paidOnOpenBookings.length + data.health.deadLinks.length,
+      totals: data.totals,
+    });
+  } catch (error) {
+    console.error("[Digest] Handler error:", error);
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : String(error),
+      timestamp: new Date().toISOString(),
+    });
+  }
+}
+
 export function registerScheduledRoutes(app: Express): void {
   app.post("/api/scheduled/sendReminders", sendRemindersHandler);
   app.post("/api/scheduled/icalSync", icalSyncHandler);
+  app.post("/api/scheduled/weeklyDigest", weeklyDigestHandler);
 }
