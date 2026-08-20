@@ -1282,6 +1282,141 @@ export async function getCustomerByMarketingToken(token: string) {
   return rows[0];
 }
 
+// ---------- Owner reporting (weekly digest + daily health check) ----------
+
+/** Email volume for a period, grouped by flow and outcome. */
+export async function emailStatsSince(since: Date) {
+  const db = requireDb(await getDb());
+  return db
+    .select({
+      emailType: emailLog.emailType,
+      outcome: emailLog.outcome,
+      count: sql<number>`COUNT(*)`,
+    })
+    .from(emailLog)
+    .where(gte(emailLog.createdAt, since))
+    .groupBy(emailLog.emailType, emailLog.outcome);
+}
+
+/**
+ * Failures in the period, newest first — including the ones the hourly alert
+ * cap swallowed. Those are the whole point: a failure that never raised an
+ * alert is exactly the failure nobody has seen.
+ */
+export async function emailFailuresSince(since: Date, limit = 25) {
+  const db = requireDb(await getDb());
+  return db
+    .select({
+      createdAt: emailLog.createdAt,
+      recipient: emailLog.recipient,
+      subject: emailLog.subject,
+      emailType: emailLog.emailType,
+      outcome: emailLog.outcome,
+      errorText: emailLog.errorText,
+      alertSuppressed: emailLog.alertSuppressed,
+      alertSentAt: emailLog.alertSentAt,
+    })
+    .from(emailLog)
+    .where(and(gte(emailLog.createdAt, since), inArray(emailLog.outcome, ["error", "log_only"])))
+    .orderBy(desc(emailLog.createdAt))
+    .limit(limit);
+}
+
+/**
+ * A paid invoice whose booking never reached "completed".
+ *
+ * This is the shape of the Daniel bug: money collected against a job the
+ * system still thinks is pending, which silently suppresses the tip ask and
+ * keeps the customer out of the re-booking cycle. The settle path now fixes
+ * this going forward; the check catches anything that slips through another
+ * route (a hand-edited row, a future code path).
+ */
+export async function findPaidInvoicesOnOpenBookings() {
+  const db = requireDb(await getDb());
+  return db
+    .select({
+      invoiceId: invoices.id,
+      invoiceNumber: invoices.number,
+      amount: invoices.amount,
+      bookingId: bookings.id,
+      reference: bookings.reference,
+      bookingStatus: bookings.status,
+      scheduledDate: bookings.scheduledDate,
+    })
+    .from(invoices)
+    .innerJoin(bookings, eq(invoices.bookingId, bookings.id))
+    .where(and(eq(invoices.status, "paid"), notInArray(bookings.status, ["completed", "cancelled"])))
+    .limit(50);
+}
+
+/**
+ * An unpaid invoice whose payment link has expired: the customer cannot pay
+ * even if they want to, and no automatic path will ever fix it. Someone has to
+ * press Resend, which means someone has to know.
+ */
+export async function findInvoicesWithDeadLinks(now: Date = new Date()) {
+  const db = requireDb(await getDb());
+  return db
+    .select({
+      invoiceId: invoices.id,
+      invoiceNumber: invoices.number,
+      amount: invoices.amount,
+      customerId: invoices.customerId,
+      linkExpiresAt: invoices.linkExpiresAt,
+    })
+    .from(invoices)
+    .where(
+      and(
+        inArray(invoices.status, ["sent", "overdue"]),
+        isNotNull(invoices.linkExpiresAt),
+        lte(invoices.linkExpiresAt, now)
+      )
+    )
+    .limit(50);
+}
+
+/**
+ * Customers with no email address. Not a fault in itself — a phone lead is a
+ * real customer — but each one is silently excluded from every confirmation,
+ * receipt and nudge, so the count is worth seeing.
+ */
+export async function findCustomersWithoutEmail() {
+  const db = requireDb(await getDb());
+  return db
+    .select({ id: customers.id, firstName: customers.firstName, lastName: customers.lastName, phone: customers.phone })
+    .from(customers)
+    .where(isNull(customers.email))
+    .limit(50);
+}
+
+/** Headline totals for the digest. */
+export async function ownerTotals() {
+  const db = requireDb(await getDb());
+  const today = new Date().toISOString().slice(0, 10);
+  const [bookingTotal] = await db.select({ count: sql<number>`COUNT(*)` }).from(bookings);
+  const [upcoming] = await db
+    .select({ count: sql<number>`COUNT(*)` })
+    .from(bookings)
+    .where(
+      and(
+        inArray(bookings.status, ["pending_deposit", "confirmed", "in_progress"]),
+        or(isNull(bookings.scheduledDate), gte(bookings.scheduledDate, today))
+      )
+    );
+  const [unpaid] = await db
+    .select({ count: sql<number>`COUNT(*)`, total: sql<number>`COALESCE(SUM(${invoices.amount}), 0)` })
+    .from(invoices)
+    .where(inArray(invoices.status, ["sent", "overdue", "awaiting_approval", "draft"]));
+  const [customerTotal] = await db.select({ count: sql<number>`COUNT(*)` }).from(customers);
+  return {
+    bookings: Number(bookingTotal?.count ?? 0),
+    upcomingBookings: Number(upcoming?.count ?? 0),
+    unpaidInvoices: Number(unpaid?.count ?? 0),
+    unpaidTotal: Number(unpaid?.total ?? 0),
+    customers: Number(customerTotal?.count ?? 0),
+  };
+}
+
 /**
  * Records that a nudge went out: bumps the count and stamps the clock, and
  * stores the unsubscribe token if this was the customer's first.

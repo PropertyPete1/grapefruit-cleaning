@@ -309,3 +309,9 @@
 - [x] One-click unsubscribe route + branded bilingual confirmation page, honoured forever
 - [x] Nudges logged to email_log as type "marketing"; sweep runs last on the daily cron
 - [x] Migration 0023: marketing consent + nudge tracking columns on customers
+- [x] Daniel GFC-WH33YS: already completed with correct service date (2026-08-19); no tip email fired, row left untouched
+- [x] Daniel's projected first re-booking nudge: 2026-09-12
+- [x] Data-inconsistency checks: paid invoices on non-completed bookings, invoices with dead pay links, customers with no email
+- [x] Weekly owner digest (Mondays): email counts by type with delivered/failed, sub-threshold failures, upcoming nudges next 7 days with names, inconsistencies, totals
+- [x] Daily inconsistency check folded into the existing owner-alert path (silent when clean)
+- [ ] Send the first digest immediately after deploy with real data

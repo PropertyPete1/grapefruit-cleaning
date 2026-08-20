@@ -39,6 +39,7 @@ import {
   resendBalanceLink,
   sendPaymentReceiptSafely,
 } from "../balance";
+import { sendWeeklyDigest } from "../ownerDigest";
 import { balanceLinkStatus } from "../balanceRules";
 import { buildStaffInviteEmail, deliverEmail, sendDepositLinkEmail, sendPropertyConnectedEmail } from "../emails";
 import { loadDurationConfig, loadSchedulingRules, occupiedIntervals, SERVICE_NAMES, withDurationHours } from "./booking";
@@ -807,6 +808,21 @@ export const adminRouter = router({
     .query(async ({ input }) => {
       return db.listEmailLog(input?.limit ?? 50);
     }),
+  /**
+   * Sends the weekly report immediately, rather than waiting for Monday.
+   * Useful for seeing the current state on demand, and for confirming after a
+   * deploy that the reporting path still works end to end.
+   */
+  sendWeeklyDigestNow: adminProcedure.mutation(async () => {
+    const data = await sendWeeklyDigest();
+    return {
+      sent: true,
+      emailsThisWeek: data.totalSent,
+      failures: data.failures.length,
+      upcomingNudges: data.nudges.length,
+      problems: data.health.paidOnOpenBookings.length + data.health.deadLinks.length,
+    };
+  }),
   createInvoice: adminProcedure
     .input(
       z.object({

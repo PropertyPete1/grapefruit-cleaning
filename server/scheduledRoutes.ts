@@ -9,6 +9,7 @@ import { sendDueBalanceReminders } from "./balance";
 import { sdk } from "./_core/sdk";
 import { syncAllProperties } from "./icalSync";
 import { sendDueRebookingNudges } from "./marketing";
+import { runDailyHealthCheck, sendWeeklyDigest } from "./ownerDigest";
 import { publicOrigin } from "./publicOrigin";
 import { sendDueReminders } from "./reminders";
 
@@ -57,7 +58,38 @@ async function sendRemindersHandler(req: Request, res: Response) {
     } catch (error) {
       console.error("[Marketing] Nudge sweep failed:", error);
     }
-    return res.json({ ok: true, ...summary, balanceReminders: balances, nudges });
+
+    // The system reporting on itself. Runs after all the sending work so the
+    // digest describes a settled state, and inside its own try/catch for the
+    // same reason marketing is: a reporting failure must never turn the
+    // reminders cron into a 500 and cost a customer their reminder tomorrow.
+    let health;
+    let digestSent = false;
+    try {
+      health = await runDailyHealthCheck();
+      const problems = health.paidOnOpenBookings.length + health.deadLinks.length;
+      console.log(
+        `[HealthCheck] ${problems} problem(s); ${health.customersWithoutEmail.length} customer(s) without email.`
+      );
+
+      // Monday, in the owner's timezone rather than UTC — the cron fires at
+      // 14:00 UTC, which is still Sunday evening nowhere in Texas, but reading
+      // the day in America/Chicago keeps "Monday" meaning Monday to him even
+      // if the schedule is moved earlier later on.
+      const localDay = new Date().toLocaleDateString("en-US", {
+        timeZone: "America/Chicago",
+        weekday: "short",
+      });
+      if (localDay === "Mon") {
+        await sendWeeklyDigest();
+        digestSent = true;
+        console.log("[Digest] Weekly owner report sent.");
+      }
+    } catch (error) {
+      console.error("[Digest] Reporting failed:", error);
+    }
+
+    return res.json({ ok: true, ...summary, balanceReminders: balances, nudges, health, digestSent });
   } catch (error) {
     // Stack traces stay in the server log; the response carries only the
     // message, so the endpoint can't be used to map the filesystem.
