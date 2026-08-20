@@ -20,6 +20,9 @@ import { useLocale } from "@/i18n/LocaleContext";
 import { useSeo, localBusinessJsonLd } from "@/hooks/useSeo";
 import { useReveal } from "@/hooks/useReveal";
 import { useSiteInfo } from "@/hooks/useSiteInfo";
+import { usePricing } from "@/hooks/usePricing";
+import { lowestBookablePrice } from "@shared/pricing";
+import { formatPrice } from "@/lib/formatPrice";
 import { trpc } from "@/lib/trpc";
 import { ASSETS } from "@/lib/assets";
 import { cn } from "@/lib/utils";
@@ -36,6 +39,11 @@ const SERVICE_CARDS = [
 export default function Home() {
   const { t, locale, path } = useLocale();
   const { info: site } = useSiteInfo();
+  const pricing = usePricing();
+  // The advertised entry price is derived from the live pricing ladder, never
+  // written here — otherwise the hero drifts the moment Admin → Services &
+  // Pricing is edited, which is exactly how it came to claim $89.
+  const fromPrice = formatPrice(lowestBookablePrice(pricing));
   useSeo({
     title: t.meta.home.title,
     description: t.meta.home.description,
@@ -159,7 +167,9 @@ export default function Home() {
               </span>
               <div>
                 <p className="text-xs font-semibold text-foreground">{t.home.why3Title}</p>
-                <p className="text-[11px] text-muted-foreground">{t.common.from} $89</p>
+                <p className="text-[11px] text-muted-foreground">
+                  {t.common.from} ${fromPrice}
+                </p>
               </div>
             </div>
           </div>

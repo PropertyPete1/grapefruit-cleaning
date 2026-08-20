@@ -280,3 +280,7 @@
 - [x] Guard: no deposit credit line and no booking fields in the manual email
 - [x] Guard: no tip ask after a manual payment (no completed job behind it)
 - [x] Full lifecycle tests in server/manualInvoice.test.ts (13 cases)
+- [x] Homepage hero "From $89" was hardcoded; now derives from the live pricing_config
+- [x] Added lowestBookablePrice() helper (tiered services only, custom-quote tiers excluded)
+- [x] Swept EN/ES translations, SEO/JSON-LD, manifests, meta tags: no other hardcoded starting price found
+- [x] Tests: server/lowestBookablePrice.test.ts (7 cases) pin the helper to the live config

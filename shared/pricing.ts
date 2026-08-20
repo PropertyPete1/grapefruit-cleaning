@@ -432,6 +432,24 @@ export function startingPriceFor(type: CleaningType, config: PricingConfig = DEF
 }
 
 /**
+ * The cheapest price anywhere on the site — what a "from $X" headline must
+ * say if it is not to undercut or overstate the real entry point.
+ *
+ * Only the tiered services count. Commercial and office quote per site, and
+ * their `basePrices` entries are estimating baselines rather than prices a
+ * customer can actually book at — advertising one as "from $X" would promise
+ * a rate nobody is ever charged. Custom-quote tiers are already excluded by
+ * startingPriceFor, so a $0 catch-all cannot drag the headline to zero.
+ *
+ * Anything advertising a starting price should call this rather than writing
+ * a number, so the copy can never drift from Admin → Services & Pricing.
+ */
+export function lowestBookablePrice(config: PricingConfig = DEFAULT_PRICING): number {
+  const tiered: CleaningType[] = ["residential", "airbnb", "deep", "moveinout"];
+  return Math.min(...tiered.map(type => startingPriceFor(type, config)));
+}
+
+/**
  * Human label for a tier's square-footage band, derived from the tier itself
  * and the one below it — never from hard-coded boundaries, so it stays correct
  * however the admin reshapes the ladder.
