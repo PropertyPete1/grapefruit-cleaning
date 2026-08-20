@@ -8,7 +8,7 @@
  * own hash.
  */
 export const BUILD_INFO = {
-  commit: "77c64622dd7576648215af3ea69d21379cb02d08",
+  commit: "251673d57f31e7a85718eb694109c309d8a89101",
   branch: "main",
-  builtAt: "2026-08-20T19:24:56.802Z",
+  builtAt: "2026-08-20T19:33:35.774Z",
 } as const;

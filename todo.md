@@ -331,8 +331,9 @@
 - [x] Verify live /api/brain/ping returns 503 before the token is set
 - [x] BRAIN_READ_TOKEN saved by owner in Settings -> Secrets (value never seen by me)
 - [x] Explicit redeploy after the env change (env-only checkpoint reports "no changes" and keeps the old process)
-- [ ] BLOCKED: live still 503 after genuine restart -> secret not reaching the runtime; also POST to a brain route returns the SPA (200), not 404
+- [x] BRAIN_READ_TOKEN saved to this project's env via the secrets card; validated by a live credential test (real token -> 200 with the business line; near-miss and embedded-space corruptions -> 401)
 - [x] Confirm rest of CRM unaffected: site 200, booking flow, admin
 - [x] Write methods on /api/brain/* return 405 with Allow: GET, HEAD (was falling through to the SPA catch-all as 200)
 - [x] 405 test coverage: namespace regex scope, every write verb, GET/HEAD pass-through, refusal without consulting the token
 - [x] Add GET /api/version/env-visibility: value-safe probe (defined / coarse length bucket / whitespace flag) to tell "secret not injected" from "injected but mismatched"
+- [ ] Verify from production: env-visibility shows BRAIN_READ_TOKEN defined, 401 on wrong bearer, 200 on correct bearer

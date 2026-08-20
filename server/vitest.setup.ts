@@ -34,6 +34,27 @@ export const GUARDED_ENV_KEYS = [
   "STRIPE_WEBHOOK_SECRET",
 ] as const;
 
+/**
+ * Captured before the deletion below. See LIVE_BRAIN_TOKEN_KEY at the foot of
+ * this file for why this one value survives.
+ */
+const capturedBrainToken = process.env.BRAIN_READ_TOKEN;
+
 for (const key of GUARDED_ENV_KEYS) {
   delete process.env[key];
+}
+
+/**
+ * One deliberate carve-out, taken BEFORE the deletion above: the live
+ * credential check (brainToken.live.test.ts) has to see the real
+ * BRAIN_READ_TOKEN, since its entire purpose is proving the saved secret
+ * actually authenticates. Stashing it under a name no application module reads
+ * keeps the guard intact — application code still finds BRAIN_READ_TOKEN
+ * absent, so no test can accidentally authenticate against a real credential
+ * it did not ask for.
+ */
+export const LIVE_BRAIN_TOKEN_KEY = "__LIVE_BRAIN_READ_TOKEN__";
+
+if (capturedBrainToken) {
+  process.env[LIVE_BRAIN_TOKEN_KEY] = capturedBrainToken;
 }
