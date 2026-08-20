@@ -8,19 +8,29 @@
  * pulling in supertest — no new dependency for one route.
  */
 import type { Express, Request, Response } from "express";
-import { describe, expect, it } from "vitest";
-
-import { buildVersionInfo, registerVersionRoutes } from "./versionRoutes";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  buildVersionInfo,
+  registerVersionRoutes,
+  envShape,
+  ENV_VISIBILITY_NAMES,
+} from "./versionRoutes";
 
 type Handler = (req: Request, res: Response) => unknown;
 
-function captureHandler(): Handler {
-  let handler: Handler | undefined;
-  const capture = (_path: string, ...rest: unknown[]) => {
-    handler = rest[rest.length - 1] as Handler;
+function captureRoutes(): Map<string, Handler> {
+  const routes = new Map<string, Handler>();
+  const capture = (path: string, ...rest: unknown[]) => {
+    routes.set(path, rest[rest.length - 1] as Handler);
   };
   registerVersionRoutes({ get: capture } as unknown as Express);
-  if (!handler) throw new Error("no route registered");
+  if (routes.size === 0) throw new Error("no route registered");
+  return routes;
+}
+
+function captureHandler(path = "/api/version"): Handler {
+  const handler = captureRoutes().get(path);
+  if (!handler) throw new Error(`no route registered for ${path}`);
   return handler;
 }
 
@@ -40,9 +50,9 @@ function fakeRes() {
   return res;
 }
 
-function callRoute() {
+function callRoute(path = "/api/version") {
   const res = fakeRes();
-  captureHandler()({} as Request, res as unknown as Response);
+  captureHandler(path)({} as Request, res as unknown as Response);
   return res;
 }
 
@@ -106,5 +116,89 @@ describe("GET /api/version", () => {
   it("never reports negative uptime when clocks disagree", () => {
     const boot = Date.parse(buildVersionInfo().startedAt);
     expect(buildVersionInfo(new Date(boot - 60_000)).uptimeSeconds).toBe(0);
+  });
+});
+
+describe("GET /api/version/env-visibility", () => {
+  const NAME = "BRAIN_READ_TOKEN";
+  let saved: string | undefined;
+
+  beforeEach(() => {
+    saved = process.env[NAME];
+  });
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env[NAME];
+    else process.env[NAME] = saved;
+  });
+
+  function report() {
+    const body = callRoute("/api/version/env-visibility").body as {
+      env: Record<string, { defined: boolean; shape: string; untrimmed?: boolean }>;
+      checkedAt: string;
+    };
+    return body;
+  }
+
+  it("reports an absent variable as undefined", () => {
+    delete process.env[NAME];
+    expect(report().env[NAME]).toEqual({ defined: false, shape: "undefined" });
+  });
+
+  it("reports a present variable's coarse shape without any of its content", () => {
+    process.env[NAME] = "0b7f3a".repeat(11); // 66 chars
+    const entry = report().env[NAME]!;
+    expect(entry.defined).toBe(true);
+    expect(entry.shape).toBe("64-plus-chars");
+    // The whole serialized response must not contain the value, any prefix of
+    // it, or a digest of it. This is the property that makes the endpoint safe
+    // to leave unauthenticated.
+    const serialized = JSON.stringify(report());
+    expect(serialized).not.toContain("0b7f3a");
+    expect(serialized).not.toContain(process.env[NAME]!.slice(0, 4));
+  });
+
+  it("distinguishes an empty string from an absent variable", () => {
+    process.env[NAME] = "";
+    // An empty secret is a real misconfiguration that behaves exactly like an
+    // absent one at runtime, so the report must not collapse the two.
+    expect(report().env[NAME]).toEqual({ defined: true, shape: "empty-string" });
+  });
+
+  it("flags stray whitespace, which compares unequal while looking correct", () => {
+    process.env[NAME] = " token-with-space ";
+    const entry = report().env[NAME]!;
+    expect(entry.untrimmed).toBe(true);
+    expect(entry.defined).toBe(true);
+  });
+
+  it("omits the whitespace flag for a clean value", () => {
+    process.env[NAME] = "cleanvalue";
+    expect(report().env[NAME]!.untrimmed).toBeUndefined();
+  });
+
+  it("reports only the hardcoded names, never the whole environment", () => {
+    process.env.SOME_UNRELATED_SECRET = "should-not-appear";
+    const body = report();
+    expect(Object.keys(body.env).sort()).toEqual([...ENV_VISIBILITY_NAMES].sort());
+    expect(JSON.stringify(body)).not.toContain("should-not-appear");
+    delete process.env.SOME_UNRELATED_SECRET;
+  });
+
+  it("is not cached, so it always describes the live process", () => {
+    expect(callRoute("/api/version/env-visibility").headers["cache-control"]).toContain("no-store");
+  });
+});
+
+describe("envShape", () => {
+  it("buckets by length without revealing exact lengths", () => {
+    expect(envShape(undefined)).toBe("undefined");
+    expect(envShape("")).toBe("empty-string");
+    expect(envShape("a".repeat(15))).toBe("under-16-chars");
+    expect(envShape("a".repeat(16))).toBe("16-31-chars");
+    expect(envShape("a".repeat(31))).toBe("16-31-chars");
+    expect(envShape("a".repeat(32))).toBe("32-63-chars");
+    expect(envShape("a".repeat(63))).toBe("32-63-chars");
+    expect(envShape("a".repeat(64))).toBe("64-plus-chars");
   });
 });

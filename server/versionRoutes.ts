@@ -70,11 +70,73 @@ export function buildVersionInfo(now: Date = new Date()): VersionInfo {
   };
 }
 
+/**
+ * Coarse shape of a value, for the env-visibility probe. Buckets rather than
+ * exact lengths: enough to tell "absent" from "present but wrong sort of
+ * thing", not enough to narrow a search space.
+ */
+export function envShape(v: string | undefined): string {
+  if (v === undefined) return "undefined";
+  if (v.length === 0) return "empty-string";
+  if (v.length < 16) return "under-16-chars";
+  if (v.length < 32) return "16-31-chars";
+  if (v.length < 64) return "32-63-chars";
+  return "64-plus-chars";
+}
+
+/** Names are hardcoded so this can never become a listing of the environment. */
+export const ENV_VISIBILITY_NAMES = [
+  "BRAIN_READ_TOKEN",
+  "PUBLIC_BASE_URL",
+  "SMTP_HOST",
+  "STRIPE_SECRET_KEY",
+] as const;
+
+export interface EnvVisibilityEntry {
+  defined: boolean;
+  shape: string;
+  /** True when the value has leading or trailing whitespace. */
+  untrimmed?: boolean;
+}
+
+/**
+ * Value-safe env visibility report.
+ *
+ * When a secret is saved in the Management UI but the runtime still behaves as
+ * if it were absent, two very different causes look identical from outside (a
+ * 503): the variable never reached this process, or it reached it holding
+ * something unexpected. This distinguishes them using only facts that cannot
+ * help reconstruct a value — whether the name is defined, a coarse length
+ * bucket, and whether it carries stray whitespace (which compares unequal while
+ * looking perfectly correct in the UI).
+ *
+ * A digest is deliberately NOT exposed: publishing sha256(token) on an
+ * unauthenticated endpoint would let anyone verify guesses offline at full
+ * speed, which is worse than saying nothing at all.
+ */
+export function buildEnvVisibility(): Record<string, EnvVisibilityEntry> {
+  const report: Record<string, EnvVisibilityEntry> = {};
+  for (const name of ENV_VISIBILITY_NAMES) {
+    const raw = process.env[name];
+    report[name] = {
+      defined: raw !== undefined,
+      shape: envShape(raw),
+      ...(raw !== undefined && raw !== raw.trim() ? { untrimmed: true } : {}),
+    };
+  }
+  return report;
+}
+
 export function registerVersionRoutes(app: Express): void {
   app.get("/api/version", (_req: Request, res: Response) => {
     // No caching: a cached response from the previous deployment would defeat
     // the entire point of asking what is running right now.
     res.set("Cache-Control", "no-store, must-revalidate");
     res.json(buildVersionInfo());
+  });
+
+  app.get("/api/version/env-visibility", (_req: Request, res: Response) => {
+    res.set("Cache-Control", "no-store, must-revalidate");
+    res.json({ env: buildEnvVisibility(), checkedAt: new Date().toISOString() });
   });
 }
