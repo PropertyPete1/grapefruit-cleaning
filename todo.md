@@ -337,3 +337,14 @@
 - [x] 405 test coverage: namespace regex scope, every write verb, GET/HEAD pass-through, refusal without consulting the token
 - [x] Add GET /api/version/env-visibility: value-safe probe (defined / coarse length bucket / whitespace flag) to tell "secret not injected" from "injected but mismatched"
 - [x] Verified from production: env-visibility defined:true; no/wrong bearer -> 401; correct bearer -> 200 {"ok":true,"business":"Grapefruit Cleaning Co."}; /api/brain/customers returns 4 real rows with no email/phone/address in the bulk shape (confirmed by DB cross-check that those columns ARE populated)
+
+## Production money audit, outage recovery, and homepage entry price
+- [x] Trace every dollar figure shown on the public homepage and Admin Dashboard to its frontend field, backend query, and database/config source
+- [x] Reconcile every production payment and invoice against bookings and live Stripe records; identify the missing $170 Daniel settlement and the unrecorded/expired $80 Steven balance
+- [x] Audit scheduled-run history, email-log continuity, and inconsistent booking/invoice/payment states; run the current read-only daily health check and capture its output
+- [x] Report all audit findings to the owner before changing code or production data
+- [x] Confirm the homepage $89 is hardcoded in the restored production snapshot and the current GitHub implementation derives it from the cheapest reachable live pricing tier
+- [x] Confirm EN/ES share the config-driven value and SEO/JSON-LD contains no stale numeric $89 amount
+- [x] Apply restored schema migrations 0014-0024 and verify the application database is structurally current
+- [x] Run type check, complete tests, production build, genuine restart, one checkpoint, /api/version proof, and live EN/ES verification
+- [x] Preserve Daniel/Steven financial mismatches for a separate controlled data-recovery action; do not fabricate restored rows
