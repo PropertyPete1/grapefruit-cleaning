@@ -367,4 +367,4 @@
 - [x] Verify footer, contact page, and LocalBusiness JSON-LD use the live business_email setting; fix any hardcoding/cache issue and prove EN/ES production rendering
 - [x] Run the read-only daily health check after repairs and capture exact output
 - [x] Run type check, full tests, production build, genuine restart, one checkpoint, /api/version proof, and live-page verification
-- [ ] Push checkpoint 94c10a0 and the new repair checkpoint to GitHub after authentication is restored
+- [x] Push checkpoint 94c10a0 and the new repair checkpoint to GitHub after authentication is restored
