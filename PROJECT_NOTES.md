@@ -14,7 +14,7 @@ saying they never got a link.
 | Itemized invoices | `shared/invoiceItems.ts`, `client/src/pages/admin/InvoiceItemsEditor.tsx` | Add-ons at live catalog prices plus named one-off lines, snapshotted at issue time. ONE shared editor serves both the balance-approval and manual-create dialogs. |
 | Billable manual invoices | `issueManualInvoice()` in `server/balance.ts` | Manual invoices mint a pay token, build a Stripe session, email a branded itemized link, accept resends, and get the same 3/7-day reminders. |
 
-1073 tests passing, 1 skipped. Migrations applied through 0022. Production and GitHub main both at `b98d5ea`.
+Current recovery verification: 1190 tests passing, 5 skipped. Migrations applied through 0025.
 
 ### Two design decisions worth not re-litigating
 - **`/api/version` reports `parentCommit`, not `commit`.** A commit cannot contain its own hash, and the SHA
@@ -40,8 +40,21 @@ handled explicitly rather than left to produce nonsense:
 
 ### Still outstanding — owner actions, not code
 - Revoke the four Hotmail-era app passwords in the Microsoft account.
-- Admin → Settings still carries `karymeplata23@hotmail.com` as the public business email; it appears in the
-  footer, contact page and JSON-LD. That is data in the running app, which the repo cannot change.
+- Confirm the live `business_email` setting remains the intended public address after any future mailbox change.
+
+## AUTH IDENTITY — Manus openId is the login key; users.email is not a credential
+- Authentication and session lookup are keyed by the immutable Manus `openId`. Changing `users.email` does
+  **not** change the address or credential a person uses at the Manus sign-in portal, and it must never be used
+  to locate or authenticate an account.
+- `users.email` is authenticated display/notification metadata. The admin/staff sidebars, no-access screen and
+  admin employee-account selector may display it. Public customer pages do not read it, and mail delivery does
+  not use it: owner alerts use `OWNER_EMAIL` or the SMTP mailbox; customer mail uses `customers.email`; employee
+  invites use `employees.email`; public contact identity uses the `business_email` site setting.
+- On first OAuth synchronization, a new user row is seeded with the provider email. On duplicate `openId`, the
+  upsert deliberately omits email from the update set, so an operator-managed address survives later sign-ins.
+  Do not “fix” this by restoring provider-email overwrite behavior.
+- Karyme’s admin row is intentionally managed as `Grapefruitcleaningc@gmail.com` while retaining the existing
+  Manus `openId`, admin role and `email` login method. She continues using the same Manus sign-in account.
 
 ## STANDING RULE — never touch a live scheduled job without asking
 Do NOT modify, repoint, pause, delete or otherwise alter a production cron job, heartbeat/scheduled task or
@@ -63,9 +76,20 @@ verified the same minute — but it was the customer-reminder cron, changed in p
 right move was to propose the test and wait.
 
 Current jobs, for reference when verifying a restore:
-- `daily-booking-reminders` → POST `/api/scheduled/sendReminders`, cron `0 0 14 * * *` (14:00 UTC). Also
+- `daily-booking-reminders` (task UID `Bj9o7gPgENvqrgyDAmggT4`) → POST `/api/scheduled/sendReminders`, cron `0 0 14 * * *` (14:00 UTC). Also
   carries the balance reminders, marketing nudges, daily health check and the Monday digest.
-- `hourly-ical-sync` → POST `/api/scheduled/icalSync`, cron `0 5 * * * *` (hourly at :05).
+- `hourly-ical-sync` (task UID `brb4FLfHSvhhRc7o8VnzjD`) → POST `/api/scheduled/icalSync`, cron `0 5 * * * *` (hourly at :05).
+
+## RECOVERY RECONCILIATION — Aug 25, 2026
+- A backup restore removed post-snapshot app rows while Stripe retained later charges. Daniel’s $170 balance was
+  restored only after live Stripe proved a succeeded, unrefunded, undisputed charge and Gmail preserved the
+  associated booking/invoice facts. Customer, booking, invoice and payment rows carry `repairNote` provenance;
+  migration 0025 adds that nullable audit field to all four tables.
+- Steven has paid only the $20 deposit in Stripe. His surviving $80 invoice remains unpaid/expired, and no $80
+  payment row was created. External mail proves separate $750 remediation work on Aug 23, but no new invoice was
+  created or sent pending owner direction. Six iCal auto-bookings were also lost with the connected-property row.
+- The restored stale schedules were deleted and recreated under the current task UIDs recorded above. Do not
+  use the historical UIDs lower in this file when checking the current scheduler.
 
 ## STANDING RULE — what counts as proof that email works
 A claim that email is fixed is only credible when BOTH of these appear in the same report:
@@ -92,8 +116,8 @@ what the deployed container is holding, and it has been misleading here before. 
 - Admin → Invoices resend surfaces the mail server's real error text when a send fails, replacing the old
   generic "email not configured".
 - ALSO DATA, NOT CODE: Admin → Settings business email (footer/contact/JSON-LD read the business_email
-  setting) and Karyme's admin login row in the users table carry whatever address they were saved with —
-  update those in the running app, the repo cannot do it.
+  setting) and Karyme's admin row in the users table carry whatever address they were saved with. The admin
+  row’s email is display/notification metadata and is overwrite-protected after initial OAuth creation.
 
 ### Provider history — why the setup looks like this
 - The old grapefruit@grapefruitclean.com Gmail is NOT dead: it still authenticates, and earlier notes calling

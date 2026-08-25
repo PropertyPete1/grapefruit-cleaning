@@ -348,3 +348,23 @@
 - [x] Apply restored schema migrations 0014-0024 and verify the application database is structurally current
 - [x] Run type check, complete tests, production build, genuine restart, one checkpoint, /api/version proof, and live EN/ES verification
 - [x] Preserve Daniel/Steven financial mismatches for a separate controlled data-recovery action; do not fabricate restored rows
+
+## Stripe-backed reconciliation, schedule recovery, and email correction
+- [x] Re-query live Stripe for Daniel/INV-MT0LDYJ6-7D0D and Steven/INV-MSS5FMO8-B473, including successful charges, amount, timestamp, refunds, disputes, Checkout Sessions, PaymentIntents, and metadata
+- [x] Stop and report before any database write if Stripe shows a missing charge, refund, dispute, amount mismatch, or other unexpected evidence
+- [x] Capture database before-state for every booking, invoice, payment, and customer row considered for repair
+- [x] Restore only rows conclusively proven by Stripe; add an auditable repair-origin note to every restored/updated record and show before/after
+- [x] Recreate the daily reminder and hourly iCal schedules from PROJECT_NOTES.md; verify enabled state and real future next_execution_at values
+- [x] Restore Daniel booking GFC-WH33YS, invoice INV-MT0LDYJ6-7D0D, and the verified $170 Stripe balance payment; preserve Stripe timestamps/ids and label every touched row with repair origin
+- [x] Leave Steven invoice INV-MSS5FMO8-B473 unpaid and create no $80 payment row because Stripe proves no successful balance charge
+- [x] Audit every Steven booking, including manual and iCal auto-booked turnover rows, dates, statuses, completion state, and tied invoices before creating any invoice or sending any customer email
+- [x] Report Steven audit findings to the owner before any new billing/customer-send action
+- [x] Audit every `users.email` reader and classify it as login identity, admin/staff display, owner notification recipient, or customer-facing output
+- [x] Preserve an existing manually managed `users.email` across later OAuth sign-ins while still assigning provider email to new users
+- [x] Add regression tests proving login remains keyed by `openId` and a later provider email cannot overwrite an existing stored email
+- [x] Update Karyme’s admin row to `Grapefruitcleaningc@gmail.com` without changing `openId`, role, or login method
+- [x] Document in PROJECT_NOTES.md that Manus `openId` is the login key and `users.email` is display/notification data protected from provider overwrite after initial creation
+- [x] Verify footer, contact page, and LocalBusiness JSON-LD use the live business_email setting; fix any hardcoding/cache issue and prove EN/ES production rendering
+- [x] Run the read-only daily health check after repairs and capture exact output
+- [x] Run type check, full tests, production build, genuine restart, one checkpoint, /api/version proof, and live-page verification
+- [ ] Push checkpoint 94c10a0 and the new repair checkpoint to GitHub after authentication is restored

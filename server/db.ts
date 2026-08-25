@@ -35,10 +35,72 @@ export async function getDb() {
   return _db;
 }
 
-export async function upsertUser(user: InsertUser): Promise<void> {
+/**
+ * Builds the insert/update halves of the Manus identity sync.
+ *
+ * `openId` is the authentication key. A provider email is accepted when the
+ * row is first created, but deliberately omitted from the duplicate-key
+ * update so an operator-managed display/notification email survives later
+ * sign-ins. Name, login method and last-sign-in metadata may still refresh.
+ */
+export function buildUserUpsertPlan(user: InsertUser): {
+  values: InsertUser;
+  updateSet: Record<string, unknown>;
+} {
   if (!user.openId) {
     throw new Error("User openId is required for upsert");
   }
+
+  const values: InsertUser = {
+    openId: user.openId,
+  };
+  const updateSet: Record<string, unknown> = {};
+
+  const mutableTextFields = ["name", "loginMethod"] as const;
+  type MutableTextField = (typeof mutableTextFields)[number];
+
+  const assignMutableNullable = (field: MutableTextField) => {
+    const value = user[field];
+    if (value === undefined) return;
+    const normalized = value ?? null;
+    values[field] = normalized;
+    updateSet[field] = normalized;
+  };
+
+  mutableTextFields.forEach(assignMutableNullable);
+
+  // Provider email seeds a brand-new row only. Existing rows may carry an
+  // operator-managed display/notification address and must not be overwritten
+  // by a later OAuth callback.
+  if (user.email !== undefined) {
+    values.email = user.email ?? null;
+  }
+
+  if (user.lastSignedIn !== undefined) {
+    values.lastSignedIn = user.lastSignedIn;
+    updateSet.lastSignedIn = user.lastSignedIn;
+  }
+  if (user.role !== undefined) {
+    values.role = user.role;
+    updateSet.role = user.role;
+  } else if (user.openId === ENV.ownerOpenId) {
+    values.role = 'admin';
+    updateSet.role = 'admin';
+  }
+
+  if (!values.lastSignedIn) {
+    values.lastSignedIn = new Date();
+  }
+
+  if (Object.keys(updateSet).length === 0) {
+    updateSet.lastSignedIn = new Date();
+  }
+
+  return { values, updateSet };
+}
+
+export async function upsertUser(user: InsertUser): Promise<void> {
+  const { values, updateSet } = buildUserUpsertPlan(user);
 
   const db = await getDb();
   if (!db) {
@@ -47,44 +109,6 @@ export async function upsertUser(user: InsertUser): Promise<void> {
   }
 
   try {
-    const values: InsertUser = {
-      openId: user.openId,
-    };
-    const updateSet: Record<string, unknown> = {};
-
-    const textFields = ["name", "email", "loginMethod"] as const;
-    type TextField = (typeof textFields)[number];
-
-    const assignNullable = (field: TextField) => {
-      const value = user[field];
-      if (value === undefined) return;
-      const normalized = value ?? null;
-      values[field] = normalized;
-      updateSet[field] = normalized;
-    };
-
-    textFields.forEach(assignNullable);
-
-    if (user.lastSignedIn !== undefined) {
-      values.lastSignedIn = user.lastSignedIn;
-      updateSet.lastSignedIn = user.lastSignedIn;
-    }
-    if (user.role !== undefined) {
-      values.role = user.role;
-      updateSet.role = user.role;
-    } else if (user.openId === ENV.ownerOpenId) {
-      values.role = 'admin';
-      updateSet.role = 'admin';
-    }
-
-    if (!values.lastSignedIn) {
-      values.lastSignedIn = new Date();
-    }
-
-    if (Object.keys(updateSet).length === 0) {
-      updateSet.lastSignedIn = new Date();
-    }
-
     await db.insert(users).values(values).onDuplicateKeyUpdate({
       set: updateSet,
     });

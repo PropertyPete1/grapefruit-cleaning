@@ -71,6 +71,7 @@ export const customers = mysqlTable("customers", {
   marketingToken: varchar("marketingToken", { length: 64 }).unique(),
   lastMarketingEmailAt: timestamp("lastMarketingEmailAt"),
   marketingEmailCount: int("marketingEmailCount").default(0).notNull(),
+  repairNote: text("repairNote"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -283,6 +284,7 @@ export const bookings = mysqlTable("bookings", {
    * needs.
    */
   turnoverNoticeDate: varchar("turnoverNoticeDate", { length: 10 }),
+  repairNote: text("repairNote"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, table => [
@@ -450,6 +452,7 @@ export const invoices = mysqlTable("invoices", {
    * flags the money that has to be refunded instead of double-marking paid.
    */
   refundNeeded: boolean("refundNeeded").default(false).notNull(),
+  repairNote: text("repairNote"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 export type Invoice = typeof invoices.$inferSelect;
@@ -464,6 +467,7 @@ export const payments = mysqlTable("payments", {
   method: varchar("method", { length: 40 }).default("card"),
   stripePaymentIntentId: varchar("stripePaymentIntentId", { length: 255 }),
   status: mysqlEnum("status", ["pending", "succeeded", "failed", "refunded"]).default("pending").notNull(),
+  repairNote: text("repairNote"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 export type Payment = typeof payments.$inferSelect;
