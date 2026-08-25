@@ -16,6 +16,18 @@ saying they never got a link.
 
 Current recovery verification: 1190 tests passing, 5 skipped. Migrations applied through 0025.
 
+## BRAIN READ API DEPLOYMENT REFRESH — Aug 25, 2026
+The live brain-read API remains attached to existing project `SKvABkKrcvYbC3rX7A7YaM` at
+`https://grapeclean-skvabkkr.manus.space`. `BRAIN_READ_TOKEN` is a deployment secret and must
+never be committed to source. This non-secret operational note intentionally accompanies the
+secret refresh so the deployment receives a genuine source checkpoint and process rebuild rather
+than relying on an environment-only update.
+
+The authorization contract remains pinned by `server/brainRoutes.test.ts`: an unset deployment
+secret returns `503`, a wrong or malformed bearer returns `401`, and the configured bearer reaches
+the six read-only routes. `server/brainToken.live.test.ts` separately validates an injected live
+credential without logging its value.
+
 ### Two design decisions worth not re-litigating
 - **`/api/version` reports `parentCommit`, not `commit`.** A commit cannot contain its own hash, and the SHA
   must be stamped into a source file before the checkpoint commit exists. The value is the parent of the
