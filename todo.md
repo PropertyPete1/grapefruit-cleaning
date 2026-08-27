@@ -391,5 +391,6 @@
 - [x] Keep starting-at/custom-quote listed starting prices deposit-eligible; require admin confirmation for every additional amount and never auto-charge it
 - [x] Add focused migration, cents, catalog CRUD, EN/ES UI, snapshot, approval, Stripe, email, receipt, marketing non-regression, and rollback tests at each stage
 - [x] Apply migrations only after parity pre-check; prove existing-nine price parity, no existing money-row changes, idempotent db:push, and flag-based rollback
-- [x] Run full tests, tsc, production build, responsive EN/ES smoke tests, genuine restart, checkpoint, /api/version proof, and GitHub sync
+- [x] Run full tests, tsc, production build, responsive EN/ES smoke tests, genuine restart, checkpoint, and /api/version proof
+- [x] Reauthorize GitHub CLI after the denied device attempt, push checkpoint 211d9b16 to `PropertyPete1/grapefruit-cleaning`, and prove local/deploy/GitHub refs match
 - [x] Record the seven approved interpretation choices in the final report
