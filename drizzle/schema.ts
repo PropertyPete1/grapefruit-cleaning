@@ -122,12 +122,18 @@ export const bookings = mysqlTable("bookings", {
   locale: mysqlEnum("locale", ["en", "es"]).default("en").notNull(),
   totalAmount: int("totalAmount").notNull(),
   depositAmount: int("depositAmount").notNull(),
+  /** Exact monetary snapshots for new writes. Legacy dollar fields stay in place for rollback. */
+  baseAmountCents: int("baseAmountCents"),
+  addonsAmountCents: int("addonsAmountCents"),
+  totalAmountCents: int("totalAmountCents"),
+  depositAmountCents: int("depositAmountCents"),
   status: mysqlEnum("status", ["pending_deposit", "confirmed", "in_progress", "completed", "cancelled", "expired"])
     .default("pending_deposit")
     .notNull(),
   employeeId: int("employeeId"),
   couponCode: varchar("couponCode", { length: 40 }),
   discountApplied: int("discountApplied").default(0).notNull(),
+  discountAppliedCents: int("discountAppliedCents"),
   stripeSessionId: varchar("stripeSessionId", { length: 255 }),
   stripePaymentIntentId: varchar("stripePaymentIntentId", { length: 255 }),
   /** Timestamp when the 7-days-before reminder email was sent (null = not sent yet). */
@@ -293,6 +299,82 @@ export const bookings = mysqlTable("bookings", {
 ]);
 export type Booking = typeof bookings.$inferSelect;
 
+// ---------- Dynamic add-on catalog ----------
+
+export const addonCategories = mysqlTable("addon_categories", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Immutable public/admin identity; labels may change, keys never do. */
+  key: varchar("key", { length: 80 }).notNull().unique(),
+  nameEn: varchar("nameEn", { length: 160 }).notNull(),
+  nameEs: varchar("nameEs", { length: 160 }).notNull(),
+  descriptionEn: text("descriptionEn"),
+  descriptionEs: text("descriptionEs"),
+  noteEn: text("noteEn"),
+  noteEs: text("noteEs"),
+  sortOrder: int("sortOrder").default(0).notNull(),
+  isEnabled: boolean("isEnabled").default(true).notNull(),
+  /** False for the migrated nine so their public presentation stays unchanged. */
+  showPublicHeading: boolean("showPublicHeading").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type AddonCategory = typeof addonCategories.$inferSelect;
+
+export const addons = mysqlTable("addons", {
+  id: int("id").autoincrement().primaryKey(),
+  categoryId: int("categoryId"),
+  /** Immutable stable key used by clients and legacy-compatible booking JSON. */
+  key: varchar("key", { length: 100 }).notNull().unique(),
+  nameEn: varchar("nameEn", { length: 180 }).notNull(),
+  nameEs: varchar("nameEs", { length: 180 }).notNull(),
+  descriptionEn: text("descriptionEn"),
+  descriptionEs: text("descriptionEs"),
+  /** JSON string arrays; text keeps the schema portable across MySQL/TiDB. */
+  includedItemsEn: text("includedItemsEn"),
+  includedItemsEs: text("includedItemsEs"),
+  noteEn: text("noteEn"),
+  noteEs: text("noteEs"),
+  priceMode: mysqlEnum("priceMode", ["fixed", "starting_at", "custom_quote"]).default("fixed").notNull(),
+  /** The exact amount included in booking total and deposit for every mode. */
+  startingPriceCents: int("startingPriceCents").notNull(),
+  mayVary: boolean("mayVary").default(false).notNull(),
+  sortOrder: int("sortOrder").default(0).notNull(),
+  isEnabled: boolean("isEnabled").default(true).notNull(),
+  /** Referenced records are removed by archiving, never hard-deleted. */
+  archivedAt: timestamp("archivedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type Addon = typeof addons.$inferSelect;
+
+export const bookingAddons = mysqlTable(
+  "booking_addons",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    bookingId: int("bookingId").notNull(),
+    /** Nullable so a snapshot survives a later catalog archive or removal. */
+    addonId: int("addonId"),
+    addonKey: varchar("addonKey", { length: 100 }).notNull(),
+    categoryKey: varchar("categoryKey", { length: 80 }),
+    categoryNameEn: varchar("categoryNameEn", { length: 160 }),
+    categoryNameEs: varchar("categoryNameEs", { length: 160 }),
+    nameEn: varchar("nameEn", { length: 180 }).notNull(),
+    nameEs: varchar("nameEs", { length: 180 }).notNull(),
+    descriptionEn: text("descriptionEn"),
+    descriptionEs: text("descriptionEs"),
+    noteEn: text("noteEn"),
+    noteEs: text("noteEs"),
+    priceMode: mysqlEnum("priceMode", ["fixed", "starting_at", "custom_quote"]).default("fixed").notNull(),
+    bookedPriceCents: int("bookedPriceCents").notNull(),
+    mayVary: boolean("mayVary").default(false).notNull(),
+    quantity: int("quantity").default(1).notNull(),
+    sortOrder: int("sortOrder").default(0).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  table => [uniqueIndex("booking_addons_booking_key_unique").on(table.bookingId, table.addonKey)]
+);
+export type BookingAddon = typeof bookingAddons.$inferSelect;
+
 /**
  * A recurring host's property, connected to its Airbnb/VRBO calendar feed.
  *
@@ -386,6 +468,8 @@ export const invoices = mysqlTable("invoices", {
   customerId: int("customerId").notNull(),
   /** Amount actually billed — the computed balance unless an admin adjusted it at approval. */
   amount: int("amount").notNull(),
+  /** Exact amount for new invoices; null means read legacy `amount * 100`. */
+  amountCents: int("amountCents"),
   /**
    * "awaiting_approval" = balance computed on job completion, waiting for an
    * admin to review (and possibly adjust) before anything is sent. Nothing is
@@ -398,6 +482,7 @@ export const invoices = mysqlTable("invoices", {
   paidAt: timestamp("paidAt"),
   /** Server-computed balance at completion, kept for audit when an admin adjusts the total. */
   computedAmount: int("computedAmount"),
+  computedAmountCents: int("computedAmountCents"),
   /** When an admin approved the balance for sending. */
   approvedAt: timestamp("approvedAt"),
   /** users.id of the admin who approved it. */
@@ -463,6 +548,8 @@ export const payments = mysqlTable("payments", {
   invoiceId: int("invoiceId"),
   customerId: int("customerId"),
   amount: int("amount").notNull(),
+  /** Exact settled amount; null means read legacy `amount * 100`. */
+  amountCents: int("amountCents"),
   kind: mysqlEnum("kind", ["deposit", "balance", "full", "refund", "tip"]).default("deposit").notNull(),
   method: varchar("method", { length: 40 }).default("card"),
   stripePaymentIntentId: varchar("stripePaymentIntentId", { length: 255 }),

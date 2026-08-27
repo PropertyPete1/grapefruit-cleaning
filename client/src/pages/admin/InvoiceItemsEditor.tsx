@@ -15,7 +15,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CUSTOM_ITEM_MAX } from "@shared/invoiceItems";
-import { EXTRA_IDS, type ExtraId } from "@shared/pricing";
+import { EXTRA_IDS } from "@shared/pricing";
+import type { AddonCatalogPayload } from "@shared/addonCatalog";
+import { centsToDollars } from "@shared/money";
 import { en } from "@/i18n/translations/en";
 import { fmtMoney } from "./adminShared";
 
@@ -35,13 +37,15 @@ export function customItemsValid(parsed: ParsedCustomItem[]): boolean {
   );
 }
 
-/** Add-on price as billed: whole dollars, never below $1 — matches the server. */
-export function addonPrice(extras: Record<string, number>, id: ExtraId): number {
+/** Add-on price as billed, from the dynamic catalog when enabled or the legacy map for rollback. */
+export function addonPrice(extras: Record<string, number>, id: string, catalog?: AddonCatalogPayload): number {
+  const dynamic = catalog?.categories.flatMap(category => category.addons).find(addon => addon.key === id);
+  if (catalog?.enabled && dynamic) return centsToDollars(dynamic.startingPriceCents);
   return Math.max(1, Math.round(extras[id] ?? 0));
 }
 
-export function addonsTotal(extras: Record<string, number>, ids: ExtraId[]): number {
-  return ids.reduce((sum, id) => sum + addonPrice(extras, id), 0);
+export function addonsTotal(extras: Record<string, number>, ids: string[], catalog?: AddonCatalogPayload): number {
+  return ids.reduce((sum, id) => sum + addonPrice(extras, id, catalog), 0);
 }
 
 export function InvoiceItemsEditor({
@@ -52,17 +56,29 @@ export function InvoiceItemsEditor({
   onCustomsChange,
   addonsLabel = "Add-ons done on-site",
   addonsHint = "Checked items appear on the invoice by name, priced from today's catalog.",
+  catalog,
+  excludedAddonKeys = [],
 }: {
   extras: Record<string, number>;
-  checkedAddons: ExtraId[];
-  onToggleAddon: (id: ExtraId) => void;
+  checkedAddons: string[];
+  onToggleAddon: (id: string) => void;
   customs: CustomItemRow[];
   onCustomsChange: (next: CustomItemRow[]) => void;
   addonsLabel?: string;
   addonsHint?: string;
+  catalog?: AddonCatalogPayload;
+  excludedAddonKeys?: string[];
 }) {
   const parsed = parseCustomItems(customs);
   const valid = customItemsValid(parsed);
+  const options = (catalog?.enabled
+    ? catalog.categories.flatMap(category => category.addons.map(addon => ({
+        id: addon.key,
+        name: addon.nameEn,
+        price: centsToDollars(addon.startingPriceCents),
+      })))
+    : EXTRA_IDS.map(id => ({ id, name: (en.extras as Record<string, string>)[id] ?? id, price: addonPrice(extras, id) })))
+    .filter(option => !excludedAddonKeys.includes(option.id));
 
   return (
     <>
@@ -70,22 +86,22 @@ export function InvoiceItemsEditor({
         <Label>{addonsLabel}</Label>
         <p className="mt-0.5 text-xs text-muted-foreground">{addonsHint}</p>
         <div className="mt-2 grid grid-cols-2 gap-1.5">
-          {EXTRA_IDS.map(id => {
-            const active = checkedAddons.includes(id);
+          {options.map(option => {
+            const active = checkedAddons.includes(option.id);
             return (
               <button
-                key={id}
+                key={option.id}
                 type="button"
                 aria-pressed={active}
-                onClick={() => onToggleAddon(id)}
+                onClick={() => onToggleAddon(option.id)}
                 className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-left text-xs font-medium transition-colors ${
                   active
                     ? "border-primary bg-primary/5 text-foreground"
                     : "border-border bg-card text-muted-foreground hover:border-primary/40"
                 }`}
               >
-                <span className="min-w-0 truncate">{(en.extras as Record<string, string>)[id] ?? id}</span>
-                <span className="shrink-0">+{fmtMoney(addonPrice(extras, id))}</span>
+                <span className="min-w-0 truncate">{option.name}</span>
+                <span className="shrink-0">+{fmtMoney(option.price)}</span>
               </button>
             );
           })}
@@ -159,13 +175,15 @@ export function InvoiceItemsSummary({
   customs,
   total,
   totalLabel = "Invoice total",
+  catalog,
 }: {
   extras: Record<string, number>;
   base: number;
-  checkedAddons: ExtraId[];
+  checkedAddons: string[];
   customs: ParsedCustomItem[];
   total: number;
   totalLabel?: string;
+  catalog?: AddonCatalogPayload;
 }) {
   if (checkedAddons.length === 0 && customs.length === 0) return null;
   return (
@@ -176,8 +194,12 @@ export function InvoiceItemsSummary({
       </div>
       {checkedAddons.map(id => (
         <div key={id} className="flex justify-between">
-          <dt className="text-muted-foreground">{(en.extras as Record<string, string>)[id] ?? id}</dt>
-          <dd className="font-medium">{fmtMoney(addonPrice(extras, id))}</dd>
+          <dt className="text-muted-foreground">
+            {catalog?.enabled
+              ? catalog.categories.flatMap(category => category.addons).find(addon => addon.key === id)?.nameEn ?? id
+              : (en.extras as Record<string, string>)[id] ?? id}
+          </dt>
+          <dd className="font-medium">{fmtMoney(addonPrice(extras, id, catalog))}</dd>
         </div>
       ))}
       {customs.map(

@@ -29,6 +29,7 @@
  */
 
 import { z } from "zod";
+import { centsToDollars, depositCents, dollarsToCents } from "./money";
 
 /** Every service that can be booked, in the order they are offered. */
 export const CLEANING_TYPES = [
@@ -548,6 +549,55 @@ export interface QuoteBreakdown {
   startingAt: boolean;
   /** True when the size requires a custom quote (residential 3,500+ sq ft). */
   customQuote: boolean;
+}
+
+export interface CatalogQuoteBreakdown extends QuoteBreakdown {
+  baseCents: number;
+  extrasTotalCents: number;
+  subtotalCents: number;
+  discountCents: number;
+  totalCents: number;
+  depositCents: number;
+}
+
+/**
+ * Catalog-v2 quote path. The database supplies add-on cents; the browser never
+ * supplies prices. Discounts and deposits retain the current order of
+ * operations, but money is rounded once in integer cents.
+ */
+export function calculateCatalogQuote(
+  input: Omit<QuoteInput, "extras">,
+  extrasTotalCents: number,
+  config: PricingConfig = DEFAULT_PRICING
+): CatalogQuoteBreakdown {
+  if (!Number.isInteger(extrasTotalCents) || extrasTotalCents < 0) {
+    throw new Error("Add-on subtotal must be a non-negative integer number of cents");
+  }
+  const baseQuote = calculateQuote({ ...input, extras: [], frequency: "onetime" }, config);
+  const baseCents = dollarsToCents(baseQuote.base);
+  const subtotalCents = baseCents + extrasTotalCents;
+  const discountRate = config.frequencyDiscounts[input.frequency] ?? 0;
+  const discountCents = Math.round(subtotalCents * discountRate);
+  const totalCents = subtotalCents - discountCents;
+  const exactDepositCents = depositCents(totalCents, config.depositRate);
+  return {
+    base: centsToDollars(baseCents),
+    rooms: 0,
+    sqftCharge: 0,
+    extrasTotal: centsToDollars(extrasTotalCents),
+    subtotal: centsToDollars(subtotalCents),
+    discount: centsToDollars(discountCents),
+    total: centsToDollars(totalCents),
+    deposit: centsToDollars(exactDepositCents),
+    startingAt: baseQuote.startingAt,
+    customQuote: baseQuote.customQuote,
+    baseCents,
+    extrasTotalCents,
+    subtotalCents,
+    discountCents,
+    totalCents,
+    depositCents: exactDepositCents,
+  };
 }
 
 export function calculateQuote(input: QuoteInput, config: PricingConfig = DEFAULT_PRICING): QuoteBreakdown {

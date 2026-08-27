@@ -368,3 +368,28 @@
 - [x] Run the read-only daily health check after repairs and capture exact output
 - [x] Run type check, full tests, production build, genuine restart, one checkpoint, /api/version proof, and live-page verification
 - [x] Push checkpoint 94c10a0 and the new repair checkpoint to GitHub after authentication is restored
+
+## Dynamic bilingual add-on catalog — audit and build plan only
+- [x] Audit hardcoded `EXTRA_IDS`, pricing config, booking validation/persistence, instant totals, and deposit computation for all existing 9 add-ons
+- [x] Audit invoice line-item snapshots, approval adjustments, manual invoice checklist, Stripe checkout lines, receipts, reminders, marketing, and bilingual email consumers
+- [x] Inspect production pricing_config, bookings, invoices, and historical line-item snapshots to quantify the exact existing-data migration surface
+- [x] Design a dynamic catalog schema supporting categories, EN/ES name/description/note, fixed/starting-at/custom-quote pricing, sort order, enable/disable, add/remove, and immutable stable identifiers
+- [x] Provide the exact migration plan for the existing 9 add-ons with current prices and no customer-visible change
+- [x] Provide the historical-invoice compatibility plan so existing snapshots render unchanged even if catalog records are later renamed, disabled, repriced, or removed
+- [x] Translate every new category, option, description, and pricing note from the approved spec into natural Spanish
+- [x] Provide phased implementation, test, rollout, rollback, and data-verification plans before writing application code or applying schema changes
+
+## Dynamic bilingual add-on catalog — approved implementation
+- [x] Add additive cents columns/helpers with legacy-dollar dual reads/writes and exact deposit rounding
+- [x] Add dynamic category, add-on, and booking snapshot tables with exact existing-nine seed and the approved new bilingual catalog rows
+- [x] Add catalog-v2 feature flag and legacy fallback so rollback remains a settings change rather than a schema rollback
+- [x] Build admin category/add-on CRUD with bilingual validation, sorting, enable/disable, soft archive, pricing modes, and safe hard-delete only for unused drafts
+- [x] Convert Pricing, Quote, Booking, and Pay Deposit to the enabled catalog with Base Service, Selected Add-Ons, Add-On Subtotal, Final Total, and may-vary notes in EN/ES
+- [x] Persist immutable booking add-on snapshots and dual-write legacy IDs without changing any existing booking or invoice presentation
+- [x] Upgrade booking confirmations/reminders and the admin invoice checklist to snapshot-driven bilingual add-ons with no double charge
+- [x] Add version-2 invoice snapshots with cents, bilingual names, source, and price mode while preserving every version-1 historical line exactly
+- [x] Keep starting-at/custom-quote listed starting prices deposit-eligible; require admin confirmation for every additional amount and never auto-charge it
+- [x] Add focused migration, cents, catalog CRUD, EN/ES UI, snapshot, approval, Stripe, email, receipt, marketing non-regression, and rollback tests at each stage
+- [x] Apply migrations only after parity pre-check; prove existing-nine price parity, no existing money-row changes, idempotent db:push, and flag-based rollback
+- [x] Run full tests, tsc, production build, responsive EN/ES smoke tests, genuine restart, checkpoint, /api/version proof, and GitHub sync
+- [x] Record the seven approved interpretation choices in the final report

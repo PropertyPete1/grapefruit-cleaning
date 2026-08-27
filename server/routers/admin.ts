@@ -20,7 +20,7 @@ import {
   validatePricingConfig,
   type PricingConfig,
 } from "@shared/pricing";
-import { CLEANING_TYPES, EXTRA_IDS, FREQUENCIES } from "@shared/pricing";
+import { CLEANING_TYPES, FREQUENCIES } from "@shared/pricing";
 import * as db from "../db";
 import { createAdminBooking, generateDepositToken } from "../adminBooking";
 import { depositLinkExpiresAt, depositLinkStatus, depositPayUrl } from "../depositLinkRules";
@@ -48,6 +48,8 @@ import { sendTipRequestEmailSafely } from "../tip";
 import { storagePut } from "../storage";
 import { getStripe } from "../stripe";
 import { protectedProcedure, router } from "../_core/trpc";
+import { addonCatalogAdminRouter } from "./addonCatalogAdmin";
+import { loadAddonCatalog } from "../addonCatalog";
 
 /** Admin-only procedure guard. */
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -104,6 +106,7 @@ function assertValidDurationConfig(raw: string): DurationConfig {
 const bookingStatusEnum = z.enum(["pending_deposit", "confirmed", "in_progress", "completed", "cancelled", "expired"]);
 
 export const adminRouter = router({
+  addonCatalog: addonCatalogAdminRouter,
   // ---------- Dashboard & statistics ----------
   stats: adminProcedure.query(() => db.getDashboardStats()),
   monthlyRevenue: adminProcedure.query(() => db.getMonthlyRevenue()),
@@ -827,7 +830,7 @@ export const adminRouter = router({
     .input(
       z.object({
         customerId: z.number().int(),
-        amount: z.number().int().min(1),
+        amount: z.number().min(1).multipleOf(0.01),
         dueDate: z.string().optional(),
         /**
          * Same itemization the approval flow takes, deliberately the same
@@ -836,7 +839,10 @@ export const adminRouter = router({
          * one-off lines. Omitted means an un-itemized invoice, which is the
          * pre-existing behaviour and stays valid.
          */
-        addonIds: z.array(z.enum(EXTRA_IDS)).max(EXTRA_IDS.length).optional(),
+        addonIds: z
+          .array(z.string().trim().min(1).max(100).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$|^[A-Za-z][A-Za-z0-9]*$/))
+          .max(20)
+          .optional(),
         customItems: z
           .array(
             z.object({
@@ -936,10 +942,12 @@ export const adminRouter = router({
    */
   awaitingApprovalInvoices: adminProcedure.query(async () => {
     const pending = await db.listInvoicesAwaitingApproval();
+    const catalogEnabled = (await loadAddonCatalog(false)).enabled;
     return Promise.all(
       pending.map(async ({ payToken: _payToken, ...invoice }) => {
         const booking = invoice.bookingId ? await db.getBookingById(invoice.bookingId) : undefined;
         const customer = await db.getCustomerById(invoice.customerId);
+        const bookedAddons = catalogEnabled && booking ? await db.listBookingAddonsByBooking(booking.id) : [];
         return {
           ...invoice,
           bookingReference: booking?.reference ?? null,
@@ -952,6 +960,13 @@ export const adminRouter = router({
           depositCredited: booking?.stripePaymentIntentId ? (booking?.depositAmount ?? 0) : 0,
           customerName: customer ? `${customer.firstName} ${customer.lastName}` : null,
           customerEmail: customer?.email ?? null,
+          bookedAddons: bookedAddons.map(item => ({
+            key: item.addonKey,
+            nameEn: item.nameEn,
+            nameEs: item.nameEs,
+            amountCents: item.bookedPriceCents,
+            priceMode: item.priceMode,
+          })),
         };
       })
     );
@@ -966,9 +981,12 @@ export const adminRouter = router({
       z.object({
         invoiceId: z.number().int(),
         /** Optional corrected total; omitted means bill the computed balance. */
-        adjustedAmount: z.number().int().min(0).max(100000).optional(),
+        adjustedAmount: z.number().min(0).max(100000).multipleOf(0.01).optional(),
         /** Catalog add-ons picked on-site — ids only; the server prices them. */
-        addonIds: z.array(z.enum(EXTRA_IDS)).max(EXTRA_IDS.length).optional(),
+        addonIds: z
+          .array(z.string().trim().min(1).max(100).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$|^[A-Za-z][A-Za-z0-9]*$/))
+          .max(20)
+          .optional(),
         /**
          * One-off charges. The name is REQUIRED non-empty: an unlabeled
          * amount is the mystery total this feature exists to kill.

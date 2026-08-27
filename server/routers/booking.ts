@@ -1,13 +1,17 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import {
+  calculateCatalogQuote,
   calculateQuote,
   depositFor,
   EXTRA_IDS,
   generateBookingReference,
   parsePricingConfig,
   PRICING_SETTING_KEY,
+  type CatalogQuoteBreakdown,
+  type ExtraId,
   type PricingConfig,
+  type QuoteBreakdown,
 } from "@shared/pricing";
 import {
   isSlotBookable,
@@ -34,13 +38,15 @@ import { lookupPropertySqft } from "../property";
 import { publicOrigin } from "../publicOrigin";
 import { getStripe } from "../stripe";
 import { publicProcedure, router } from "../_core/trpc";
+import { bookingAddonSnapshots, loadAddonCatalog, resolveSelectedAddons } from "../addonCatalog";
+import { centsToDollars, depositCents, dollarsToCents, legacyWholeDollars } from "@shared/money";
 
 const quoteInputSchema = z.object({
   type: z.enum(["residential", "commercial", "airbnb", "moveinout", "deep", "office"]),
   bedrooms: z.number().int().min(0).max(10),
   bathrooms: z.number().int().min(1).max(10),
   sqft: z.number().min(200).max(10000),
-  extras: z.array(z.enum(EXTRA_IDS)),
+  extras: z.array(z.string().min(1).max(100)).max(50),
   frequency: z.enum(["onetime", "weekly", "biweekly", "monthly"]),
 });
 
@@ -75,6 +81,20 @@ export const EXTRA_NAMES: Record<string, { en: string; es: string }> = {
 /** Load the live pricing configuration from settings (fallback: defaults). */
 export async function loadPricingConfig(): Promise<PricingConfig> {
   return parsePricingConfig(await db.getSetting(PRICING_SETTING_KEY));
+}
+
+function legacyExtras(keys: readonly string[]): ExtraId[] {
+  const allowed = new Set<string>(EXTRA_IDS);
+  if (keys.some(key => !allowed.has(key))) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "One or more selected add-ons are not available." });
+  }
+  return keys as ExtraId[];
+}
+
+function isCatalogBreakdown(
+  breakdown: QuoteBreakdown | CatalogQuoteBreakdown
+): breakdown is CatalogQuoteBreakdown {
+  return "totalCents" in breakdown;
 }
 
 /** Load the live job-duration ladders from settings (fallback: defaults). */
@@ -145,11 +165,29 @@ export const bookingRouter = router({
   /** Server-side authoritative quote calculation. */
   calculate: publicProcedure.input(quoteInputSchema).query(async ({ input }) => {
     const config = await loadPricingConfig();
-    return calculateQuote(input, config);
+    const catalog = await loadAddonCatalog(false);
+    if (catalog.enabled) {
+      const selected = await resolveSelectedAddons(input.extras);
+      return calculateCatalogQuote(
+        {
+          type: input.type,
+          bedrooms: input.bedrooms,
+          bathrooms: input.bathrooms,
+          sqft: input.sqft,
+          frequency: input.frequency,
+        },
+        selected.subtotalCents,
+        config
+      );
+    }
+    return calculateQuote({ ...input, extras: legacyExtras(input.extras) }, config);
   }),
 
   /** Live pricing configuration (tiers, extras, discounts, deposit rate) for public pages. */
   pricingConfig: publicProcedure.query(async () => loadPricingConfig()),
+
+  /** Dynamic bilingual add-on catalog; `enabled` controls the reversible rollout. */
+  addonCatalog: publicProcedure.query(async () => loadAddonCatalog(false)),
 
   /**
    * Verify a property's square footage against public county records
@@ -299,6 +337,22 @@ export const bookingRouter = router({
       // arriving by another road — a record more than 4x the entered size is
       // a failed lookup, not a reprice.
       const pricing = await loadPricingConfig();
+      const catalog = await loadAddonCatalog(false);
+      const selectedCatalog = catalog.enabled ? await resolveSelectedAddons(input.quote.extras) : null;
+      const calculateForSqft = (sqft: number) =>
+        selectedCatalog
+          ? calculateCatalogQuote(
+              {
+                type: input.quote.type,
+                bedrooms: input.quote.bedrooms,
+                bathrooms: input.quote.bathrooms,
+                sqft,
+                frequency: input.quote.frequency,
+              },
+              selectedCatalog.subtotalCents,
+              pricing
+            )
+          : calculateQuote({ ...input.quote, sqft, extras: legacyExtras(input.quote.extras) }, pricing);
       const property =
         input.propertyType === "apartment"
           ? ({ verified: false, addressVerified: false } as Awaited<ReturnType<typeof lookupPropertySqft>>)
@@ -306,17 +360,22 @@ export const bookingRouter = router({
       let effectiveSqft = input.quote.sqft;
       let sqftMismatch = false;
       if (property.verified && property.sqft && plausibleVerifiedSqft(input.quote.sqft, property.sqft)) {
-        const entered = calculateQuote(input.quote, pricing);
-        const verified = calculateQuote({ ...input.quote, sqft: property.sqft }, pricing);
+        const entered = calculateForSqft(input.quote.sqft);
+        const verified = calculateForSqft(property.sqft);
         if (verified.total > entered.total) {
           effectiveSqft = property.sqft;
           sqftMismatch = true;
         }
       }
       const effectiveQuote = { ...input.quote, sqft: effectiveSqft };
-      const breakdown = calculateQuote(effectiveQuote, pricing);
-      let total = breakdown.total;
-      let discountApplied = 0;
+      const breakdown = calculateForSqft(effectiveSqft);
+      const catalogBreakdown = isCatalogBreakdown(breakdown);
+      const baseAmountCents = catalogBreakdown ? breakdown.baseCents : dollarsToCents(breakdown.base);
+      const addonsAmountCents = catalogBreakdown
+        ? breakdown.extrasTotalCents
+        : dollarsToCents(breakdown.extrasTotal);
+      let totalCents = catalogBreakdown ? breakdown.totalCents : dollarsToCents(breakdown.total);
+      let discountAppliedCents = 0;
       let couponCode: string | undefined;
 
       if (input.couponCode) {
@@ -328,16 +387,19 @@ export const bookingRouter = router({
           (!coupon.expiresAt || coupon.expiresAt >= today) &&
           (!coupon.maxRedemptions || coupon.timesRedeemed < coupon.maxRedemptions);
         if (usable) {
-          if (coupon.percentOff) discountApplied = Math.round((total * coupon.percentOff) / 100);
-          else if (coupon.amountOff) discountApplied = Math.min(coupon.amountOff, total - 1);
-          total = Math.max(1, total - discountApplied);
+          if (coupon.percentOff) discountAppliedCents = Math.round((totalCents * coupon.percentOff) / 100);
+          else if (coupon.amountOff) discountAppliedCents = Math.min(coupon.amountOff * 100, totalCents - 100);
+          totalCents = Math.max(100, totalCents - discountAppliedCents);
           couponCode = coupon.code;
         }
       }
 
       // Zero when the deposit dial is at 0 — the mode where checkout skips
       // Stripe entirely and the booking confirms on submit.
-      const deposit = depositFor(total, pricing.depositRate);
+      const exactDepositCents = depositCents(totalCents, pricing.depositRate);
+      const total = centsToDollars(totalCents);
+      const deposit = centsToDollars(exactDepositCents);
+      const discountApplied = legacyWholeDollars(discountAppliedCents);
       const reference = generateBookingReference();
 
       const customerId = await db.findOrCreateCustomer({
@@ -378,7 +440,7 @@ export const bookingRouter = router({
 
       let bookingId: number;
       try {
-        bookingId = await db.createBooking({
+        const bookingData = {
           reference,
           customerId,
           serviceType: input.quote.type,
@@ -401,16 +463,27 @@ export const bookingRouter = router({
           locale: input.locale,
           totalAmount: total,
           depositAmount: deposit,
+          baseAmountCents,
+          addonsAmountCents,
+          totalAmountCents: totalCents,
+          depositAmountCents: exactDepositCents,
           // With no deposit to collect there is nothing to be pending about:
           // the booking is confirmed by the insert itself. No Stripe session
           // ever exists for it, so no stale-hold clock and no expiry either.
-          status: deposit > 0 ? "pending_deposit" : "confirmed",
+          status: exactDepositCents > 0 ? "pending_deposit" : "confirmed",
           couponCode,
           discountApplied,
+          discountAppliedCents,
           verifiedSqft: property.verified ? property.sqft : undefined,
           sqftSource: property.verified || property.addressVerified ? property.source : undefined,
           sqftMismatch,
-        });
+        } as const;
+        bookingId = selectedCatalog
+          ? await db.createBookingWithAddons(
+              bookingData,
+              bookingAddonSnapshots(selectedCatalog.addons, selectedCatalog.catalog)
+            )
+          : await db.createBooking(bookingData);
       } catch (error) {
         // Someone else took this slot between the check and the insert. That is
         // the race the index exists to stop; the customer just needs the normal
@@ -422,7 +495,7 @@ export const bookingRouter = router({
       // Zero-deposit mode: the booking is already confirmed — run the same
       // post-confirmation side effects a paid deposit would have triggered
       // (minus the payment row) and hand the client its confirmation directly.
-      if (deposit === 0) {
+      if (exactDepositCents === 0) {
         const created = await db.getBookingById(bookingId);
         if (created) await applyConfirmationSideEffects(created, null, false);
         return {
@@ -466,7 +539,7 @@ export const bookingRouter = router({
           {
             price_data: {
               currency: "usd",
-              unit_amount: deposit * 100,
+              unit_amount: exactDepositCents,
               product_data: {
                 name:
                   input.locale === "es"
@@ -474,8 +547,8 @@ export const bookingRouter = router({
                     : `Booking deposit — ${serviceName}`,
                 description:
                   input.locale === "es"
-                    ? `Reserva ${reference} · ${input.date} a las ${input.time} · Total estimado $${total}`
-                    : `Booking ${reference} · ${input.date} at ${input.time} · Estimated total $${total}`,
+                    ? `Reserva ${reference} · ${input.date} a las ${input.time} · Total estimado $${total.toFixed(2)}`
+                    : `Booking ${reference} · ${input.date} at ${input.time} · Estimated total $${total.toFixed(2)}`,
               },
             },
             quantity: 1,
@@ -644,6 +717,7 @@ export async function applyConfirmationSideEffects(
       bookingId,
       customerId: booking.customerId,
       amount: booking.depositAmount,
+      amountCents: booking.depositAmountCents ?? dollarsToCents(booking.depositAmount),
       kind: "deposit",
       method: "card",
       stripePaymentIntentId: paymentIntentId ?? undefined,
@@ -660,6 +734,9 @@ export async function applyConfirmationSideEffects(
   if (customer) {
     const locale = booking.locale as "en" | "es";
     const extras: string[] = JSON.parse(booking.extras ?? "[]");
+    const addonSnapshots = (await loadAddonCatalog(false)).enabled
+      ? await db.listBookingAddonsByBooking(booking.id)
+      : [];
     const bizPhone = (await db.getSetting("business_phone"))?.trim() || undefined;
     // Payment is gated on completeness (createSession refuses an unfinished
     // link, and the public flow never writes gaps), so a paid booking always
@@ -685,9 +762,11 @@ export async function applyConfirmationSideEffects(
       date: booking.scheduledDate ?? "",
       time: booking.scheduledTime ?? "",
       frequencyLabel: FREQUENCY_NAMES[booking.frequency][locale],
-      extras: extras.map(e => EXTRA_NAMES[e]?.[locale] ?? e),
-      total: booking.totalAmount,
-      deposit: booking.depositAmount,
+      extras: addonSnapshots.length > 0
+        ? addonSnapshots.map(item => locale === "es" ? item.nameEs : item.nameEn)
+        : extras.map(e => EXTRA_NAMES[e]?.[locale] ?? e),
+      total: centsToDollars(booking.totalAmountCents ?? dollarsToCents(booking.totalAmount)),
+      deposit: centsToDollars(booking.depositAmountCents ?? dollarsToCents(booking.depositAmount)),
       customerName: customer.firstName,
       customerEmail: customer.email ?? "",
       customerPhone: customer.phone ?? undefined,

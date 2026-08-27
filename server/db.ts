@@ -1,8 +1,11 @@
-import { and, desc, eq, gte, inArray, isNotNull, isNull, like, lte, ne, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, like, lte, ne, notInArray, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
+  addonCategories,
+  addons,
   blogPosts,
+  bookingAddons,
   bookings,
   connectedProperties,
   contactMessages,
@@ -19,6 +22,7 @@ import {
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { blocksSlot, STALE_DEPOSIT_MINUTES } from "./bookingRules";
+import { dollarsToCents, legacyWholeDollars } from "@shared/money";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -229,10 +233,84 @@ export async function updateCustomer(id: number, data: Partial<typeof customers.
 }
 
 // ---------- Bookings ----------
+type BookingInsert = typeof bookings.$inferInsert;
+type InvoiceInsert = typeof invoices.$inferInsert;
+type PaymentInsert = typeof payments.$inferInsert;
+
+/**
+ * Every money write populates exact cents and the unchanged rollback column.
+ * Callers may provide either representation; cents win when both are present.
+ */
+export function normalizeBookingMoney(data: Partial<BookingInsert>): Partial<BookingInsert> {
+  const next = { ...data };
+  const pair = (
+    legacyKey: "totalAmount" | "depositAmount" | "discountApplied",
+    centsKey: "totalAmountCents" | "depositAmountCents" | "discountAppliedCents"
+  ) => {
+    const exact = data[centsKey];
+    const legacy = data[legacyKey];
+    if (exact != null) {
+      next[centsKey] = exact;
+      next[legacyKey] = legacyWholeDollars(exact);
+    } else if (legacy != null) {
+      const cents = dollarsToCents(legacy);
+      next[centsKey] = cents;
+      next[legacyKey] = legacyWholeDollars(cents);
+    }
+  };
+  pair("totalAmount", "totalAmountCents");
+  pair("depositAmount", "depositAmountCents");
+  pair("discountApplied", "discountAppliedCents");
+  return next;
+}
+
+export function normalizeInvoiceMoney(data: Partial<InvoiceInsert>): Partial<InvoiceInsert> {
+  const next = { ...data };
+  if (data.amountCents != null) {
+    next.amount = legacyWholeDollars(data.amountCents);
+  } else if (data.amount != null) {
+    next.amountCents = dollarsToCents(data.amount);
+    next.amount = legacyWholeDollars(next.amountCents);
+  }
+  if (data.computedAmountCents != null) {
+    next.computedAmount = legacyWholeDollars(data.computedAmountCents);
+  } else if (data.computedAmount != null) {
+    next.computedAmountCents = dollarsToCents(data.computedAmount);
+    next.computedAmount = legacyWholeDollars(next.computedAmountCents);
+  }
+  return next;
+}
+
+export function normalizePaymentMoney(data: Partial<PaymentInsert>): Partial<PaymentInsert> {
+  const next = { ...data };
+  if (data.amountCents != null) {
+    next.amount = legacyWholeDollars(data.amountCents);
+  } else if (data.amount != null) {
+    next.amountCents = dollarsToCents(data.amount);
+    next.amount = legacyWholeDollars(next.amountCents);
+  }
+  return next;
+}
+
 export async function createBooking(data: typeof bookings.$inferInsert) {
   const db = requireDb(await getDb());
-  const result = await db.insert(bookings).values(data);
+  const result = await db.insert(bookings).values(normalizeBookingMoney(data) as BookingInsert);
   return Number(result[0].insertId);
+}
+
+export async function createBookingWithAddons(
+  data: typeof bookings.$inferInsert,
+  addonRows: Omit<typeof bookingAddons.$inferInsert, "bookingId">[]
+) {
+  const db = requireDb(await getDb());
+  return db.transaction(async tx => {
+    const result = await tx.insert(bookings).values(normalizeBookingMoney(data) as BookingInsert);
+    const bookingId = Number(result[0].insertId);
+    if (addonRows.length > 0) {
+      await tx.insert(bookingAddons).values(addonRows.map(row => ({ ...row, bookingId })));
+    }
+    return bookingId;
+  });
 }
 
 export async function getBookingById(id: number) {
@@ -267,7 +345,138 @@ export async function getBookingByStripeSession(sessionId: string) {
 
 export async function updateBooking(id: number, data: Partial<typeof bookings.$inferInsert>) {
   const db = requireDb(await getDb());
-  await db.update(bookings).set(data).where(eq(bookings.id, id));
+  await db.update(bookings).set(normalizeBookingMoney(data)).where(eq(bookings.id, id));
+}
+
+export async function updateBookingWithAddons(
+  id: number,
+  data: Partial<typeof bookings.$inferInsert>,
+  addonRows: Omit<typeof bookingAddons.$inferInsert, "bookingId">[]
+) {
+  const db = requireDb(await getDb());
+  await db.transaction(async tx => {
+    await tx.update(bookings).set(normalizeBookingMoney(data)).where(eq(bookings.id, id));
+    await tx.delete(bookingAddons).where(eq(bookingAddons.bookingId, id));
+    if (addonRows.length > 0) {
+      await tx.insert(bookingAddons).values(addonRows.map(row => ({ ...row, bookingId: id })));
+    }
+  });
+}
+
+export async function listBookingAddonsByBooking(bookingId: number) {
+  const db = requireDb(await getDb());
+  return db
+    .select()
+    .from(bookingAddons)
+    .where(eq(bookingAddons.bookingId, bookingId))
+    .orderBy(asc(bookingAddons.sortOrder), asc(bookingAddons.id));
+}
+
+// ---------- Dynamic add-on catalog ----------
+
+export async function listAddonCategories(includeDisabled = false) {
+  const db = requireDb(await getDb());
+  if (includeDisabled) {
+    return db.select().from(addonCategories).orderBy(asc(addonCategories.sortOrder), asc(addonCategories.id));
+  }
+  return db
+    .select()
+    .from(addonCategories)
+    .where(eq(addonCategories.isEnabled, true))
+    .orderBy(asc(addonCategories.sortOrder), asc(addonCategories.id));
+}
+
+export async function listAddons(includeDisabled = false) {
+  const db = requireDb(await getDb());
+  if (includeDisabled) {
+    return db.select().from(addons).orderBy(asc(addons.sortOrder), asc(addons.id));
+  }
+  return db
+    .select()
+    .from(addons)
+    .where(and(eq(addons.isEnabled, true), isNull(addons.archivedAt)))
+    .orderBy(asc(addons.sortOrder), asc(addons.id));
+}
+
+export async function getAddonById(id: number) {
+  const db = requireDb(await getDb());
+  const rows = await db.select().from(addons).where(eq(addons.id, id)).limit(1);
+  return rows[0];
+}
+
+export async function getAddonByKey(key: string) {
+  const db = requireDb(await getDb());
+  const rows = await db.select().from(addons).where(eq(addons.key, key)).limit(1);
+  return rows[0];
+}
+
+export async function createAddonCategory(data: typeof addonCategories.$inferInsert) {
+  const db = requireDb(await getDb());
+  const result = await db.insert(addonCategories).values(data);
+  return Number(result[0].insertId);
+}
+
+export async function updateAddonCategory(id: number, data: Partial<typeof addonCategories.$inferInsert>) {
+  const db = requireDb(await getDb());
+  await db.update(addonCategories).set(data).where(eq(addonCategories.id, id));
+}
+
+export async function countAddonsInCategory(categoryId: number): Promise<number> {
+  const db = requireDb(await getDb());
+  const rows = await db.select({ count: sql<number>`count(*)` }).from(addons).where(eq(addons.categoryId, categoryId));
+  return Number(rows[0]?.count ?? 0);
+}
+
+export async function deleteAddonCategory(id: number) {
+  const db = requireDb(await getDb());
+  await db.delete(addonCategories).where(eq(addonCategories.id, id));
+}
+
+export async function createAddon(data: typeof addons.$inferInsert) {
+  const db = requireDb(await getDb());
+  const result = await db.insert(addons).values(data);
+  return Number(result[0].insertId);
+}
+
+export async function updateAddon(id: number, data: Partial<typeof addons.$inferInsert>) {
+  const db = requireDb(await getDb());
+  await db.update(addons).set(data).where(eq(addons.id, id));
+}
+
+export async function countAddonReferences(addonId: number): Promise<number> {
+  const db = requireDb(await getDb());
+  const rows = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(bookingAddons)
+    .where(eq(bookingAddons.addonId, addonId));
+  return Number(rows[0]?.count ?? 0);
+}
+
+export async function deleteAddon(id: number) {
+  const db = requireDb(await getDb());
+  await db.delete(addons).where(eq(addons.id, id));
+}
+
+export async function listBookingAddons(bookingId: number) {
+  const db = requireDb(await getDb());
+  return db
+    .select()
+    .from(bookingAddons)
+    .where(eq(bookingAddons.bookingId, bookingId))
+    .orderBy(asc(bookingAddons.sortOrder), asc(bookingAddons.id));
+}
+
+export async function replaceBookingAddons(
+  bookingId: number,
+  rows: Omit<typeof bookingAddons.$inferInsert, "bookingId">[]
+) {
+  const db = requireDb(await getDb());
+  await db.transaction(async tx => {
+    await tx.delete(bookingAddons).where(eq(bookingAddons.bookingId, bookingId));
+    if (rows.length > 0) {
+      await tx.insert(bookingAddons).values(rows.map(row => ({ ...row, bookingId })));
+    }
+  });
 }
 
 /**
@@ -782,13 +991,13 @@ export async function listInvoices() {
 
 export async function createInvoice(data: typeof invoices.$inferInsert) {
   const db = requireDb(await getDb());
-  const result = await db.insert(invoices).values(data);
+  const result = await db.insert(invoices).values(normalizeInvoiceMoney(data) as InvoiceInsert);
   return Number(result[0].insertId);
 }
 
 export async function updateInvoice(id: number, data: Partial<typeof invoices.$inferInsert>) {
   const db = requireDb(await getDb());
-  await db.update(invoices).set(data).where(eq(invoices.id, id));
+  await db.update(invoices).set(normalizeInvoiceMoney(data)).where(eq(invoices.id, id));
 }
 
 /**
@@ -934,7 +1143,7 @@ export async function getBalanceInvoiceForBooking(bookingId: number) {
 // ---------- Payments ----------
 export async function createPayment(data: typeof payments.$inferInsert) {
   const db = requireDb(await getDb());
-  const result = await db.insert(payments).values(data);
+  const result = await db.insert(payments).values(normalizePaymentMoney(data) as PaymentInsert);
   return Number(result[0].insertId);
 }
 
@@ -945,7 +1154,7 @@ export async function listPayments() {
 
 export async function updatePayment(id: number, data: Partial<typeof payments.$inferInsert>) {
   const db = requireDb(await getDb());
-  await db.update(payments).set(data).where(eq(payments.id, id));
+  await db.update(payments).set(normalizePaymentMoney(data)).where(eq(payments.id, id));
 }
 
 // ---------- Reviews ----------

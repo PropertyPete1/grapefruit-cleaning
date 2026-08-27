@@ -498,3 +498,39 @@ was saved, `/api/brain/ping` still answered 503, and an env-only checkpoint left
 `startedAt` unchanged at 18:33:53Z. A genuine redeploy requires a committable
 file change. If a future round changes only environment values, touch a file (a
 notes entry like this one counts) or the deploy is a no-op.
+
+## Dynamic bilingual add-on catalog — Aug 27, 2026
+
+The public add-on system is now a database catalog, not a compile-time nine-ID
+list. Migrations 0026 and 0027 are additive: nullable integer-cent columns on
+bookings/invoices/payments, plus `addon_categories`, `addons` and immutable
+`booking_addons` snapshots. The exact legacy nine were seeded under a hidden
+heading with unchanged names/order/prices; steam, pet-odor and balcony options
+were seeded with complete EN/ES descriptions and notes. The setting
+`addon_catalog_v2` is the rollback switch. When false, runtime code deliberately
+does not query catalog tables and customer/admin money follows the old whole-
+dollar rules. New bookings dual-write legacy IDs and snapshot rows while the
+compatibility window remains open.
+
+All new money is computed in integer cents; legacy INT dollar columns remain
+dual-written as rounded compatibility fields. Version-1 invoice line-item JSON
+is parsed unchanged forever. Version-2 rows carry immutable bilingual names,
+exact `amountCents`, stable catalog key, pricing mode and source. Resends,
+reminders, Stripe Checkout and receipts always reuse that snapshot. Add-ons
+already selected at booking appear read-only in approval and are excluded from
+approval-time selection, preventing double charge. `starting_at` and
+`custom_quote` starting prices are deposit-eligible; any later amount requires
+the existing admin approval/send action and is never auto-charged.
+
+The Admin Services catalog manager owns category/option EN/ES copy, ordering,
+enable/archive, fixed/starting/custom modes, may-vary notes and the rollout
+switch. Referenced options are soft-archived; hard delete is permitted only for
+an unused draft. Public Pricing, Quote, Booking and Pay Deposit share one
+catalog read model. Rollback was proved by toggling the setting false (legacy
+payload, no catalog reads) and true (4 categories / 20 options). Migration
+parity proved 3 existing bookings, 2 invoices and 3 payments unchanged; all
+existing rows had no selected add-ons or itemized invoice snapshots.
+
+Final pre-deploy verification: 1,214 tests passed, 1 SMTP test skipped; TypeScript
+and production build clean; desktop 1280 and mobile 390 screenshots verified EN,
+ES, admin catalog and invoices with no horizontal page overflow.

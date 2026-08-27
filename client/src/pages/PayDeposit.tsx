@@ -21,6 +21,7 @@ import { Check, Clock, Home, Loader2, MapPin, ShieldCheck, Sparkles } from "luci
 import { toast } from "sonner";
 import {
   applyCouponToTotal,
+  calculateCatalogQuote,
   calculateQuote,
   CLEANING_TYPES,
   depositFor,
@@ -28,11 +29,13 @@ import {
   type CleaningType,
   type ExtraId,
 } from "@shared/pricing";
+import { centsToDollars, depositCents, dollarsToCents } from "@shared/money";
 import { todayInBookingZone } from "@shared/leadTime";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { en } from "@/i18n/translations/en";
 import { es } from "@/i18n/translations/es";
+import { AddonCatalogPicker, CatalogAddonsSummary, selectedCatalogAddons } from "@/components/AddonCatalogPicker";
 
 const COPY = {
   en: {
@@ -168,7 +171,7 @@ const COPY_NOTICE_FALLBACK = {
   es: { title: "No encontramos este enlace de reserva", body: COPY.es.loadFailed },
 } as const;
 
-const money = (n: number) => `$${n.toFixed(0)}`;
+const money = (n: number) => `$${Number.isInteger(n) ? n.toFixed(0) : n.toFixed(2)}`;
 
 /** A short branded shell, matching the transactional emails and notices. */
 function Shell({ children }: { children: React.ReactNode }) {
@@ -218,7 +221,7 @@ export default function PayDeposit() {
   const utils = trpc.useUtils();
   const link = trpc.depositLink.get.useQuery({ token }, { enabled: token.length > 0, retry: false });
 
-  const [extras, setExtras] = useState<ExtraId[] | null>(null);
+  const [extras, setExtras] = useState<string[] | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [slotDate, setSlotDate] = useState("");
   const [changingSlot, setChangingSlot] = useState(false);
@@ -282,7 +285,8 @@ export default function PayDeposit() {
   const c = COPY[locale];
   const t = locale === "es" ? es : en;
 
-  const chosen = extras ?? ((booking?.selectedExtras ?? []) as ExtraId[]);
+  const chosen = extras ?? (booking?.selectedExtras ?? []);
+  const catalog = booking?.addonCatalog;
   const kind = kindChoice ?? booking?.propertyType ?? "house";
   const noteText = note ?? booking?.customerNote ?? "";
 
@@ -299,13 +303,39 @@ export default function PayDeposit() {
 
   const preview = useMemo(() => {
     if (!booking || booking.quote.type == null || booking.quote.sqft == null) return null;
+    if (catalog?.enabled) {
+      const subtotalCents = selectedCatalogAddons(catalog, chosen).reduce(
+        (sum, addon) => sum + addon.startingPriceCents,
+        0
+      );
+      const quote = calculateCatalogQuote(
+        {
+          type: booking.quote.type as CleaningType,
+          bedrooms: booking.quote.bedrooms,
+          bathrooms: booking.quote.bathrooms,
+          sqft: booking.quote.sqft,
+          frequency: booking.quote.frequency as never,
+        },
+        subtotalCents,
+        booking.pricing
+      );
+      let totalCents = quote.totalCents;
+      if (booking.coupon?.percentOff) totalCents -= Math.round((totalCents * booking.coupon.percentOff) / 100);
+      else if (booking.coupon?.amountOff) totalCents = Math.max(100, totalCents - dollarsToCents(booking.coupon.amountOff));
+      return {
+        base: quote.base,
+        extrasTotal: quote.extrasTotal,
+        total: centsToDollars(totalCents),
+        deposit: centsToDollars(depositCents(totalCents, booking.pricing.depositRate)),
+      };
+    }
     const quote = calculateQuote(
       {
         type: booking.quote.type as CleaningType,
         bedrooms: booking.quote.bedrooms,
         bathrooms: booking.quote.bathrooms,
         sqft: booking.quote.sqft,
-        extras: chosen,
+        extras: chosen as ExtraId[],
         frequency: booking.quote.frequency as never,
       },
       booking.pricing
@@ -317,7 +347,7 @@ export default function PayDeposit() {
       total: withCoupon.total,
       deposit: depositFor(withCoupon.total, booking.pricing.depositRate),
     };
-  }, [booking, chosen]);
+  }, [booking, chosen, catalog]);
 
   if (!token) return <Notice title="Missing link" body="This address is incomplete." />;
 
@@ -686,38 +716,51 @@ export default function PayDeposit() {
         <div className="mt-6">
           <h2 className="font-display text-lg font-bold text-[#3d3733]">{c.extrasTitle}</h2>
           <p className="mt-1 text-xs text-[#7a716b]">{c.extrasLede}</p>
-          <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            {EXTRA_IDS.map(id => {
-              const active = chosen.includes(id);
-              const price = booking.pricing.extras[id] ?? 0;
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  aria-pressed={active}
-                  onClick={() =>
-                    setExtras(prev => {
-                      const current = prev ?? chosen;
-                      return current.includes(id) ? current.filter(e => e !== id) : [...current, id];
-                    })
-                  }
-                  className={`flex items-center gap-3 rounded-xl border-2 p-3 text-left transition-all duration-150 active:scale-[0.97] ${
-                    active ? "border-[#F26D5B] bg-[#FFF3F0]" : "border-[#F0E6DE] bg-white hover:border-[#F26D5B]/40"
-                  }`}
-                >
-                  <span
-                    className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 ${
-                      active ? "border-[#F26D5B] bg-[#F26D5B] text-white" : "border-[#E3D8CE]"
+          {catalog?.enabled ? (
+            <AddonCatalogPicker
+              catalog={catalog}
+              locale={locale}
+              selectedKeys={chosen}
+              onToggle={id => setExtras(currentState => {
+                const current = currentState ?? chosen;
+                return current.includes(id) ? current.filter(key => key !== id) : [...current, id];
+              })}
+              className="mt-3"
+            />
+          ) : (
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {EXTRA_IDS.map(id => {
+                const active = chosen.includes(id);
+                const price = booking.pricing.extras[id] ?? 0;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() =>
+                      setExtras(prev => {
+                        const current = prev ?? chosen;
+                        return current.includes(id) ? current.filter(e => e !== id) : [...current, id];
+                      })
+                    }
+                    className={`flex items-center gap-3 rounded-xl border-2 p-3 text-left transition-all duration-150 active:scale-[0.97] ${
+                      active ? "border-[#F26D5B] bg-[#FFF3F0]" : "border-[#F0E6DE] bg-white hover:border-[#F26D5B]/40"
                     }`}
                   >
-                    {active && <Check className="h-3 w-3" />}
-                  </span>
-                  <span className="flex-1 text-sm font-semibold text-[#3d3733]">{t.extras[id]}</span>
-                  <span className="text-sm font-semibold text-[#7a716b]">+{money(price)}</span>
-                </button>
-              );
-            })}
-          </div>
+                    <span
+                      className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 ${
+                        active ? "border-[#F26D5B] bg-[#F26D5B] text-white" : "border-[#E3D8CE]"
+                      }`}
+                    >
+                      {active && <Check className="h-3 w-3" />}
+                    </span>
+                    <span className="flex-1 text-sm font-semibold text-[#3d3733]">{t.extras[id]}</span>
+                    <span className="text-sm font-semibold text-[#7a716b]">+{money(price)}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Access notes — appended to the owner's own notes, never over them. */}
@@ -736,6 +779,11 @@ export default function PayDeposit() {
         {/* Live totals — appear the moment the price is computable. */}
         {preview ? (
           <div className="mt-6 rounded-xl bg-[#FDF8F3] p-5 text-sm">
+            {catalog?.enabled && chosen.length > 0 && (
+              <div className="mb-4 rounded-xl bg-white p-3">
+                <CatalogAddonsSummary catalog={catalog} locale={locale} selectedKeys={chosen} />
+              </div>
+            )}
             <div className="flex justify-between text-[#7a716b]">
               <span>{c.basePrice}</span>
               <span>{money(preview.base)}</span>

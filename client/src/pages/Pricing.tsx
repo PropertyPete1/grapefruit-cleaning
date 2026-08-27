@@ -16,6 +16,8 @@ import {
   type TieredType,
 } from "@shared/pricing";
 import { cn } from "@/lib/utils";
+import { trpc } from "@/lib/trpc";
+import { AddonCatalogDisplay } from "@/components/AddonCatalogPicker";
 
 const TIER_SERVICES: { id: CleaningType & TieredType; planKey: "residential" | "deep" | "moveinout" }[] = [
   { id: "residential", planKey: "residential" },
@@ -32,6 +34,8 @@ export default function Pricing() {
   useReveal([locale]);
   const [frequency, setFrequency] = useState<Frequency>("biweekly");
   const pricing = usePricing();
+  const catalogQuery = trpc.booking.addonCatalog.useQuery();
+  const catalog = catalogQuery.data;
 
   const freqTabs: { id: Frequency; label: string; discount: string | null }[] = [
     { id: "onetime", label: t.pricing.onetime, discount: null },
@@ -223,18 +227,24 @@ export default function Pricing() {
               {t.pricing.extrasSubtitle}
             </p>
           </div>
-          <div className="mx-auto mt-10 grid max-w-4xl grid-cols-2 gap-4 sm:grid-cols-3">
-            {EXTRA_IDS.map((id, i) => (
-              <div
-                key={id}
-                className="reveal hover-lift rounded-2xl border border-border bg-background p-5 text-center shadow-soft"
-                style={{ transitionDelay: `${(i % 3) * 60}ms` }}
-              >
-                <p className="text-sm font-semibold text-foreground">{t.extras[id]}</p>
-                <p className="mt-1 text-sm font-bold text-primary">+${pricing.extras[id]}</p>
-              </div>
-            ))}
-          </div>
+          {catalog?.enabled ? (
+            <div className="mx-auto mt-10 max-w-6xl">
+              <AddonCatalogDisplay catalog={catalog} locale={locale} />
+            </div>
+          ) : (
+            <div className="mx-auto mt-10 grid max-w-4xl grid-cols-2 gap-4 sm:grid-cols-3">
+              {EXTRA_IDS.map((id, i) => (
+                <div
+                  key={id}
+                  className="reveal hover-lift rounded-2xl border border-border bg-background p-5 text-center shadow-soft"
+                  style={{ transitionDelay: `${(i % 3) * 60}ms` }}
+                >
+                  <p className="text-sm font-semibold text-foreground">{t.extras[id]}</p>
+                  <p className="mt-1 text-sm font-bold text-primary">+${pricing.extras[id]}</p>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="reveal mt-12 text-center">
             <Button asChild size="lg" className="press rounded-full px-8 shadow-soft-lg">
               <Link href={path("quote")}>

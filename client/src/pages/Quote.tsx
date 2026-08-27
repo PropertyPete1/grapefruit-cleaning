@@ -35,11 +35,13 @@ import { useSeo } from "@/hooks/useSeo";
 import { AnimatedPrice } from "@/components/AnimatedPrice";
 import { trpc } from "@/lib/trpc";
 import {
+  calculateCatalogQuote,
   calculateQuote,
   type CleaningType,
   type ExtraId,
   type Frequency,
 } from "@shared/pricing";
+import { AddonCatalogPicker, CatalogAddonsSummary, selectedCatalogAddons } from "@/components/AddonCatalogPicker";
 import { plausibleVerifiedSqft } from "@shared/property";
 import { usePricing } from "@/hooks/usePricing";
 import { formatPrice } from "@/lib/formatPrice";
@@ -105,7 +107,7 @@ export default function Quote() {
    * reshapes the tiers.
    */
   const [enteredSqft, setEnteredSqft] = useState<number | null>(null);
-  const [extras, setExtras] = useState<ExtraId[]>([]);
+  const [extras, setExtras] = useState<string[]>([]);
   const [frequency, setFrequency] = useState<Frequency>("onetime");
   // Optional address — verifies sqft against public county records and locks the slider to it.
   const [address, setAddress] = useState("");
@@ -144,12 +146,20 @@ export default function Quote() {
   }, [verifiedSqft]);
 
   const pricing = usePricing();
+  const catalogQuery = trpc.booking.addonCatalog.useQuery();
+  const catalog = catalogQuery.data;
   const sqft = enteredSqft ?? entrySqft(type, pricing);
   const setSqft = setEnteredSqft;
-  const breakdown = useMemo(
-    () => calculateQuote({ type, bedrooms, bathrooms, sqft, extras, frequency }, pricing),
-    [type, bedrooms, bathrooms, sqft, extras, frequency, pricing]
-  );
+  const breakdown = useMemo(() => {
+    if (catalog?.enabled) {
+      const subtotalCents = selectedCatalogAddons(catalog, extras).reduce(
+        (sum, addon) => sum + addon.startingPriceCents,
+        0
+      );
+      return calculateCatalogQuote({ type, bedrooms, bathrooms, sqft, frequency }, subtotalCents, pricing);
+    }
+    return calculateQuote({ type, bedrooms, bathrooms, sqft, extras: extras as ExtraId[], frequency }, pricing);
+  }, [type, bedrooms, bathrooms, sqft, extras, frequency, pricing, catalog]);
 
   const stepTitles = [t.quote.steps.type, t.quote.steps.details, t.quote.steps.extras, t.quote.steps.frequency, t.quote.steps.result];
   const totalSteps = stepTitles.length;
@@ -159,7 +169,7 @@ export default function Quote() {
     setStep(Math.max(0, Math.min(totalSteps - 1, next)));
   };
 
-  const toggleExtra = (id: ExtraId) =>
+  const toggleExtra = (id: string) =>
     setExtras(prev => (prev.includes(id) ? prev.filter(e => e !== id) : [...prev, id]));
 
   const serviceEntries: { id: CleaningType; name: string; short: string }[] = [
@@ -467,38 +477,48 @@ export default function Quote() {
                 >
                   <h2 className="font-display text-2xl font-bold text-foreground">{t.quote.extrasTitle}</h2>
                   <p className="mt-2 text-sm text-muted-foreground">{t.quote.extrasSubtitle}</p>
-                  <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                    {EXTRA_IDS.map(id => {
-                      const Icon = EXTRA_ICONS[id];
-                      const active = extras.includes(id);
-                      return (
-                        <button
-                          key={id}
-                          type="button"
-                          onClick={() => toggleExtra(id)}
-                          className={`relative flex flex-col items-start gap-3 rounded-2xl border-2 p-4 text-left transition-all duration-200 active:scale-[0.97] ${
-                            active
-                              ? "border-primary bg-primary/5 shadow-md shadow-primary/10"
-                              : "border-border bg-card hover:border-primary/40"
-                          }`}
-                        >
-                          {active && (
-                            <span className="absolute right-3 top-3 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
-                              <Check className="h-3 w-3" />
-                            </span>
-                          )}
-                          <span
-                            className={`flex h-10 w-10 items-center justify-center rounded-xl transition-colors ${
-                              active ? "bg-primary text-primary-foreground" : "bg-secondary/10 text-secondary"
+                  {catalog?.enabled ? (
+                    <AddonCatalogPicker
+                      catalog={catalog}
+                      locale={locale}
+                      selectedKeys={extras}
+                      onToggle={toggleExtra}
+                      className="mt-6"
+                    />
+                  ) : (
+                    <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                      {EXTRA_IDS.map(id => {
+                        const Icon = EXTRA_ICONS[id];
+                        const active = extras.includes(id);
+                        return (
+                          <button
+                            key={id}
+                            type="button"
+                            onClick={() => toggleExtra(id)}
+                            className={`relative flex flex-col items-start gap-3 rounded-2xl border-2 p-4 text-left transition-all duration-200 active:scale-[0.97] ${
+                              active
+                                ? "border-primary bg-primary/5 shadow-md shadow-primary/10"
+                                : "border-border bg-card hover:border-primary/40"
                             }`}
                           >
-                            <Icon className="h-5 w-5" />
-                          </span>
-                          <span className="text-sm font-semibold text-foreground">{t.extras[id]}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
+                            {active && (
+                              <span className="absolute right-3 top-3 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                                <Check className="h-3 w-3" />
+                              </span>
+                            )}
+                            <span
+                              className={`flex h-10 w-10 items-center justify-center rounded-xl transition-colors ${
+                                active ? "bg-primary text-primary-foreground" : "bg-secondary/10 text-secondary"
+                              }`}
+                            >
+                              <Icon className="h-5 w-5" />
+                            </span>
+                            <span className="text-sm font-semibold text-foreground">{t.extras[id]}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </motion.div>
               )}
 
@@ -586,6 +606,11 @@ export default function Quote() {
                       </>
                     )}
                   </div>
+                  {catalog?.enabled && extras.length > 0 && (
+                    <div className="mx-auto mt-5 max-w-sm rounded-2xl border bg-card p-4 text-left">
+                      <CatalogAddonsSummary catalog={catalog} locale={locale} selectedKeys={extras} />
+                    </div>
+                  )}
                   <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
                     {breakdown.customQuote ? (
                       <Button

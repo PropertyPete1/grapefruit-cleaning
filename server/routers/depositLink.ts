@@ -27,7 +27,8 @@ import { z } from "zod";
 import { durationHoursFor } from "@shared/duration";
 import { fitsBeforeClose, isSlotBookable, overlapsAny } from "@shared/availability";
 import { ADMIN_HOLD_SETTING_KEY, adminHoldMinutes } from "@shared/holdWindow";
-import { CLEANING_TYPES, depositFor, EXTRA_IDS } from "@shared/pricing";
+import { calculateCatalogQuote, CLEANING_TYPES, depositFor, EXTRA_IDS, type ExtraId } from "@shared/pricing";
+import { centsToDollars, depositCents, dollarsToCents, legacyWholeDollars } from "@shared/money";
 import * as db from "../db";
 import { applyCoupon, computeBasePrice, resolveEffectiveSqft, usableCoupon } from "../adminBooking";
 import { assertRateLimit, clientIp } from "../antiSpam";
@@ -45,8 +46,9 @@ import { publicOrigin } from "../publicOrigin";
 import { getStripe } from "../stripe";
 import { publicProcedure, router } from "../_core/trpc";
 import { finalizeBooking, loadPricingConfig, loadSchedulingRules, occupiedIntervals, SERVICE_NAMES } from "./booking";
+import { bookingAddonSnapshots, loadAddonCatalog, resolveSelectedAddons } from "../addonCatalog";
 
-const extrasInput = z.array(z.enum(EXTRA_IDS)).max(EXTRA_IDS.length);
+const extrasInput = z.array(z.string().min(1).max(100)).max(50);
 
 /** Bilingual copy for the states the page can be in besides working the steps. */
 const NOTICES = {
@@ -136,8 +138,56 @@ async function priceWithExtras(
   extras: readonly string[]
 ) {
   const pricing = await loadPricingConfig();
+  const catalog = await loadAddonCatalog(false);
   if (booking.serviceType == null || booking.sqft == null) {
-    return { pricing, breakdown: null, total: null, discountApplied: 0, deposit: null };
+    return {
+      pricing,
+      catalog,
+      selectedCatalog: null,
+      breakdown: null,
+      total: null,
+      totalCents: null,
+      discountApplied: 0,
+      discountAppliedCents: 0,
+      deposit: null,
+      depositCents: null,
+    };
+  }
+  if (catalog.enabled) {
+    const selectedCatalog = await resolveSelectedAddons(extras);
+    const breakdown = calculateCatalogQuote(
+      {
+        type: booking.serviceType as never,
+        frequency: booking.frequency as never,
+        bedrooms: booking.bedrooms,
+        bathrooms: booking.bathrooms,
+        sqft: booking.sqft,
+      },
+      selectedCatalog.subtotalCents,
+      pricing
+    );
+    const coupon = await usableCoupon(booking.couponCode);
+    let discountAppliedCents = 0;
+    if (coupon?.percentOff) discountAppliedCents = Math.round((breakdown.totalCents * coupon.percentOff) / 100);
+    else if (coupon?.amountOff) discountAppliedCents = Math.min(coupon.amountOff * 100, breakdown.totalCents - 100);
+    const totalCents = Math.max(100, breakdown.totalCents - discountAppliedCents);
+    const exactDepositCents = depositCents(totalCents, pricing.depositRate);
+    return {
+      pricing,
+      catalog,
+      selectedCatalog,
+      breakdown,
+      total: centsToDollars(totalCents),
+      totalCents,
+      discountApplied: legacyWholeDollars(discountAppliedCents),
+      discountAppliedCents,
+      deposit: centsToDollars(exactDepositCents),
+      depositCents: exactDepositCents,
+    };
+  }
+  const allowed = new Set<string>(EXTRA_IDS);
+  if (extras.some(key => !allowed.has(key))) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "One or more selected add-ons are not available." });
   }
   const breakdown = computeBasePrice(
     {
@@ -148,28 +198,45 @@ async function priceWithExtras(
     },
     booking.sqft,
     pricing,
-    extras as never
+    extras as ExtraId[]
   );
   const coupon = await applyCoupon(breakdown.total, booking.couponCode);
+  const totalCents = dollarsToCents(coupon.total);
+  const legacyDeposit = depositFor(coupon.total, pricing.depositRate);
   return {
     pricing,
+    catalog,
+    selectedCatalog: null,
     breakdown,
     total: coupon.total,
+    totalCents,
     discountApplied: coupon.discountApplied,
-    deposit: depositFor(coupon.total, pricing.depositRate),
+    discountAppliedCents: dollarsToCents(coupon.discountApplied),
+    deposit: legacyDeposit,
+    depositCents: dollarsToCents(legacyDeposit),
   };
 }
 
 /** Persists freshly computed totals so the row never shows stale money. */
 async function storeTotals(
   bookingId: number,
-  money: { total: number | null; deposit: number | null; discountApplied: number }
+  money: {
+    total: number | null;
+    totalCents: number | null;
+    deposit: number | null;
+    depositCents: number | null;
+    discountApplied: number;
+    discountAppliedCents: number;
+  }
 ) {
-  if (money.total == null || money.deposit == null) return;
+  if (money.total == null || money.totalCents == null || money.deposit == null || money.depositCents == null) return;
   await db.updateBooking(bookingId, {
     totalAmount: money.total,
+    totalAmountCents: money.totalCents,
     depositAmount: money.deposit,
+    depositAmountCents: money.depositCents,
     discountApplied: money.discountApplied,
+    discountAppliedCents: money.discountAppliedCents,
   });
 }
 
@@ -251,6 +318,7 @@ export const depositLinkRouter = router({
            * figure is the one that gets charged.
            */
           pricing: money.pricing,
+          addonCatalog: money.catalog,
           quote: {
             type: booking.serviceType,
             bedrooms: booking.bedrooms,
@@ -560,14 +628,26 @@ export const depositLinkRouter = router({
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Pricing failed" });
       }
 
-      await db.updateBooking(booking.id, {
+      const bookingPatch = {
         extras: JSON.stringify(input.extras),
         totalAmount: money.total,
+        totalAmountCents: money.totalCents,
         depositAmount: money.deposit,
+        depositAmountCents: money.depositCents,
         discountApplied: money.discountApplied,
+        discountAppliedCents: money.discountAppliedCents,
         estimatedHours,
         ...(input.notes !== undefined ? { notes: mergeCustomerNotes(booking.notes, input.notes) } : {}),
-      });
+      };
+      if (money.selectedCatalog) {
+        await db.updateBookingWithAddons(
+          booking.id,
+          bookingPatch,
+          bookingAddonSnapshots(money.selectedCatalog.addons, money.selectedCatalog.catalog)
+        );
+      } else {
+        await db.updateBooking(booking.id, bookingPatch);
+      }
 
       const stripe = getStripe();
       const origin = publicOrigin(ctx.req);
@@ -587,7 +667,7 @@ export const depositLinkRouter = router({
           {
             price_data: {
               currency: "usd",
-              unit_amount: money.deposit * 100,
+              unit_amount: money.depositCents,
               product_data: {
                 name:
                   locale === "es"
@@ -595,8 +675,8 @@ export const depositLinkRouter = router({
                     : `Booking deposit — ${serviceName}`,
                 description:
                   locale === "es"
-                    ? `Reserva ${booking.reference} · ${booking.scheduledDate} a las ${booking.scheduledTime} · Total estimado $${money.total}`
-                    : `Booking ${booking.reference} · ${booking.scheduledDate} at ${booking.scheduledTime} · Estimated total $${money.total}`,
+                    ? `Reserva ${booking.reference} · ${booking.scheduledDate} a las ${booking.scheduledTime} · Total estimado $${money.total.toFixed(2)}`
+                    : `Booking ${booking.reference} · ${booking.scheduledDate} at ${booking.scheduledTime} · Estimated total $${money.total.toFixed(2)}`,
               },
             },
             quantity: 1,
@@ -673,14 +753,26 @@ export const depositLinkRouter = router({
         );
       }
 
-      await db.updateBooking(booking.id, {
+      const bookingPatch = {
         extras: JSON.stringify(input.extras),
         totalAmount: money.total,
+        totalAmountCents: money.totalCents,
         depositAmount: 0,
+        depositAmountCents: 0,
         discountApplied: money.discountApplied,
+        discountAppliedCents: money.discountAppliedCents,
         estimatedHours,
         ...(input.notes !== undefined ? { notes: mergeCustomerNotes(booking.notes, input.notes) } : {}),
-      });
+      };
+      if (money.selectedCatalog) {
+        await db.updateBookingWithAddons(
+          booking.id,
+          bookingPatch,
+          bookingAddonSnapshots(money.selectedCatalog.addons, money.selectedCatalog.catalog)
+        );
+      } else {
+        await db.updateBooking(booking.id, bookingPatch);
+      }
 
       // The same finalization a paid deposit goes through — the conditional
       // claim inside makes a double-tapped CONFIRM button confirm exactly

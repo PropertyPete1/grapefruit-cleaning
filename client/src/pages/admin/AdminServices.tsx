@@ -28,6 +28,7 @@ import {
   type DurationTier,
 } from "@shared/duration";
 import { PageHeader, SERVICE_LABELS, TableOrCards } from "./adminShared";
+import { AddonCatalogManager } from "./AddonCatalogManager";
 
 const EXTRA_LABELS: Record<ExtraId, string> = {
   pets: "Home with pets",
@@ -914,6 +915,7 @@ export default function AdminServices() {
       </div>
 
       <JobDurationsSection />
+      <AddonCatalogManager />
     </div>
   );
 }

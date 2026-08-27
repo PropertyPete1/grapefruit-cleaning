@@ -10,6 +10,7 @@ import type { Booking, Customer } from "../drizzle/schema";
 import * as db from "./db";
 import { buildReminderEmail, deliverEmail, type BookingEmailData } from "./emails";
 import { EXTRA_NAMES, FREQUENCY_NAMES, SERVICE_NAMES } from "./routers/booking";
+import { centsToDollars, dollarsToCents } from "@shared/money";
 
 /** Days between two YYYY-MM-DD dates (b - a), using UTC to avoid TZ drift. */
 export function daysBetween(a: string, b: string): number {
@@ -47,9 +48,10 @@ export function dueReminderKind(
   return null;
 }
 
-function toEmailData(booking: Booking, customer: Customer, bizPhone?: string): BookingEmailData {
+async function toEmailData(booking: Booking, customer: Customer, bizPhone?: string): Promise<BookingEmailData> {
   const locale = booking.locale as "en" | "es";
   const extras: string[] = JSON.parse(booking.extras ?? "[]");
+  const addonSnapshots = await db.listBookingAddonsByBooking(booking.id);
   // Reminders scan confirmed jobs, which paid their way past the completeness
   // gate — the fallbacks are for the type system.
   return {
@@ -58,9 +60,11 @@ function toEmailData(booking: Booking, customer: Customer, bizPhone?: string): B
     date: booking.scheduledDate ?? "",
     time: booking.scheduledTime ?? "",
     frequencyLabel: FREQUENCY_NAMES[booking.frequency][locale],
-    extras: extras.map(e => EXTRA_NAMES[e]?.[locale] ?? e),
-    total: booking.totalAmount,
-    deposit: booking.depositAmount,
+    extras: addonSnapshots.length > 0
+      ? addonSnapshots.map(item => locale === "es" ? item.nameEs : item.nameEn)
+      : extras.map(e => EXTRA_NAMES[e]?.[locale] ?? e),
+    total: centsToDollars(booking.totalAmountCents ?? dollarsToCents(booking.totalAmount)),
+    deposit: centsToDollars(booking.depositAmountCents ?? dollarsToCents(booking.depositAmount)),
     customerName: customer.firstName,
     customerEmail: customer.email ?? "",
     customerPhone: customer.phone ?? undefined,
@@ -99,7 +103,7 @@ export async function sendDueReminders(
     }
     const customer = await db.getCustomerById(booking.customerId);
     if (!customer) continue;
-    const email = buildReminderEmail(toEmailData(booking, customer, bizPhone), kind);
+    const email = buildReminderEmail(await toEmailData(booking, customer, bizPhone), kind);
     const delivered = await deliverEmail(customer.email, email.subject, email.body, undefined, {
       emailType: `booking_reminder_${kind}`,
       bookingId: booking.id,

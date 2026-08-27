@@ -20,8 +20,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { EXTRA_IDS, type ExtraId } from "@shared/pricing";
-import { parseLineItems } from "@shared/invoiceItems";
+import type { AddonCatalogPayload } from "@shared/addonCatalog";
+import { lineItemAmountCents, lineItemName, parseLineItems } from "@shared/invoiceItems";
+import { centsToDollars } from "@shared/money";
 import { usePricing } from "@/hooks/usePricing";
 import { en } from "@/i18n/translations/en";
 import {
@@ -57,6 +58,7 @@ type PendingInvoice = {
   depositCredited: number;
   customerName: string | null;
   customerEmail: string | null;
+  bookedAddons: { key: string; nameEn: string; nameEs: string; amountCents: number; priceMode: string }[];
 };
 
 /**
@@ -69,19 +71,21 @@ function ReviewAndSendDialog({
   onClose,
   onApprove,
   pending,
+  catalog,
 }: {
   invoice: PendingInvoice | null;
   onClose: () => void;
   onApprove: (
     invoiceId: number,
     adjustedAmount: number | undefined,
-    addonIds: ExtraId[],
+    addonIds: string[],
     customItems: { name: string; amount: number }[]
   ) => void;
   pending: boolean;
+  catalog?: AddonCatalogPayload;
 }) {
   const [amount, setAmount] = useState("");
-  const [checkedAddons, setCheckedAddons] = useState<ExtraId[]>([]);
+  const [checkedAddons, setCheckedAddons] = useState<string[]>([]);
   const [customs, setCustoms] = useState<CustomItemRow[]>([]);
   const pricing = usePricing();
   const computed = invoice?.computedAmount ?? invoice?.amount ?? 0;
@@ -92,7 +96,7 @@ function ReviewAndSendDialog({
   // The same arithmetic the server runs: base + each checked add-on at its
   // live catalog price + each named custom line. Previewed here, recomputed
   // there — the ids travel, never the dollars.
-  const extrasTotal = addonsTotal(pricing.extras, checkedAddons);
+  const extrasTotal = addonsTotal(pricing.extras, checkedAddons, catalog);
   const customsParsed = parseCustomItems(customs);
   const customsValid = customItemsValid(customsParsed);
   const customsTotal = customsValid ? customsParsed.reduce((sum, row) => sum + row.amount, 0) : 0;
@@ -148,6 +152,21 @@ function ReviewAndSendDialog({
                 ran bigger or smaller than the booking. */}
             {invoice.bookingNotes && <NotesBlock notes={invoice.bookingNotes} />}
 
+            {invoice.bookedAddons.length > 0 && (
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-950">
+                <p className="font-semibold">Already included in the booking total</p>
+                <p className="mt-0.5 text-emerald-800">These are shown for review and cannot be selected again below.</p>
+                <ul className="mt-2 space-y-1">
+                  {invoice.bookedAddons.map(item => (
+                    <li key={item.key} className="flex justify-between gap-3">
+                      <span>{item.nameEn}</span>
+                      <span className="font-medium">{fmtMoney(centsToDollars(item.amountCents))}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             <div>
               <Label htmlFor="approve-amount">Final amount to charge (USD)</Label>
               <Input
@@ -170,6 +189,8 @@ function ReviewAndSendDialog({
 
             <InvoiceItemsEditor
               extras={pricing.extras}
+              catalog={catalog}
+              excludedAddonKeys={invoice.bookedAddons.map(item => item.key)}
               checkedAddons={checkedAddons}
               onToggleAddon={id =>
                 setCheckedAddons(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]))
@@ -180,6 +201,7 @@ function ReviewAndSendDialog({
 
             <InvoiceItemsSummary
               extras={pricing.extras}
+              catalog={catalog}
               base={baseValid ? Math.round(parsed) : 0}
               checkedAddons={checkedAddons}
               customs={customsParsed}
@@ -215,9 +237,10 @@ export default function AdminInvoices() {
   const utils = trpc.useUtils();
   const invoices = trpc.admin.invoices.useQuery();
   const customers = trpc.admin.customers.useQuery({});
+  const addonCatalog = trpc.booking.addonCatalog.useQuery();
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ customerId: "", amount: "", dueDate: "" });
-  const [newAddons, setNewAddons] = useState<ExtraId[]>([]);
+  const [newAddons, setNewAddons] = useState<string[]>([]);
   const [newCustoms, setNewCustoms] = useState<CustomItemRow[]>([]);
   const pricing = usePricing();
 
@@ -229,7 +252,7 @@ export default function AdminInvoices() {
   const newCustomsValid = customItemsValid(newCustomsParsed);
   const newTotal =
     (newBaseValid ? newBase : 0) +
-    addonsTotal(pricing.extras, newAddons) +
+    addonsTotal(pricing.extras, newAddons, addonCatalog.data) +
     (newCustomsValid ? newCustomsParsed.reduce((sum, row) => sum + row.amount, 0) : 0);
 
   const create = trpc.admin.createInvoice.useMutation({
@@ -354,6 +377,7 @@ export default function AdminInvoices() {
 
                 <InvoiceItemsEditor
                   extras={pricing.extras}
+                  catalog={addonCatalog.data}
                   checkedAddons={newAddons}
                   onToggleAddon={id =>
                     setNewAddons(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]))
@@ -366,6 +390,7 @@ export default function AdminInvoices() {
 
                 <InvoiceItemsSummary
                   extras={pricing.extras}
+                  catalog={addonCatalog.data}
                   base={newBaseValid ? newBase : 0}
                   checkedAddons={newAddons}
                   customs={newCustomsParsed}
@@ -452,6 +477,7 @@ export default function AdminInvoices() {
       <ReviewAndSendDialog
         invoice={reviewing}
         pending={approve.isPending}
+        catalog={addonCatalog.data}
         onClose={() => setReviewing(null)}
         onApprove={(invoiceId, adjustedAmount, addonIds, customItems) =>
           approve.mutate({
@@ -499,9 +525,9 @@ export default function AdminInvoices() {
                         return (
                           <span
                             className="mt-0.5 block max-w-56 truncate text-[11px] text-muted-foreground"
-                            title={items.map(i => `${i.name} — ${fmtMoney(i.amount)}`).join("\n")}
+                            title={items.map(i => `${lineItemName(i, "en")} — ${fmtMoney(centsToDollars(lineItemAmountCents(i)))}`).join("\n")}
                           >
-                            {items.map(i => `${i.name} ${fmtMoney(i.amount)}`).join(" · ")}
+                            {items.map(i => `${lineItemName(i, "en")} ${fmtMoney(centsToDollars(lineItemAmountCents(i)))}`).join(" · ")}
                           </span>
                         );
                       })()}

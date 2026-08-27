@@ -35,13 +35,14 @@ import { trpc } from "@/lib/trpc";
 import { todayInBookingZone } from "@shared/leadTime";
 import { plausibleVerifiedSqft } from "@shared/property";
 import {
+  calculateCatalogQuote,
   calculateQuote,
-  depositFor,
   EXTRA_IDS,
   type CleaningType,
   type ExtraId,
   type Frequency,
 } from "@shared/pricing";
+import { AddonCatalogPicker, CatalogAddonsSummary, selectedCatalogAddons } from "@/components/AddonCatalogPicker";
 import { usePricing } from "@/hooks/usePricing";
 import { formatPrice } from "@/lib/formatPrice";
 import { ENTRY_BATHROOMS, ENTRY_BEDROOMS, entrySqft } from "@/lib/quoteDefaults";
@@ -111,10 +112,10 @@ export default function Booking() {
     const parsed = Number(raw);
     return Number.isFinite(parsed) && parsed > 0 ? Math.min(10000, Math.max(200, parsed)) : null;
   });
-  const [extras, setExtras] = useState<ExtraId[]>(() => {
+  const [extras, setExtras] = useState<string[]>(() => {
     const raw = params.get("extras");
     if (!raw) return [];
-    return raw.split(",").filter((e): e is ExtraId => ALL_EXTRAS.includes(e as ExtraId));
+    return raw.split(",").map(value => value.trim()).filter(Boolean);
   });
   const [frequency, setFrequency] = useState<Frequency>(() => {
     const q = params.get("frequency");
@@ -192,19 +193,35 @@ export default function Booking() {
     !verifiedSqft && propertyLookup.data?.addressVerified ? (propertyLookup.data.county ?? null) : null;
 
   const pricing = usePricing();
+  const catalogQuery = trpc.booking.addonCatalog.useQuery();
+  const catalog = catalogQuery.data;
   const sqft = sqftParam ?? entrySqft(type, pricing);
   // Match server behavior: price from the verified record when it lands in a higher tier.
   const { breakdown, sqftAdjusted } = useMemo(() => {
-    const entered = calculateQuote({ type, bedrooms, bathrooms, sqft, extras, frequency }, pricing);
+    const calculateFor = (candidateSqft: number) => {
+      if (catalog?.enabled) {
+        const subtotalCents = selectedCatalogAddons(catalog, extras).reduce(
+          (sum, addon) => sum + addon.startingPriceCents,
+          0
+        );
+        return calculateCatalogQuote(
+          { type, bedrooms, bathrooms, sqft: candidateSqft, frequency },
+          subtotalCents,
+          pricing
+        );
+      }
+      return calculateQuote({ type, bedrooms, bathrooms, sqft: candidateSqft, extras: extras as ExtraId[], frequency }, pricing);
+    };
+    const entered = calculateFor(sqft);
     if (verifiedSqft) {
-      const verified = calculateQuote({ type, bedrooms, bathrooms, sqft: verifiedSqft, extras, frequency }, pricing);
+      const verified = calculateFor(verifiedSqft);
       if (verified.total > entered.total) return { breakdown: verified, sqftAdjusted: true };
     }
     return { breakdown: entered, sqftAdjusted: false };
-  }, [type, bedrooms, bathrooms, sqft, extras, frequency, verifiedSqft, pricing]);
+  }, [type, bedrooms, bathrooms, sqft, extras, frequency, verifiedSqft, pricing, catalog]);
   // 0 when the admin has turned deposits off — the booking then confirms on
   // submit with no Stripe step at all.
-  const deposit = depositFor(breakdown.total, pricing.depositRate);
+  const deposit = breakdown.deposit;
   const zeroDeposit = deposit === 0;
 
   const dateString = date ? toDateString(date) : null;
@@ -692,8 +709,17 @@ export default function Booking() {
                   transition={{ duration: 0.22, ease: [0.23, 1, 0.32, 1] }}
                 >
                   <h2 className="font-display text-2xl font-bold text-foreground">{t.booking.extrasTitle}</h2>
-                  <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                    {ALL_EXTRAS.map(id => {
+                  {catalog?.enabled ? (
+                    <AddonCatalogPicker
+                      catalog={catalog}
+                      locale={locale}
+                      selectedKeys={extras}
+                      onToggle={id => setExtras(prev => prev.includes(id) ? prev.filter(key => key !== id) : [...prev, id])}
+                      className="mt-6"
+                    />
+                  ) : (
+                    <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                      {ALL_EXTRAS.map(id => {
                       const active = extras.includes(id);
                       return (
                         <button
@@ -718,8 +744,9 @@ export default function Booking() {
                           <span className="text-sm font-semibold text-foreground">{t.extras[id]}</span>
                         </button>
                       );
-                    })}
-                  </div>
+                      })}
+                    </div>
+                  )}
                 </motion.div>
               )}
 
@@ -929,10 +956,16 @@ export default function Booking() {
                         <p className="text-sm text-muted-foreground">{time}</p>
                       </div>
                       <div className="rounded-2xl border border-border p-4">
-                        <p className="text-xs text-muted-foreground">{t.booking.extras}</p>
-                        <p className="mt-1 text-sm font-medium text-foreground">
-                          {extras.length > 0 ? extras.map(e => t.extras[e]).join(", ") : t.booking.none}
-                        </p>
+                        {catalog?.enabled ? (
+                          <CatalogAddonsSummary catalog={catalog} locale={locale} selectedKeys={extras} />
+                        ) : (
+                          <>
+                            <p className="text-xs text-muted-foreground">{t.booking.extras}</p>
+                            <p className="mt-1 text-sm font-medium text-foreground">
+                              {extras.length > 0 ? extras.map(e => t.extras[e as ExtraId]).join(", ") : t.booking.none}
+                            </p>
+                          </>
+                        )}
                       </div>
                       <div className="rounded-2xl border border-border p-4">
                         <p className="text-xs text-muted-foreground">{t.booking.contactInfo}</p>
