@@ -41,7 +41,15 @@ import {
 } from "../balance";
 import { sendWeeklyDigest } from "../ownerDigest";
 import { balanceLinkStatus } from "../balanceRules";
-import { buildStaffInviteEmail, deliverEmail, sendDepositLinkEmail, sendPropertyConnectedEmail } from "../emails";
+import {
+  buildStaffInviteEmail,
+  deliverEmail,
+  sendDepositLinkEmail,
+  sendPropertyConnectedEmail,
+  sendSmtpDiagnostic,
+  smtpDiagnostics,
+  verifySmtpTransport,
+} from "../emails";
 import { loadDurationConfig, loadSchedulingRules, occupiedIntervals, SERVICE_NAMES, withDurationHours } from "./booking";
 import { sendJobStartedEmailSafely } from "../statusEmails";
 import { sendTipRequestEmailSafely } from "../tip";
@@ -826,6 +834,14 @@ export const adminRouter = router({
       problems: data.health.paidOnOpenBookings.length + data.health.deadLinks.length,
     };
   }),
+  /** Admin-only incident diagnostics. Never exposes a password or secret. */
+  smtpDiagnostics: adminProcedure.query(async () => {
+    const verify = await verifySmtpTransport();
+    return { config: smtpDiagnostics(), verify };
+  }),
+  sendSmtpDiagnostic: adminProcedure
+    .input(z.object({ to: z.string().email() }))
+    .mutation(async ({ input }) => sendSmtpDiagnostic(input.to)),
   createInvoice: adminProcedure
     .input(
       z.object({

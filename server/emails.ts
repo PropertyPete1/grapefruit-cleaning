@@ -133,6 +133,156 @@ function smtpPassword(): string | undefined {
   return process.env.SMTP_PASSWORD || process.env.GMAIL_APP_PASSWORD;
 }
 
+export interface SmtpDiagnostics {
+  env: {
+    SMTP_HOST: string | null;
+    SMTP_PORT: string | null;
+    SMTP_USER: string | null;
+    GMAIL_USER: string | null;
+    passwordSource: "SMTP_PASSWORD" | "GMAIL_APP_PASSWORD" | "none";
+    passwordMasked: string;
+  };
+  effective: {
+    host: string;
+    port: number;
+    secure: boolean;
+    user: string | null;
+  };
+}
+
+/**
+ * Admin-safe view of what the running process will actually use. Password
+ * values are never returned — only which configured variable won precedence.
+ */
+export function smtpDiagnostics(): SmtpDiagnostics {
+  const host = process.env.SMTP_HOST?.trim() || "smtp.gmail.com";
+  const port = Number(process.env.SMTP_PORT) || (host === "smtp.gmail.com" ? 465 : 587);
+  const passwordSource = process.env.SMTP_PASSWORD
+    ? "SMTP_PASSWORD"
+    : process.env.GMAIL_APP_PASSWORD
+      ? "GMAIL_APP_PASSWORD"
+      : "none";
+  return {
+    env: {
+      SMTP_HOST: process.env.SMTP_HOST?.trim() || null,
+      SMTP_PORT: process.env.SMTP_PORT?.trim() || null,
+      SMTP_USER: process.env.SMTP_USER || null,
+      GMAIL_USER: process.env.GMAIL_USER || null,
+      passwordSource,
+      passwordMasked: passwordSource === "none" ? "not set" : "************",
+    },
+    effective: {
+      host,
+      port,
+      secure: port === 465,
+      user: smtpUser() ?? null,
+    },
+  };
+}
+
+function smtpErrorText(error: unknown): string {
+  const err = error as { response?: string; message?: string };
+  return (err.response || err.message || "Unknown SMTP error").split("\n")[0].trim();
+}
+
+/** Runs Nodemailer's connection/authentication verification in this process. */
+export async function verifySmtpTransport(): Promise<{
+  ok: boolean;
+  diagnostics: SmtpDiagnostics;
+  error: string | null;
+}> {
+  const diagnostics = smtpDiagnostics();
+  const transporter = getTransporter();
+  if (!transporter) return { ok: false, diagnostics, error: "No SMTP credentials configured" };
+  try {
+    await transporter.verify();
+    return { ok: true, diagnostics, error: null };
+  } catch (error) {
+    return { ok: false, diagnostics, error: smtpErrorText(error) };
+  }
+}
+
+/**
+ * Sends one explicit admin-requested diagnostic through the same cached
+ * transporter as customer mail and records the provider's raw acceptance.
+ */
+export async function sendSmtpDiagnostic(to: string): Promise<{
+  ok: boolean;
+  diagnostics: SmtpDiagnostics;
+  accepted: string[];
+  rejected: string[];
+  response: string | null;
+  messageId: string | null;
+  error: string | null;
+}> {
+  const diagnostics = smtpDiagnostics();
+  const transporter = getTransporter();
+  const subject = `Grapefruit production email test — ${new Date().toISOString()}`;
+  if (!transporter) {
+    const error = "No SMTP credentials configured";
+    await logEmailAttempt({
+      recipient: to,
+      subject,
+      emailType: "smtp_diagnostic",
+      outcome: "log_only",
+      errorText: error,
+      smtpUser: diagnostics.effective.user,
+    });
+    return { ok: false, diagnostics, accepted: [], rejected: [to], response: null, messageId: null, error };
+  }
+  try {
+    const info = await transporter.sendMail({
+      from: `Grapefruit Cleaning Co. <${smtpUser()}>`,
+      to,
+      subject,
+      text: "This is a live production delivery test requested by the Grapefruit Cleaning Co. owner.",
+      html: wrapEmailHtml(
+        subject,
+        "This is a live production delivery test requested by the Grapefruit Cleaning Co. owner."
+      ),
+    });
+    const accepted = (info.accepted ?? []).map(String);
+    const rejected = (info.rejected ?? []).map(String);
+    const response = typeof info.response === "string" ? info.response : null;
+    await logEmailAttempt({
+      recipient: to,
+      subject,
+      emailType: "smtp_diagnostic",
+      outcome: accepted.length > 0 && rejected.length === 0 ? "delivered" : "error",
+      errorText: rejected.length > 0 ? `Rejected: ${rejected.join(", ")}` : null,
+      smtpUser: diagnostics.effective.user,
+    });
+    return {
+      ok: accepted.length > 0 && rejected.length === 0,
+      diagnostics,
+      accepted,
+      rejected,
+      response,
+      messageId: typeof info.messageId === "string" ? info.messageId : null,
+      error: rejected.length > 0 ? `Rejected: ${rejected.join(", ")}` : null,
+    };
+  } catch (error) {
+    const message = smtpErrorText(error);
+    await logEmailAttempt({
+      recipient: to,
+      subject,
+      emailType: "smtp_diagnostic",
+      outcome: "error",
+      errorText: message,
+      smtpUser: diagnostics.effective.user,
+    });
+    return {
+      ok: false,
+      diagnostics,
+      accepted: [],
+      rejected: [to],
+      response: null,
+      messageId: null,
+      error: message,
+    };
+  }
+}
+
 function getTransporter(): Transporter | null {
   const user = smtpUser();
   const pass = smtpPassword();
