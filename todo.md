@@ -404,5 +404,5 @@
 - [x] Report all findings from items 1–5 to the owner before any repair
 - [x] Fix every confirmed SMTP, trigger, logging, owner-alert, public-email, and cache defect with regression tests
 - [x] If recovery reverted SMTP identity, add a daily health-check assertion that the resolved SMTP mailbox matches the intended mailbox and alerts on mismatch
-- [ ] Run full tests, TypeScript, production build, genuine restart, checkpoint, `/api/version` proof, and GitHub sync
-- [ ] Rerun production SMTP verify/send, email-log query, EN/ES public-page proof, and daily health check; show one delivered production test row
+- [x] Run full tests, TypeScript, production build, genuine restart, checkpoint, `/api/version` proof, and GitHub sync
+- [x] Rerun production SMTP verify/send, email-log query, EN/ES public-page proof, and daily health check; show one delivered production test row
