@@ -74,6 +74,21 @@ export default function AdminEmailLog() {
   // wanting it now — and it doubles as a way to confirm the reporting path
   // still works, rather than waiting a week to discover it doesn't.
   const utils = trpc.useUtils();
+  const smtp = trpc.admin.smtpDiagnostics.useQuery(undefined, {
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+  const sendDiagnostic = trpc.admin.sendSmtpDiagnostic.useMutation({
+    onSuccess: result => {
+      toast[result.ok ? "success" : "error"](
+        result.ok ? "Production SMTP accepted the Peter diagnostic" : `Production SMTP rejected the diagnostic: ${result.error ?? "unknown error"}`,
+        { duration: 10000 }
+      );
+      void utils.admin.emailLog.invalidate();
+      void utils.admin.smtpDiagnostics.invalidate();
+    },
+    onError: e => toast.error(`Could not run the production SMTP diagnostic: ${e.message}`, { duration: 10000 }),
+  });
   const sendReport = trpc.admin.sendWeeklyDigestNow.useMutation({
     onSuccess: r => {
       toast.success(
@@ -93,6 +108,55 @@ export default function AdminEmailLog() {
         title="Email log"
         subtitle="Every message the site tried to send, and what the mail server said back"
       />
+
+      <div className="mb-6 rounded-2xl bg-card p-4 shadow-sm ring-1 ring-border">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold">Production SMTP diagnostics</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Password-safe configuration and a live connection verify from this production process.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            onClick={() => sendDiagnostic.mutate({ to: "peter@lifestyledesignrealty.com" })}
+            disabled={sendDiagnostic.isPending}
+            className="shrink-0 gap-2 bg-background"
+          >
+            <Send className="h-4 w-4" />
+            {sendDiagnostic.isPending ? "Sending test…" : "Send one test to Peter"}
+          </Button>
+        </div>
+
+        {smtp.isLoading ? (
+          <Skeleton className="mt-4 h-24 w-full rounded-xl" />
+        ) : smtp.error ? (
+          <p className="mt-4 rounded-xl bg-red-50 px-3 py-2 text-xs text-red-800 ring-1 ring-red-100">
+            Verify failed to run: {smtp.error.message}
+          </p>
+        ) : smtp.data ? (
+          <div className="mt-4 grid gap-2 font-mono text-xs text-muted-foreground sm:grid-cols-2">
+            <p>SMTP_HOST={smtp.data.config.env.SMTP_HOST ?? "&lt;unset&gt;"}</p>
+            <p>SMTP_PORT={smtp.data.config.env.SMTP_PORT ?? "&lt;unset&gt;"}</p>
+            <p>SMTP_USER={smtp.data.config.env.SMTP_USER ?? "&lt;unset&gt;"}</p>
+            <p>GMAIL_USER={smtp.data.config.env.GMAIL_USER ?? "&lt;unset&gt;"}</p>
+            <p>Effective host={smtp.data.config.effective.host}:{smtp.data.config.effective.port}</p>
+            <p>Effective user={smtp.data.config.effective.user ?? "&lt;unset&gt;"}</p>
+            <p>Password source={smtp.data.config.env.passwordSource}</p>
+            <p>Secure={String(smtp.data.config.effective.secure)}</p>
+            <p className={smtp.data.verify.ok ? "text-emerald-700" : "text-red-700"}>
+              Verify={smtp.data.verify.ok ? "accepted" : "rejected"}
+            </p>
+            {smtp.data.verify.error && <p className="break-words text-red-700 sm:col-span-2">Verify error={smtp.data.verify.error}</p>}
+          </div>
+        ) : null}
+
+        {sendDiagnostic.data && (
+          <pre className="mt-4 overflow-x-auto rounded-xl bg-muted p-3 text-xs leading-relaxed text-foreground">
+            {JSON.stringify(sendDiagnostic.data, null, 2)}
+          </pre>
+        )}
+      </div>
 
       <div className="mb-6 flex flex-wrap items-center gap-3 rounded-2xl bg-card p-4 shadow-sm ring-1 ring-border">
         <div className="min-w-0 flex-1">
