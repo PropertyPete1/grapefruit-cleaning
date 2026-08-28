@@ -13,7 +13,7 @@
  */
 import { FIRST_NUDGE_DAYS, REPEAT_NUDGE_DAYS, nudgeDecision, type NudgeCandidate } from "@shared/marketingRules";
 import * as db from "./db";
-import { sendOwnerAlert } from "./emails";
+import { sendOwnerAlert, smtpUser } from "./emails";
 
 // ---------------------------------------------------------------------------
 // Health check
@@ -23,6 +23,12 @@ export interface HealthFindings {
   paidOnOpenBookings: Array<{ invoiceNumber: string; reference: string; bookingStatus: string; amount: number }>;
   deadLinks: Array<{ invoiceNumber: string; amount: number; expiredOn: string }>;
   customersWithoutEmail: Array<{ name: string; phone: string | null }>;
+  /** Public business mailbox compared with the transport's resolved sender. */
+  smtpIdentity: {
+    expected: string | null;
+    effective: string | null;
+    matches: boolean | null;
+  };
   /** True when something needs a human. Missing emails alone do NOT qualify. */
   hasProblems: boolean;
 }
@@ -41,11 +47,14 @@ function fmtDate(d: Date | string | null | undefined): string {
  * permanent fact of the business is how an alert channel gets ignored.
  */
 export async function runHealthCheck(now: Date = new Date()): Promise<HealthFindings> {
-  const [paid, dead, noEmail] = await Promise.all([
+  const [paid, dead, noEmail, configuredBusinessEmail] = await Promise.all([
     db.findPaidInvoicesOnOpenBookings(),
     db.findInvoicesWithDeadLinks(now),
     db.findCustomersWithoutEmail(),
+    db.getSetting("business_email"),
   ]);
+  const expectedSmtpUser = configuredBusinessEmail?.trim() || null;
+  const effectiveSmtpUser = smtpUser()?.trim() || null;
 
   const findings: HealthFindings = {
     paidOnOpenBookings: paid.map(r => ({
@@ -63,9 +72,19 @@ export async function runHealthCheck(now: Date = new Date()): Promise<HealthFind
       name: `${c.firstName} ${c.lastName}`.trim(),
       phone: c.phone,
     })),
+    smtpIdentity: {
+      expected: expectedSmtpUser,
+      effective: effectiveSmtpUser,
+      matches: expectedSmtpUser
+        ? effectiveSmtpUser?.toLowerCase() === expectedSmtpUser.toLowerCase()
+        : null,
+    },
     hasProblems: false,
   };
-  findings.hasProblems = findings.paidOnOpenBookings.length > 0 || findings.deadLinks.length > 0;
+  findings.hasProblems =
+    findings.paidOnOpenBookings.length > 0 ||
+    findings.deadLinks.length > 0 ||
+    findings.smtpIdentity.matches === false;
   return findings;
 }
 
@@ -99,6 +118,13 @@ export function formatHealthFindings(f: HealthFindings): string {
     }
     lines.push("");
   }
+  if (f.smtpIdentity.matches === false) {
+    lines.push("SMTP SENDER IDENTITY MISMATCH");
+    lines.push(`Public business email: ${f.smtpIdentity.expected ?? "(not configured)"}`);
+    lines.push(`Resolved SMTP sender: ${f.smtpIdentity.effective ?? "(not configured)"}`);
+    lines.push("The email environment likely rolled back or drifted. Restore the intended mailbox before relying on customer delivery.");
+    lines.push("");
+  }
   if (lines.length === 0) lines.push("No inconsistencies found.");
   return lines.join("\n");
 }
@@ -113,7 +139,10 @@ export function formatHealthFindings(f: HealthFindings): string {
 export async function runDailyHealthCheck(now: Date = new Date()): Promise<HealthFindings> {
   const findings = await runHealthCheck(now);
   if (findings.hasProblems) {
-    const count = findings.paidOnOpenBookings.length + findings.deadLinks.length;
+    const count =
+      findings.paidOnOpenBookings.length +
+      findings.deadLinks.length +
+      (findings.smtpIdentity.matches === false ? 1 : 0);
     await sendOwnerAlert(
       `Grapefruit: ${count} item${count === 1 ? "" : "s"} need${count === 1 ? "s" : ""} your attention`,
       [

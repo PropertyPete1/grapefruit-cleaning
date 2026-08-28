@@ -307,7 +307,7 @@ export const adminRouter = router({
             expiresOn: result.expiresAt.toISOString().slice(0, 10),
             locale: input.locale,
             bizPhone,
-          });
+          }, { bookingId: result.bookingId });
         } catch (error) {
           console.error("[AdminBooking] Deposit link email failed:", error);
         }
@@ -393,7 +393,7 @@ export const adminRouter = router({
           expiresOn: expiresAt.toISOString().slice(0, 10),
           locale,
           bizPhone,
-        });
+        }, { bookingId: booking.id });
       } catch (error) {
         console.error("[AdminBooking] Deposit link resend failed:", error);
       }
@@ -831,7 +831,10 @@ export const adminRouter = router({
       emailsThisWeek: data.totalSent,
       failures: data.failures.length,
       upcomingNudges: data.nudges.length,
-      problems: data.health.paidOnOpenBookings.length + data.health.deadLinks.length,
+      problems:
+        data.health.paidOnOpenBookings.length +
+        data.health.deadLinks.length +
+        (data.health.smtpIdentity.matches === false ? 1 : 0),
     };
   }),
   /** Admin-only incident diagnostics. Never exposes a password or secret. */

@@ -131,6 +131,25 @@ what the deployed container is holding, and it has been misleading here before. 
   setting) and Karyme's admin row in the users table carry whatever address they were saved with. The admin
   row’s email is display/notification metadata and is overwrite-protected after initial OAuth creation.
 
+### Aug 28, 2026 sender-identity rollback incident
+- Live production diagnostics proved the Aug 25 recovery had left `SMTP_HOST`, `SMTP_PORT` and `SMTP_USER`
+  unset, so the legacy `GMAIL_USER=grapefruit@grapefruitclean.com` fallback won. Gmail still authenticated
+  that old mailbox and accepted customer mail; this was an identity/configuration regression, not a dead
+  network transport. Public footer/contact/JSON-LD remained correct from `business_email`.
+- The intended production configuration was restored through managed secrets as explicit
+  `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=465`, `SMTP_USER=grapefruitcleaningc@gmail.com`, `SMTP_PASSWORD`
+  (never stored in source), and `OWNER_EMAIL=grapefruitcleaningc@gmail.com`. Generic `SMTP_*` precedence is
+  deliberate: the stale legacy variables may remain for compatibility but can no longer win.
+- The daily health check now compares the resolved SMTP sender with the live `business_email` setting,
+  case-insensitively. A missing or different sender sets `hasProblems`, appears in the daily owner alert and
+  weekly digest, and names both non-secret addresses so another recovery rollback announces itself.
+- `sendOwnerAlert()` now reports whether the platform channel or owner-email channel actually accepted the
+  alert. `email_log.alertSentAt` is marked only when at least one channel succeeds; a failed platform notice
+  plus failed SMTP fallback can no longer be recorded as though the owner was reached. Recursion and the
+  one-hour alert cap remain unchanged.
+- New and resent admin deposit-link emails now record their known `bookingId` in `email_log`, closing the
+  incident-correlation gap found in the Aug 28 audit.
+
 ### Provider history — why the setup looks like this
 - The old grapefruit@grapefruitclean.com Gmail is NOT dead: it still authenticates, and earlier notes calling
   it "DEAD" were wrong. It survives only as the legacy GMAIL_* fallback.

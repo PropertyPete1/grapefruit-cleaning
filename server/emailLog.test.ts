@@ -45,7 +45,12 @@ beforeEach(() => {
   mockMarkAlertSent.mockResolvedValue(undefined);
   mockMarkAlertSuppressed.mockResolvedValue(undefined);
   mockCountSuppressed.mockResolvedValue(0);
-  mockSendOwnerAlert.mockResolvedValue(undefined);
+  mockSendOwnerAlert.mockResolvedValue({
+    delivered: true,
+    platformDelivered: true,
+    emailDelivered: false,
+    emailRecipient: null,
+  });
 });
 
 const attempt = (over: Partial<Parameters<typeof logEmailAttempt>[0]> = {}) => ({
@@ -142,6 +147,17 @@ describe("logEmailAttempt — owner alert", () => {
     expect(mockMarkAlertSent).toHaveBeenCalledWith(101, expect.any(Date));
   });
 
+  it("does not mark alertSentAt when every owner channel rejects the alert", async () => {
+    mockSendOwnerAlert.mockResolvedValue({
+      delivered: false,
+      platformDelivered: false,
+      emailDelivered: false,
+      emailRecipient: "owner@example.com",
+    });
+    await logEmailAttempt(attempt({ outcome: "error" }));
+    expect(mockMarkAlertSent).not.toHaveBeenCalled();
+  });
+
   it("never alerts about a failed owner alert — that is the loop", async () => {
     await logEmailAttempt(attempt({ emailType: "owner_alert", outcome: "error" }));
     expect(mockSendOwnerAlert).not.toHaveBeenCalled();
@@ -157,6 +173,12 @@ describe("logEmailAttempt — owner alert", () => {
     // its attempt, which lands back in this module. One alert, not two.
     mockSendOwnerAlert.mockImplementation(async () => {
       await logEmailAttempt(attempt({ emailType: "some_other_type", outcome: "error" }));
+      return {
+        delivered: false,
+        platformDelivered: false,
+        emailDelivered: false,
+        emailRecipient: null,
+      };
     });
     await logEmailAttempt(attempt({ outcome: "error" }));
     expect(mockSendOwnerAlert).toHaveBeenCalledTimes(1);
@@ -193,7 +215,12 @@ describe("logEmailAttempt — owner alert", () => {
     // flood it guards against, because it fails closed and invisibly.
     mockSendOwnerAlert.mockRejectedValueOnce(new Error("smtp down"));
     await logEmailAttempt(attempt({ outcome: "error" }));
-    mockSendOwnerAlert.mockResolvedValue(undefined);
+    mockSendOwnerAlert.mockResolvedValue({
+      delivered: true,
+      platformDelivered: true,
+      emailDelivered: false,
+      emailRecipient: null,
+    });
     await logEmailAttempt(attempt({ outcome: "error" }));
     expect(mockSendOwnerAlert).toHaveBeenCalledTimes(2);
   });

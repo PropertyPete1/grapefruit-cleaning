@@ -23,6 +23,8 @@ const mockFailures = vi.fn();
 const mockTotals = vi.fn();
 const mockCandidates = vi.fn();
 const mockOwnerAlert = vi.fn();
+const mockGetSetting = vi.fn();
+const mockSmtpUser = vi.fn();
 
 vi.mock("./db", () => ({
   findPaidInvoicesOnOpenBookings: () => mockPaidOnOpen(),
@@ -32,10 +34,12 @@ vi.mock("./db", () => ({
   emailFailuresSince: (...a: unknown[]) => mockFailures(...a),
   ownerTotals: () => mockTotals(),
   listNudgeCandidates: () => mockCandidates(),
+  getSetting: (...a: unknown[]) => mockGetSetting(...a),
 }));
 
 vi.mock("./emails", () => ({
   sendOwnerAlert: (...a: unknown[]) => mockOwnerAlert(...a),
+  smtpUser: () => mockSmtpUser(),
 }));
 
 import {
@@ -57,6 +61,8 @@ beforeEach(() => {
   mockStats.mockResolvedValue([]);
   mockFailures.mockResolvedValue([]);
   mockCandidates.mockResolvedValue([]);
+  mockGetSetting.mockResolvedValue("grapefruitcleaningc@gmail.com");
+  mockSmtpUser.mockReturnValue("grapefruitcleaningc@gmail.com");
   mockTotals.mockResolvedValue({
     bookings: 5,
     upcomingBookings: 1,
@@ -114,6 +120,31 @@ describe("the daily health check", () => {
     mockDeadLinks.mockResolvedValue([{ invoiceNumber: "B", amount: 20, linkExpiresAt: new Date() }]);
     await runDailyHealthCheck(NOW);
     expect(mockOwnerAlert.mock.calls[0]![0]).toContain("2 items need your attention");
+  });
+
+  it("alerts when the resolved SMTP sender diverges from the live business email", async () => {
+    mockSmtpUser.mockReturnValue("grapefruit@grapefruitclean.com");
+    const findings = await runDailyHealthCheck(NOW);
+    expect(findings.smtpIdentity).toEqual({
+      expected: "grapefruitcleaningc@gmail.com",
+      effective: "grapefruit@grapefruitclean.com",
+      matches: false,
+    });
+    expect(findings.hasProblems).toBe(true);
+    expect(mockOwnerAlert).toHaveBeenCalledOnce();
+    const [subject, body] = mockOwnerAlert.mock.calls[0]!;
+    expect(subject).toContain("1 item needs your attention");
+    expect(body).toContain("SMTP SENDER IDENTITY MISMATCH");
+    expect(body).toContain("Public business email: grapefruitcleaningc@gmail.com");
+    expect(body).toContain("Resolved SMTP sender: grapefruit@grapefruitclean.com");
+  });
+
+  it("compares SMTP and business email case-insensitively", async () => {
+    mockGetSetting.mockResolvedValue("Grapefruitcleaningc@gmail.com");
+    mockSmtpUser.mockReturnValue("grapefruitcleaningc@GMAIL.COM");
+    const findings = await runHealthCheck(NOW);
+    expect(findings.smtpIdentity.matches).toBe(true);
+    expect(findings.hasProblems).toBe(false);
   });
 
   it("says so plainly when there is nothing to report", async () => {

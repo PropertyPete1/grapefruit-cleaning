@@ -633,19 +633,32 @@ export function buildOwnerNotification(data: BookingEmailData): { title: string;
  * One helper so booking confirmations, unplaceable-clean alerts and feed
  * failures all reach the owner the same way.
  */
-export async function sendOwnerAlert(title: string, content: string): Promise<void> {
+export interface OwnerAlertResult {
+  /** True when at least one independent owner channel accepted the alert. */
+  delivered: boolean;
+  platformDelivered: boolean;
+  emailDelivered: boolean;
+  emailRecipient: string | null;
+}
+
+export async function sendOwnerAlert(title: string, content: string): Promise<OwnerAlertResult> {
+  let platformDelivered = false;
   try {
     await notifyOwner({ title, content });
+    platformDelivered = true;
   } catch (error) {
     console.error("[Email] Failed to notify owner:", error);
   }
-  const ownerEmail = process.env.OWNER_EMAIL;
-  if (ownerEmail) {
-    await deliverEmail(ownerEmail, title, content, undefined, { emailType: "owner_alert" });
-  } else if (smtpUser()) {
-    // Default: send the owner copy to the business inbox itself.
-    await deliverEmail(smtpUser(), title, content, undefined, { emailType: "owner_alert" });
-  }
+  const emailRecipient = process.env.OWNER_EMAIL?.trim() || smtpUser()?.trim() || null;
+  const emailDelivered = emailRecipient
+    ? await deliverEmail(emailRecipient, title, content, undefined, { emailType: "owner_alert" })
+    : false;
+  return {
+    delivered: platformDelivered || emailDelivered,
+    platformDelivered,
+    emailDelivered,
+    emailRecipient,
+  };
 }
 
 export async function sendBookingEmails(data: BookingEmailData): Promise<void> {
@@ -1935,9 +1948,15 @@ export function buildDepositLinkEmail(data: DepositLinkEmailData): {
 }
 
 /** Sends the deposit link. Returns whether it was delivered. */
-export async function sendDepositLinkEmail(data: DepositLinkEmailData): Promise<boolean> {
+export async function sendDepositLinkEmail(
+  data: DepositLinkEmailData,
+  context?: Pick<EmailContext, "bookingId">
+): Promise<boolean> {
   const { subject, body, html } = buildDepositLinkEmail(data);
-  return deliverEmail(data.customerEmail, subject, body, html, { emailType: "deposit_link" });
+  return deliverEmail(data.customerEmail, subject, body, html, {
+    emailType: "deposit_link",
+    bookingId: context?.bookingId ?? null,
+  });
 }
 
 // ---------- Connected-property (Airbnb auto-booking) emails ----------

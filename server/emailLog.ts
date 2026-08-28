@@ -105,8 +105,12 @@ async function maybeAlertOwner(attempt: EmailAttempt, logId: number | null): Pro
   _alerting = true;
   try {
     const { sendOwnerAlert } = await import("./emails");
-    await sendOwnerAlert(...buildFailureAlert(attempt, suppressed, now));
-    if (logId !== null) await db.markEmailAlertSent(logId, now);
+    const result = await sendOwnerAlert(...buildFailureAlert(attempt, suppressed, now));
+    if (result.delivered) {
+      if (logId !== null) await db.markEmailAlertSent(logId, now);
+    } else {
+      console.error("[EmailLog] No owner channel accepted the failure alert");
+    }
   } catch (error) {
     console.error("[EmailLog] Could not raise the failure alert:", error);
   } finally {

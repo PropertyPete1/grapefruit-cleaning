@@ -396,13 +396,13 @@
 - [x] Record the seven approved interpretation choices in the final report
 
 ## Critical production email-delivery incident
-- [ ] Capture masked production `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, and `GMAIL_USER`; prove the running transporter’s resolved mailbox and connection identity
-- [ ] Run SMTP verify inside production and send one real production-path test email to peter@lifestyledesignrealty.com; capture accepted/rejected and raw transport result
-- [ ] List every `email_log` row since 2026-08-25 with timestamp, type, recipient, outcome, mailbox, and exact transport error
-- [ ] Reconcile booking/invoice events against email_log to detect missing trigger execution, swallowed delivery failures, and owner-alert attempts that shared the failed transport
-- [ ] Fetch fresh production EN/ES contact/footer/JSON-LD through public and custom-domain paths; record each exact rendered address and trace any mismatch to setting, cache, CDN, or bundle source
-- [ ] Report all findings from items 1–5 to the owner before any repair
-- [ ] Fix every confirmed SMTP, trigger, logging, owner-alert, public-email, and cache defect with regression tests
-- [ ] If recovery reverted SMTP identity, add a daily health-check assertion that the resolved SMTP mailbox matches the intended mailbox and alerts on mismatch
+- [x] Capture masked production `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, and `GMAIL_USER`; prove the running transporter’s resolved mailbox and connection identity
+- [x] Run SMTP verify inside production and send one real production-path test email to peter@lifestyledesignrealty.com; capture accepted/rejected and raw transport result
+- [x] List every `email_log` row since 2026-08-25 with timestamp, type, recipient, outcome, mailbox, and exact transport error
+- [x] Reconcile booking/invoice events against email_log to detect missing trigger execution, swallowed delivery failures, and owner-alert attempts that shared the failed transport
+- [x] Fetch fresh production EN/ES contact/footer/JSON-LD through public and custom-domain paths; record each exact rendered address and trace any mismatch to setting, cache, CDN, or bundle source
+- [x] Report all findings from items 1–5 to the owner before any repair
+- [x] Fix every confirmed SMTP, trigger, logging, owner-alert, public-email, and cache defect with regression tests
+- [x] If recovery reverted SMTP identity, add a daily health-check assertion that the resolved SMTP mailbox matches the intended mailbox and alerts on mismatch
 - [ ] Run full tests, TypeScript, production build, genuine restart, checkpoint, `/api/version` proof, and GitHub sync
 - [ ] Rerun production SMTP verify/send, email-log query, EN/ES public-page proof, and daily health check; show one delivered production test row
