@@ -414,6 +414,6 @@
 - [x] Write real offline payment and tip rows, settle invoice and open booking consistently, stop reminders/payment-link chasing, and preserve optional receipt behavior
 - [x] Separate Stripe and offline revenue in reporting while including both in totals, and exclude offline rows from Stripe reconciliation
 - [x] Add regression tests for admin authorization, idempotent/atomic settlement, tip recording, receipt choice, reminder stopping, audit fields, and Stripe/offline revenue separation
-- [ ] Apply migration after schema review; run focused and full tests, TypeScript, production build, genuine restart, checkpoint, `/api/version` proof, UI verification, and GitHub sync
+- [x] Apply migration after schema review; run focused and full tests, TypeScript, production build, genuine restart, checkpoint, `/api/version` proof, automated UI contract verification (authenticated visual check waived by owner), and GitHub sync
 - [x] Identify the current $300 cash + $20 cash-tip case: owner confirmed those customers were never entered in this system, so no matching invoice exists and no live financial row should be created
 - [x] Preserve the out-of-system cash transaction as out of scope; do not fabricate a customer, booking, invoice, payment, or tip record
