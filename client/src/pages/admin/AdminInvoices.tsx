@@ -1,11 +1,13 @@
-import { useState } from "react";
-import { AlertTriangle, Plus, Send, ShieldCheck } from "lucide-react";
+import { useEffect, useState } from "react";
+import { AlertTriangle, Banknote, Plus, Send, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
   DialogContent,
@@ -23,6 +25,7 @@ import {
 import type { AddonCatalogPayload } from "@shared/addonCatalog";
 import { lineItemAmountCents, lineItemName, parseLineItems } from "@shared/invoiceItems";
 import { centsToDollars } from "@shared/money";
+import { OFFLINE_PAYMENT_METHODS, type OfflinePaymentMethod } from "@shared/payments";
 import { usePricing } from "@/hooks/usePricing";
 import { en } from "@/i18n/translations/en";
 import {
@@ -35,7 +38,7 @@ import {
 } from "./InvoiceItemsEditor";
 import { NotesBlock, PageHeader, RowCard, StatusBadge, TableOrCards, fmtDate, fmtMoney } from "./adminShared";
 
-const INVOICE_STATUSES = ["draft", "sent", "paid", "overdue", "void"] as const;
+const INVOICE_STATUSES = ["draft", "sent", "overdue", "void"] as const;
 
 /** Payment-link state → an existing StatusBadge colour. */
 const LINK_BADGE_STATUS: Record<string, string> = {
@@ -60,6 +63,135 @@ type PendingInvoice = {
   customerEmail: string | null;
   bookedAddons: { key: string; nameEn: string; nameEs: string; amountCents: number; priceMode: string }[];
 };
+
+type OfflineInvoice = {
+  id: number;
+  number: string;
+  customerId: number;
+  amount: number;
+  amountCents: number | null;
+  status: string;
+};
+
+function invoiceAmount(invoice: { amount: number; amountCents: number | null }) {
+  return centsToDollars(invoice.amountCents ?? invoice.amount * 100);
+}
+
+function localDateInputValue() {
+  const now = new Date();
+  const offset = now.getTimezoneOffset() * 60_000;
+  return new Date(now.getTime() - offset).toISOString().slice(0, 10);
+}
+
+function OfflinePaymentDialog({
+  invoice,
+  customer,
+  pending,
+  onClose,
+  onSubmit,
+}: {
+  invoice: OfflineInvoice | null;
+  customer: string;
+  pending: boolean;
+  onClose: () => void;
+  onSubmit: (input: {
+    invoiceId: number;
+    amount: number;
+    method: OfflinePaymentMethod;
+    tipAmount: number;
+    note?: string;
+    receivedOn: string;
+    emailReceipt: boolean;
+  }) => void;
+}) {
+  const [amount, setAmount] = useState("");
+  const [method, setMethod] = useState<OfflinePaymentMethod>("cash");
+  const [tipAmount, setTipAmount] = useState("0");
+  const [note, setNote] = useState("");
+  const [receivedOn, setReceivedOn] = useState(localDateInputValue);
+  const [emailReceipt, setEmailReceipt] = useState(true);
+
+  useEffect(() => {
+    if (!invoice) return;
+    setAmount(invoiceAmount(invoice).toFixed(2));
+    setMethod("cash");
+    setTipAmount("0");
+    setNote("");
+    setReceivedOn(localDateInputValue());
+    setEmailReceipt(true);
+  }, [invoice]);
+
+  const parsedAmount = Number(amount);
+  const parsedTip = Number(tipAmount || 0);
+  const valid =
+    Boolean(invoice) &&
+    Number.isFinite(parsedAmount) &&
+    parsedAmount > 0 &&
+    Number.isFinite(parsedTip) &&
+    parsedTip >= 0 &&
+    Boolean(receivedOn);
+
+  return (
+    <Dialog open={Boolean(invoice)} onOpenChange={open => !open && onClose()}>
+      <DialogContent className="rounded-2xl sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Record offline payment</DialogTitle>
+        </DialogHeader>
+        {invoice && (
+          <div className="space-y-4">
+            <div className="rounded-xl bg-muted/60 p-3 text-sm">
+              <p className="font-semibold">{invoice.number}</p>
+              <p className="text-muted-foreground">{customer} · balance {fmtMoney(invoiceAmount(invoice))}</p>
+            </div>
+            <div>
+              <Label htmlFor="offline-amount">Amount received</Label>
+              <Input id="offline-amount" type="number" min="0.01" step="0.01" className="mt-1.5 rounded-xl" value={amount} onChange={event => setAmount(event.target.value)} />
+              <p className="mt-1.5 text-xs text-muted-foreground">This settles the invoice in full. Correct the invoice first if the amount should differ.</p>
+            </div>
+            <div>
+              <Label>Payment method</Label>
+              <Select value={method} onValueChange={value => setMethod(value as OfflinePaymentMethod)}>
+                <SelectTrigger className="mt-1.5 rounded-xl"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {OFFLINE_PAYMENT_METHODS.map(value => <SelectItem key={value} value={value} className="capitalize">{value}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <Label htmlFor="offline-tip">Tip amount</Label>
+                <Input id="offline-tip" type="number" min="0" step="0.01" className="mt-1.5 rounded-xl" value={tipAmount} onChange={event => setTipAmount(event.target.value)} />
+              </div>
+              <div>
+                <Label htmlFor="offline-date">Date received</Label>
+                <Input id="offline-date" type="date" className="mt-1.5 rounded-xl" value={receivedOn} onChange={event => setReceivedOn(event.target.value)} />
+              </div>
+            </div>
+            <div>
+              <Label htmlFor="offline-note">Note (optional)</Label>
+              <Textarea id="offline-note" maxLength={1000} className="mt-1.5 rounded-xl" placeholder="Check number, reference, or collection details" value={note} onChange={event => setNote(event.target.value)} />
+            </div>
+            <label className="flex items-start gap-3 rounded-xl border border-border p-3 text-sm">
+              <Checkbox checked={emailReceipt} onCheckedChange={checked => setEmailReceipt(checked === true)} className="mt-0.5" />
+              <span>
+                <span className="block font-medium">Email receipt to customer</span>
+                <span className="block text-xs text-muted-foreground">On by default; uncheck for a paper-only cash receipt.</span>
+              </span>
+            </label>
+            <Button
+              className="w-full rounded-xl"
+              disabled={!valid || pending}
+              onClick={() => onSubmit({ invoiceId: invoice.id, amount: parsedAmount, method, tipAmount: parsedTip, note: note.trim() || undefined, receivedOn, emailReceipt })}
+            >
+              <Banknote className="mr-1.5 h-4 w-4" />
+              {pending ? "Recording…" : `Record ${fmtMoney(parsedAmount + parsedTip)}`}
+            </Button>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 /**
  * Review dialog for a balance waiting on approval. Shows how the balance was
@@ -284,6 +416,19 @@ export default function AdminInvoices() {
     },
     onError: () => toast.error("Failed to update invoice"),
   });
+  const [recording, setRecording] = useState<OfflineInvoice | null>(null);
+  const recordOffline = trpc.admin.recordOfflinePayment.useMutation({
+    onSuccess: result => {
+      utils.admin.invoices.invalidate();
+      utils.admin.awaitingApprovalInvoices.invalidate();
+      utils.admin.payments.invalidate();
+      utils.admin.stats.invalidate();
+      utils.admin.monthlyRevenue.invalidate();
+      setRecording(null);
+      toast.success(result.tipPaymentId ? "Offline payment and tip recorded" : "Offline payment recorded");
+    },
+    onError: error => toast.error(error.message || "Failed to record offline payment"),
+  });
   const pendingApproval = trpc.admin.awaitingApprovalInvoices.useQuery();
   const [reviewing, setReviewing] = useState<PendingInvoice | null>(null);
   const approve = trpc.admin.approveBalanceInvoice.useMutation({
@@ -489,6 +634,14 @@ export default function AdminInvoices() {
         }
       />
 
+      <OfflinePaymentDialog
+        invoice={recording}
+        customer={recording ? customerName(recording.customerId) : ""}
+        pending={recordOffline.isPending}
+        onClose={() => setRecording(null)}
+        onSubmit={input => recordOffline.mutate(input)}
+      />
+
       <div className="rounded-2xl bg-card shadow-sm ring-1 ring-border">
         {invoices.isLoading ? (
           <div className="space-y-3 p-6">
@@ -518,7 +671,7 @@ export default function AdminInvoices() {
                     <td className="px-6 py-3.5 font-mono text-xs font-semibold text-primary">{inv.number}</td>
                     <td className="px-6 py-3.5">{customerName(inv.customerId)}</td>
                     <td className="px-6 py-3.5">
-                      <span className="font-semibold">{fmtMoney(inv.amount)}</span>
+                      <span className="font-semibold">{fmtMoney(invoiceAmount(inv))}</span>
                       {(() => {
                         const items = parseLineItems(inv.lineItems);
                         if (items.length === 0) return null;
@@ -578,25 +731,28 @@ export default function AdminInvoices() {
                       )}
                     </td>
                     <td className="px-6 py-3.5">
-                      <Select
-                        value={inv.status}
-                        onValueChange={v =>
-                          updateStatus.mutate({ id: inv.id, status: v as (typeof INVOICE_STATUSES)[number] })
-                        }
-                      >
-                        <SelectTrigger className="h-8 w-32 rounded-lg text-xs">
-                          <SelectValue>
-                            <StatusBadge status={inv.status} />
-                          </SelectValue>
-                        </SelectTrigger>
-                        <SelectContent>
-                          {INVOICE_STATUSES.map(s => (
-                            <SelectItem key={s} value={s} className="capitalize">
-                              {s}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <div className="flex items-center gap-2">
+                        {inv.status === "paid" ? (
+                          <StatusBadge status={inv.status} />
+                        ) : (
+                          <Select
+                            value={inv.status}
+                            onValueChange={v => updateStatus.mutate({ id: inv.id, status: v as (typeof INVOICE_STATUSES)[number] })}
+                          >
+                            <SelectTrigger className="h-8 w-32 rounded-lg text-xs">
+                              <SelectValue><StatusBadge status={inv.status} /></SelectValue>
+                            </SelectTrigger>
+                            <SelectContent>
+                              {INVOICE_STATUSES.map(s => <SelectItem key={s} value={s} className="capitalize">{s}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                        )}
+                        {inv.status !== "paid" && inv.status !== "void" && (
+                          <Button size="sm" variant="outline" className="h-8 rounded-lg px-2 text-xs" onClick={() => setRecording(inv)}>
+                            <Banknote className="mr-1 h-3 w-3" /> Record payment
+                          </Button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -608,7 +764,7 @@ export default function AdminInvoices() {
                 key={inv.id}
                 title={<span className="font-mono text-xs font-semibold text-primary">{inv.number}</span>}
                 subtitle={customerName(inv.customerId)}
-                amount={fmtMoney(inv.amount)}
+                amount={fmtMoney(invoiceAmount(inv))}
                 badge={<StatusBadge status={inv.status} />}
                 details={[
                   { label: "Due date", value: inv.dueDate ? fmtDate(inv.dueDate) : "—" },
@@ -629,23 +785,24 @@ export default function AdminInvoices() {
                 ]}
                 actions={
                   <>
-                    <Select
-                      value={inv.status}
-                      onValueChange={v =>
-                        updateStatus.mutate({ id: inv.id, status: v as (typeof INVOICE_STATUSES)[number] })
-                      }
-                    >
-                      <SelectTrigger className="h-9 flex-1 rounded-lg text-xs">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {INVOICE_STATUSES.map(st => (
-                          <SelectItem key={st} value={st} className="capitalize">
-                            {st}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    {inv.status === "paid" ? (
+                      <StatusBadge status={inv.status} />
+                    ) : (
+                      <Select
+                        value={inv.status}
+                        onValueChange={v => updateStatus.mutate({ id: inv.id, status: v as (typeof INVOICE_STATUSES)[number] })}
+                      >
+                        <SelectTrigger className="h-9 flex-1 rounded-lg text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {INVOICE_STATUSES.map(st => <SelectItem key={st} value={st} className="capitalize">{st}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    )}
+                    {inv.status !== "paid" && inv.status !== "void" && (
+                      <Button size="sm" variant="outline" className="h-9 rounded-lg text-xs" onClick={() => setRecording(inv)}>
+                        <Banknote className="mr-1 h-3.5 w-3.5" /> Record payment
+                      </Button>
+                    )}
                     {inv.linkStatus !== "paid" && inv.linkStatus !== "awaiting_approval" && inv.linkStatus !== "none" && (
                       <Button
                         size="sm"

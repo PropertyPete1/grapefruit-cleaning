@@ -17,6 +17,7 @@ const mockSessionCreate = vi.fn();
 const mockSessionExpire = vi.fn();
 const mockSendMail = vi.fn();
 const mockNotifyOwner = vi.fn();
+const mockRecordOfflineInvoicePayment = vi.fn();
 
 vi.mock("./db", () => ({
   getSetting: vi.fn().mockResolvedValue(null),
@@ -29,6 +30,7 @@ vi.mock("./db", () => ({
   updateInvoice: (...args: unknown[]) => mockUpdateInvoice(...args),
   updateBooking: (...args: unknown[]) => mockUpdateBooking(...args),
   createPayment: vi.fn(),
+  recordOfflineInvoicePayment: (...args: unknown[]) => mockRecordOfflineInvoicePayment(...args),
   listInvoices: vi.fn().mockResolvedValue([]),
 }));
 
@@ -135,6 +137,14 @@ beforeEach(() => {
   mockCreateInvoice.mockResolvedValue(501);
   mockSessionCreate.mockResolvedValue({ id: "cs_balance_1", url: "https://stripe.test/balance" });
   mockSendMail.mockResolvedValue({});
+  mockRecordOfflineInvoicePayment.mockResolvedValue({
+    outcome: "recorded",
+    invoice: PENDING,
+    paymentId: 71,
+    tipPaymentId: null,
+    bookingCompleted: false,
+    paidAt: new Date("2026-08-30T12:00:00Z"),
+  });
 });
 
 afterEach(() => {
@@ -330,24 +340,36 @@ describe("only admins may approve", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Manual collection during approval
+// Offline collection during approval
 // ---------------------------------------------------------------------------
 
 describe("in-person collection while approval is pending", () => {
-  it("marks paid and cancels the pending approval", async () => {
-    const result = await adminCaller().updateInvoiceStatus({ id: 501, status: "paid" });
+  it("records the payment row and cancels pending approval atomically", async () => {
+    const result = await adminCaller().recordOfflinePayment({
+      invoiceId: 501,
+      amount: 200,
+      method: "cash",
+      tipAmount: 0,
+      receivedOn: "2026-08-30",
+      emailReceipt: false,
+    });
 
-    expect(result.success).toBe(true);
-    const patch = mockUpdateInvoice.mock.calls[0]![1] as Record<string, unknown>;
-    expect(patch.status).toBe("paid");
-    expect(patch.paidVia).toBe("manual");
-    expect(patch.paidAt).toBeInstanceOf(Date);
-    // No Stripe session exists yet, so there is nothing to expire.
+    expect(result).toMatchObject({ success: true, paymentId: 71 });
+    expect(mockRecordOfflineInvoicePayment).toHaveBeenCalledWith(
+      expect.objectContaining({ invoiceId: 501, amountCents: 20000, method: "cash", recordedByUserId: 1 })
+    );
     expect(mockSessionExpire).not.toHaveBeenCalled();
   });
 
   it("leaves it out of the approval queue afterwards", async () => {
-    await adminCaller().updateInvoiceStatus({ id: 501, status: "paid" });
+    await adminCaller().recordOfflinePayment({
+      invoiceId: 501,
+      amount: 200,
+      method: "cash",
+      tipAmount: 0,
+      receivedOn: "2026-08-30",
+      emailReceipt: false,
+    });
     mockListAwaiting.mockResolvedValue([]);
     expect(await adminCaller().awaitingApprovalInvoices()).toEqual([]);
   });

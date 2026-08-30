@@ -34,6 +34,7 @@ import {
   sendRefundNeededAlert,
   lastEmailError,
   type BalanceEmailData,
+  type ReceiptPaymentMethod,
 } from "./emails";
 import { EXTRA_NAMES, loadPricingConfig, SERVICE_NAMES } from "./routers/booking";
 import { getStripe } from "./stripe";
@@ -713,6 +714,7 @@ export async function applyBalancePayment(
         amount: invoice.amount,
         kind: "balance",
         method: "card",
+        source: "stripe",
         stripePaymentIntentId: paymentIntentId ?? undefined,
         status: "succeeded",
       });
@@ -774,6 +776,7 @@ async function settleAgainstPaidInvoice(
     amount: invoice.amount,
     kind: "balance",
     method: "card",
+    source: "stripe",
     stripePaymentIntentId: paymentIntentId ?? undefined,
     status: "succeeded",
   });
@@ -908,7 +911,8 @@ async function notifyOwnerOfBalance(
  */
 export async function sendPaymentReceiptSafely(
   invoice: Invoice,
-  paidVia: "card" | "manual"
+  paidVia: ReceiptPaymentMethod,
+  tipAmount = 0
 ): Promise<void> {
   try {
     const booking = invoice.bookingId ? await db.getBookingById(invoice.bookingId) : undefined;
@@ -929,6 +933,7 @@ export async function sendPaymentReceiptSafely(
         ...data,
         paidOn: (invoice.paidAt ? new Date(invoice.paidAt) : new Date()).toISOString().slice(0, 10),
         paidVia,
+        tipAmount,
       },
       { invoiceId: invoice.id, bookingId: invoice.bookingId ?? null }
     );

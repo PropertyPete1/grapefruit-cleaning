@@ -840,14 +840,23 @@ export function buildBalanceDueEmail(data: BalanceEmailData): { subject: string;
  * Works for manual invoices too, where `jobless` drops the booking reference
  * and service date rather than printing them empty.
  */
+export type ReceiptPaymentMethod = "card" | "manual" | "cash" | "venmo" | "zelle" | "check" | "other";
+
 export function buildPaymentReceiptEmail(
-  data: BalanceEmailData & { paidOn: string; paidVia: "card" | "manual" }
+  data: BalanceEmailData & { paidOn: string; paidVia: ReceiptPaymentMethod; tipAmount?: number }
 ): { subject: string; body: string } {
   const jobless = data.reference === "";
-  const method =
-    data.paidVia === "card"
-      ? { en: "Card (online)", es: "Tarjeta (en línea)" }
-      : { en: "Recorded by our team", es: "Registrado por nuestro equipo" };
+  const methods: Record<ReceiptPaymentMethod, { en: string; es: string }> = {
+    card: { en: "Card (online)", es: "Tarjeta (en línea)" },
+    manual: { en: "Recorded by our team", es: "Registrado por nuestro equipo" },
+    cash: { en: "Cash", es: "Efectivo" },
+    venmo: { en: "Venmo", es: "Venmo" },
+    zelle: { en: "Zelle", es: "Zelle" },
+    check: { en: "Check", es: "Cheque" },
+    other: { en: "Other offline payment", es: "Otro pago fuera de línea" },
+  };
+  const method = methods[data.paidVia];
+  const tipAmount = data.tipAmount ?? 0;
   // A deposit line only makes sense when one was actually taken; on a manual
   // invoice, or in zero-deposit mode, printing "$0 deposit" invents a credit.
   const showDeposit = data.deposit > 0;
@@ -874,6 +883,8 @@ export function buildPaymentReceiptEmail(
         showDeposit ? `Total del servicio: ${fmtUsd(data.total)}` : undefined,
         showDeposit ? `Depósito pagado anteriormente: ${fmtUsd(data.deposit)}` : undefined,
         `Monto pagado: ${fmtUsd(data.balance)}`,
+        tipAmount > 0 ? `Propina: ${fmtUsd(tipAmount)}` : undefined,
+        tipAmount > 0 ? `Total recibido: ${fmtUsd(data.balance + tipAmount)}` : undefined,
         `Saldo pendiente: ${fmtUsd(0)}`,
         ``,
         `Su cuenta queda saldada. Guarde este correo como comprobante.`,
@@ -910,6 +921,8 @@ export function buildPaymentReceiptEmail(
       showDeposit ? `Service total: ${fmtUsd(data.total)}` : undefined,
       showDeposit ? `Deposit paid earlier: ${fmtUsd(data.deposit)}` : undefined,
       `Amount paid: ${fmtUsd(data.balance)}`,
+      tipAmount > 0 ? `Tip: ${fmtUsd(tipAmount)}` : undefined,
+      tipAmount > 0 ? `Total received: ${fmtUsd(data.balance + tipAmount)}` : undefined,
       `Balance remaining: ${fmtUsd(0)}`,
       ``,
       `Your account is settled in full. Keep this email for your records.`,
@@ -928,7 +941,7 @@ export function buildPaymentReceiptEmail(
 
 /** Sends the receipt. Never throws — a receipt must not fail a settlement. */
 export async function sendPaymentReceiptEmail(
-  data: BalanceEmailData & { paidOn: string; paidVia: "card" | "manual" },
+  data: BalanceEmailData & { paidOn: string; paidVia: ReceiptPaymentMethod; tipAmount?: number },
   context?: EmailContext
 ): Promise<boolean> {
   const email = buildPaymentReceiptEmail(data);

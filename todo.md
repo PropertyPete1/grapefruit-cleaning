@@ -406,3 +406,14 @@
 - [x] If recovery reverted SMTP identity, add a daily health-check assertion that the resolved SMTP mailbox matches the intended mailbox and alerts on mismatch
 - [x] Run full tests, TypeScript, production build, genuine restart, checkpoint, `/api/version` proof, and GitHub sync
 - [x] Rerun production SMTP verify/send, email-log query, EN/ES public-page proof, and daily health check; show one delivered production test row
+
+## Offline payment recording — cash, Venmo, Zelle, check, other
+- [x] Audit and report what current booking/invoice “completed” or “paid” actions write, whether any non-Stripe payment path exists, and the exact live completed-but-unpaid invoice before building
+- [x] Design additive payment audit fields and an atomic admin-only offline settlement path with amount, method, tip, note, date, recorder identity, and recorded timestamp
+- [x] Add Admin → Invoices “Record offline payment” UI with optional customer receipt defaulting on
+- [x] Write real offline payment and tip rows, settle invoice and open booking consistently, stop reminders/payment-link chasing, and preserve optional receipt behavior
+- [x] Separate Stripe and offline revenue in reporting while including both in totals, and exclude offline rows from Stripe reconciliation
+- [x] Add regression tests for admin authorization, idempotent/atomic settlement, tip recording, receipt choice, reminder stopping, audit fields, and Stripe/offline revenue separation
+- [ ] Apply migration after schema review; run focused and full tests, TypeScript, production build, genuine restart, checkpoint, `/api/version` proof, UI verification, and GitHub sync
+- [x] Identify the current $300 cash + $20 cash-tip case: owner confirmed those customers were never entered in this system, so no matching invoice exists and no live financial row should be created
+- [x] Preserve the out-of-system cash transaction as out of scope; do not fabricate a customer, booking, invoice, payment, or tip record

@@ -15,6 +15,7 @@ const mockUpdateInvoice = vi.fn();
 const mockSettleUnpaidInvoice = vi.fn();
 const mockFlagRefundNeeded = vi.fn();
 const mockCreatePayment = vi.fn();
+const mockRecordOfflineInvoicePayment = vi.fn();
 const mockUpdateBooking = vi.fn();
 const mockSessionCreate = vi.fn();
 const mockSessionExpire = vi.fn();
@@ -32,6 +33,7 @@ vi.mock("./db", () => ({
   settleUnpaidInvoice: (...args: unknown[]) => mockSettleUnpaidInvoice(...args),
   flagInvoiceRefundNeeded: (...args: unknown[]) => mockFlagRefundNeeded(...args),
   createPayment: (...args: unknown[]) => mockCreatePayment(...args),
+  recordOfflineInvoicePayment: (...args: unknown[]) => mockRecordOfflineInvoicePayment(...args),
   updateBooking: (...args: unknown[]) => mockUpdateBooking(...args),
   listInvoices: vi.fn().mockResolvedValue([]),
 }));
@@ -143,6 +145,14 @@ beforeEach(() => {
   // Default: this caller wins the conditional claim. Race cases override.
   mockSettleUnpaidInvoice.mockResolvedValue(true);
   mockFlagRefundNeeded.mockResolvedValue(true);
+  mockRecordOfflineInvoicePayment.mockResolvedValue({
+    outcome: "recorded",
+    invoice: INVOICE,
+    paymentId: 71,
+    tipPaymentId: null,
+    bookingCompleted: false,
+    paidAt: new Date("2026-08-30T12:00:00Z"),
+  });
 });
 
 afterEach(() => {
@@ -518,54 +528,127 @@ describe("resendBalanceLink", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Manual payment (unchanged behavior) + completion triggers
+// Audited offline payment + completion triggers
 // ---------------------------------------------------------------------------
 
-describe("admin.updateInvoiceStatus (manual collection)", () => {
-  const caller = () => adminRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+describe("admin.recordOfflinePayment", () => {
+  const adminCaller = () =>
+    adminRouter.createCaller({
+      user: { id: 1, role: "admin" },
+      req: { protocol: "https", headers: { origin: ORIGIN } },
+    } as never);
+  const staffCaller = () =>
+    adminRouter.createCaller({
+      user: { id: 2, role: "staff" },
+      req: { protocol: "https", headers: { origin: ORIGIN } },
+    } as never);
 
-  it("marks an invoice paid with a paid-at stamp, exactly as before", async () => {
-    mockGetInvoiceById.mockResolvedValue({ ...INVOICE, kind: "manual", stripeSessionId: null });
-    const result = await caller().updateInvoiceStatus({ id: 501, status: "paid" });
-
-    expect(result.success).toBe(true);
-    const patch = mockUpdateInvoice.mock.calls[0]![1] as Record<string, unknown>;
-    expect(patch.status).toBe("paid");
-    expect(patch.paidAt).toBeInstanceOf(Date);
-    expect(patch.paidVia).toBe("manual");
-    expect(mockSessionExpire).not.toHaveBeenCalled();
+  it("retires the status-only paid shortcut so revenue cannot be skipped", async () => {
+    await expect(adminCaller().updateInvoiceStatus({ id: 501, status: "paid" })).rejects.toThrow(
+      /Record offline payment/i
+    );
+    expect(mockUpdateInvoice).not.toHaveBeenCalled();
   });
 
   it("leaves paidAt alone for non-paid statuses", async () => {
     mockGetInvoiceById.mockResolvedValue({ ...INVOICE, kind: "manual" });
-    await caller().updateInvoiceStatus({ id: 501, status: "void" });
+    await adminCaller().updateInvoiceStatus({ id: 501, status: "void" });
     const patch = mockUpdateInvoice.mock.calls[0]![1] as Record<string, unknown>;
     expect(patch.status).toBe("void");
     expect(patch.paidAt).toBeUndefined();
     expect(patch.paidVia).toBeUndefined();
   });
 
-  it("closes the outstanding checkout when a balance is collected in person", async () => {
-    mockGetInvoiceById.mockResolvedValue(INVOICE);
-    await caller().updateInvoiceStatus({ id: 501, status: "paid" });
+  it("records the audited payment and tip, closes checkout, and emails one cash receipt", async () => {
+    mockRecordOfflineInvoicePayment.mockResolvedValue({
+      outcome: "recorded",
+      invoice: INVOICE,
+      paymentId: 71,
+      tipPaymentId: 72,
+      bookingCompleted: true,
+      paidAt: new Date("2026-08-30T12:00:00Z"),
+    });
+    const result = await adminCaller().recordOfflinePayment({
+      invoiceId: 501,
+      amount: 200,
+      method: "cash",
+      tipAmount: 20,
+      note: "Collected on site",
+      receivedOn: "2026-08-30",
+      emailReceipt: true,
+    });
 
-    expect(mockUpdateInvoice).toHaveBeenCalledWith(501, expect.objectContaining({ status: "paid", paidVia: "manual" }));
+    expect(result).toMatchObject({ success: true, paymentId: 71, tipPaymentId: 72, bookingCompleted: true });
+    expect(mockRecordOfflineInvoicePayment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        invoiceId: 501,
+        amountCents: 20000,
+        tipAmountCents: 2000,
+        method: "cash",
+        recordedByUserId: 1,
+      })
+    );
     expect(mockSessionExpire).toHaveBeenCalledWith("cs_balance_1");
+    const receipt = sentEmails().find(email => email.to === CUSTOMER.email)!;
+    expect(receipt.text).toContain("Payment method: Cash");
+    expect(receipt.text).toContain("Tip: $20");
+    expect(receipt.text).toContain("Total received: $220");
   });
 
-  it("still marks paid when Stripe refuses to expire the session", async () => {
-    mockGetInvoiceById.mockResolvedValue(INVOICE);
+  it("keeps the recorded settlement when Stripe refuses to expire its obsolete session", async () => {
     mockSessionExpire.mockRejectedValue(new Error("already expired"));
-    const result = await caller().updateInvoiceStatus({ id: 501, status: "paid" });
+    const result = await adminCaller().recordOfflinePayment({
+      invoiceId: 501,
+      amount: 200,
+      method: "check",
+      tipAmount: 0,
+      receivedOn: "2026-08-30",
+      emailReceipt: false,
+    });
     expect(result.success).toBe(true);
-    expect(mockUpdateInvoice).toHaveBeenCalledWith(501, expect.objectContaining({ status: "paid" }));
+    expect(mockRecordOfflineInvoicePayment).toHaveBeenCalledTimes(1);
   });
 
-  it("does not overwrite a Stripe settlement with 'manual'", async () => {
-    mockGetInvoiceById.mockResolvedValue({ ...INVOICE, status: "paid", paidVia: "stripe" });
-    await caller().updateInvoiceStatus({ id: 501, status: "paid" });
-    const patch = mockUpdateInvoice.mock.calls[0]![1] as Record<string, unknown>;
-    expect(patch.paidVia).toBeUndefined();
+  it("does not email a receipt when the admin unchecks it", async () => {
+    await adminCaller().recordOfflinePayment({
+      invoiceId: 501,
+      amount: 200,
+      method: "zelle",
+      tipAmount: 20,
+      receivedOn: "2026-08-30",
+      emailReceipt: false,
+    });
+    expect(mockSendMail).not.toHaveBeenCalled();
+  });
+
+  it("blocks non-admin users before any financial write", async () => {
+    await expect(
+      staffCaller().recordOfflinePayment({
+        invoiceId: 501,
+        amount: 200,
+        method: "cash",
+        tipAmount: 0,
+        receivedOn: "2026-08-30",
+        emailReceipt: true,
+      })
+    ).rejects.toThrow(/Admin access required/i);
+    expect(mockRecordOfflineInvoicePayment).not.toHaveBeenCalled();
+  });
+
+  it("surfaces an exact-amount mismatch without sending or expiring anything", async () => {
+    mockRecordOfflineInvoicePayment.mockResolvedValue({ outcome: "amount_mismatch", expectedAmountCents: 20000 });
+    await expect(
+      adminCaller().recordOfflinePayment({
+        invoiceId: 501,
+        amount: 199,
+        method: "venmo",
+        tipAmount: 0,
+        receivedOn: "2026-08-30",
+        emailReceipt: true,
+      })
+    ).rejects.toThrow(/\$200\.00/);
+    expect(mockSessionExpire).not.toHaveBeenCalled();
+    expect(mockSendMail).not.toHaveBeenCalled();
   });
 });
 

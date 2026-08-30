@@ -58,6 +58,8 @@ import { getStripe } from "../stripe";
 import { protectedProcedure, router } from "../_core/trpc";
 import { addonCatalogAdminRouter } from "./addonCatalogAdmin";
 import { loadAddonCatalog } from "../addonCatalog";
+import { centsToDollars, dollarsToCents } from "@shared/money";
+import { OFFLINE_PAYMENT_METHODS } from "@shared/payments";
 
 /** Admin-only procedure guard. */
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -917,43 +919,87 @@ export const adminRouter = router({
   updateInvoiceStatus: adminProcedure
     .input(z.object({ id: z.number().int(), status: z.enum(["draft", "sent", "paid", "overdue", "void"]) }))
     .mutation(async ({ ctx, input }) => {
+      if (input.status === "paid") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Use Record offline payment so the money, method, date, and recorder are included in revenue and reconciliation.",
+        });
+      }
       const invoice = await db.getInvoiceById(input.id);
       await db.updateInvoice(input.id, {
         status: input.status,
-        paidAt: input.status === "paid" ? new Date() : undefined,
-        // Record how it was settled: a card payment landing after an in-person
-        // collection is then treated as a duplicate to refund rather than
-        // double-marking the invoice paid.
-        paidVia: input.status === "paid" && invoice?.paidVia !== "stripe" ? "manual" : undefined,
       });
-      // Best-effort: close the outstanding checkout so the emailed link can't
-      // take a second payment. The refund-needed guard covers it either way.
-      // Applies to manual invoices too now that they carry live payment links.
-      if (input.status === "paid" && invoice?.stripeSessionId) {
+      return { success: true } as const;
+    }),
+  recordOfflinePayment: adminProcedure
+    .input(
+      z.object({
+        invoiceId: z.number().int(),
+        amount: z.number().positive().multipleOf(0.01),
+        method: z.enum(OFFLINE_PAYMENT_METHODS),
+        tipAmount: z.number().min(0).multipleOf(0.01).default(0),
+        note: z.string().trim().max(1000).optional(),
+        receivedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        emailReceipt: z.boolean().default(true),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const result = await db.recordOfflineInvoicePayment({
+        invoiceId: input.invoiceId,
+        amountCents: dollarsToCents(input.amount),
+        method: input.method,
+        tipAmountCents: dollarsToCents(input.tipAmount),
+        note: input.note,
+        receivedOn: input.receivedOn,
+        recordedByUserId: ctx.user.id,
+      });
+
+      switch (result.outcome) {
+        case "not_found":
+          throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found." });
+        case "already_settled":
+          throw new TRPCError({ code: "CONFLICT", message: `This invoice is already ${result.status}.` });
+        case "amount_mismatch":
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Amount must equal the invoice balance of $${centsToDollars(result.expectedAmountCents).toFixed(2)}. Correct the invoice before recording a different amount.`,
+          });
+        case "tip_already_recorded":
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "A tip is already recorded for this booking. Record the invoice payment with a $0 tip.",
+          });
+      }
+
+      // Best-effort after the financial transaction: invoice status already
+      // blocks the public route, and a genuinely late Stripe settlement is
+      // still caught by the existing refund-needed guard.
+      if (result.invoice.stripeSessionId) {
         try {
-          await getStripe().checkout.sessions.expire(invoice.stripeSessionId);
+          await getStripe().checkout.sessions.expire(result.invoice.stripeSessionId);
         } catch (error) {
-          console.warn(`[Balance] Could not expire session for invoice ${input.id}:`, error);
+          console.warn(`[OfflinePayment] Could not expire session for invoice ${input.invoiceId}:`, error);
         }
       }
-      // Marking a balance paid by hand (collected in person, say) settles the
-      // customer — the thank-you with the tip ask goes out now, claimed once.
-      // Balance only: a manual invoice has no finished job to tip a crew for.
-      //
-      // The receipt goes first, and unlike the tip it covers BOTH kinds: cash
-      // in hand is still a payment the customer deserves proof of. Only a
-      // genuine transition into `paid` sends one, so re-saving an already-paid
-      // invoice does not receipt it twice.
-      if (input.status === "paid" && invoice && invoice.status !== "paid") {
+
+      if (input.emailReceipt) {
         await sendPaymentReceiptSafely(
-          { ...invoice, paidAt: new Date() },
-          invoice.paidVia === "stripe" ? "card" : "manual"
+          { ...result.invoice, paidAt: result.paidAt },
+          input.method,
+          input.tipAmount
         );
       }
-      if (input.status === "paid" && invoice?.kind === "balance" && invoice.bookingId) {
-        await sendTipRequestEmailSafely(invoice.bookingId, originFromRequest(ctx.req));
+      if (input.tipAmount === 0 && result.invoice.kind === "balance" && result.invoice.bookingId) {
+        await sendTipRequestEmailSafely(result.invoice.bookingId, originFromRequest(ctx.req));
       }
-      return { success: true } as const;
+
+      return {
+        success: true as const,
+        paymentId: result.paymentId,
+        tipPaymentId: result.tipPaymentId,
+        bookingCompleted: result.bookingCompleted,
+        receiptRequested: input.emailReceipt,
+      };
     }),
   /**
    * Balance invoices waiting on review, with the booking/customer context the

@@ -23,6 +23,7 @@ import {
 import { ENV } from './_core/env';
 import { blocksSlot, STALE_DEPOSIT_MINUTES } from "./bookingRules";
 import { dollarsToCents, legacyWholeDollars } from "@shared/money";
+import type { OfflinePaymentMethod } from "@shared/payments";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -861,7 +862,12 @@ export async function claimTipPayment(
   const db = requireDb(await getDb());
   const result = await db
     .update(bookings)
-    .set({ tipPaidAt: now, tipAmount: data.amount, tipStripePaymentIntentId: data.stripePaymentIntentId })
+    .set({
+      tipPaidAt: now,
+      tipAmount: data.amount,
+      tipAmountCents: dollarsToCents(data.amount),
+      tipStripePaymentIntentId: data.stripePaymentIntentId,
+    })
     .where(and(eq(bookings.id, id), isNull(bookings.tipPaidAt)));
   return affectedRows(result) > 0;
 }
@@ -1149,12 +1155,170 @@ export async function createPayment(data: typeof payments.$inferInsert) {
 
 export async function listPayments() {
   const db = requireDb(await getDb());
-  return db.select().from(payments).orderBy(desc(payments.createdAt)).limit(300);
+  const rows = await db
+    .select({ payment: payments, recordedByName: users.name, recordedByEmail: users.email })
+    .from(payments)
+    .leftJoin(users, eq(payments.recordedByUserId, users.id))
+    .orderBy(desc(payments.createdAt))
+    .limit(300);
+  return rows.map(row => ({
+    ...row.payment,
+    recordedByName: row.recordedByName ?? null,
+    recordedByEmail: row.recordedByEmail ?? null,
+  }));
 }
 
 export async function updatePayment(id: number, data: Partial<typeof payments.$inferInsert>) {
   const db = requireDb(await getDb());
   await db.update(payments).set(normalizePaymentMoney(data)).where(eq(payments.id, id));
+}
+
+export type OfflineInvoicePaymentOutcome =
+  | { outcome: "not_found" }
+  | { outcome: "already_settled"; status: string }
+  | { outcome: "amount_mismatch"; expectedAmountCents: number }
+  | { outcome: "tip_already_recorded" }
+  | {
+      outcome: "recorded";
+      invoice: typeof invoices.$inferSelect;
+      paymentId: number;
+      tipPaymentId: number | null;
+      bookingCompleted: boolean;
+      paidAt: Date;
+    };
+
+class OfflineTipAlreadyRecordedError extends Error {}
+
+/**
+ * Atomically settles one invoice with money received outside Stripe.
+ *
+ * The invoice claim, primary payment row, optional tip row, booking completion,
+ * and canonical booking tip state commit together or not at all. The amount must
+ * equal the invoice's exact outstanding amount; partial/over payments need a
+ * corrected invoice rather than silently making reconciliation ambiguous.
+ */
+export async function recordOfflineInvoicePayment(args: {
+  invoiceId: number;
+  amountCents: number;
+  method: OfflinePaymentMethod;
+  tipAmountCents: number;
+  note?: string;
+  receivedOn: string;
+  recordedByUserId: number;
+  recordedAt?: Date;
+}): Promise<OfflineInvoicePaymentOutcome> {
+  const db = requireDb(await getDb());
+  const recordedAt = args.recordedAt ?? new Date();
+  // Noon UTC preserves the selected calendar date for every US timezone while
+  // receivedOn remains the authoritative business-date field for reporting.
+  const paidAt = new Date(`${args.receivedOn}T12:00:00.000Z`);
+
+  try {
+    return await db.transaction(async tx => {
+      const [invoice] = await tx.select().from(invoices).where(eq(invoices.id, args.invoiceId)).limit(1);
+      if (!invoice) return { outcome: "not_found" } as const;
+      if (invoice.status === "paid" || invoice.status === "void") {
+        return { outcome: "already_settled", status: invoice.status } as const;
+      }
+
+      const expectedAmountCents = invoice.amountCents ?? dollarsToCents(invoice.amount);
+      if (args.amountCents !== expectedAmountCents) {
+        return { outcome: "amount_mismatch", expectedAmountCents } as const;
+      }
+
+      const settled = await tx
+        .update(invoices)
+        .set({
+          status: "paid",
+          paidAt,
+          paidVia: "manual",
+          ...(invoice.status === "awaiting_approval"
+            ? { approvedAt: recordedAt, approvedByUserId: args.recordedByUserId }
+            : {}),
+        })
+        .where(and(eq(invoices.id, invoice.id), notInArray(invoices.status, ["paid", "void"])));
+      if (affectedRows(settled) === 0) {
+        return { outcome: "already_settled", status: "paid" } as const;
+      }
+
+      const paymentResult = await tx.insert(payments).values(
+        normalizePaymentMoney({
+          bookingId: invoice.bookingId,
+          invoiceId: invoice.id,
+          customerId: invoice.customerId,
+          amountCents: args.amountCents,
+          kind: invoice.bookingId ? "balance" : "full",
+          method: args.method,
+          source: "offline",
+          receivedOn: args.receivedOn,
+          note: args.note?.trim() || null,
+          recordedByUserId: args.recordedByUserId,
+          recordedAt,
+          status: "succeeded",
+        }) as PaymentInsert
+      );
+      const paymentId = Number(paymentResult[0].insertId);
+
+      let tipPaymentId: number | null = null;
+      if (args.tipAmountCents > 0) {
+        if (invoice.bookingId) {
+          const claimedTip = await tx
+            .update(bookings)
+            .set({
+              tipPaidAt: paidAt,
+              tipAmount: legacyWholeDollars(args.tipAmountCents),
+              tipAmountCents: args.tipAmountCents,
+              tipStripePaymentIntentId: null,
+            })
+            .where(and(eq(bookings.id, invoice.bookingId), isNull(bookings.tipPaidAt)));
+          if (affectedRows(claimedTip) === 0) throw new OfflineTipAlreadyRecordedError();
+        }
+        const tipResult = await tx.insert(payments).values(
+          normalizePaymentMoney({
+            bookingId: invoice.bookingId,
+            invoiceId: invoice.id,
+            customerId: invoice.customerId,
+            amountCents: args.tipAmountCents,
+            kind: "tip",
+            method: args.method,
+            source: "offline",
+            receivedOn: args.receivedOn,
+            note: args.note?.trim() || null,
+            recordedByUserId: args.recordedByUserId,
+            recordedAt,
+            status: "succeeded",
+          }) as PaymentInsert
+        );
+        tipPaymentId = Number(tipResult[0].insertId);
+      }
+
+      let bookingCompleted = false;
+      if (invoice.bookingId) {
+        const completed = await tx
+          .update(bookings)
+          .set({ status: "completed" })
+          .where(
+            and(
+              eq(bookings.id, invoice.bookingId),
+              inArray(bookings.status, ["confirmed", "in_progress"])
+            )
+          );
+        bookingCompleted = affectedRows(completed) > 0;
+      }
+
+      return {
+        outcome: "recorded",
+        invoice: { ...invoice, status: "paid", paidAt, paidVia: "manual" },
+        paymentId,
+        tipPaymentId,
+        bookingCompleted,
+        paidAt,
+      } as const;
+    });
+  } catch (error) {
+    if (error instanceof OfflineTipAlreadyRecordedError) return { outcome: "tip_already_recorded" };
+    throw error;
+  }
 }
 
 // ---------- Reviews ----------
@@ -1714,14 +1878,49 @@ export async function unsubscribeFromMarketing(customerId: number, now: Date = n
 }
 
 // ---------- Statistics ----------
+export function summarizeRevenueBySource(
+  rows: { source: "stripe" | "offline"; totalCents: number | string }[]
+) {
+  let stripeCents = 0;
+  let offlineCents = 0;
+  for (const row of rows) {
+    if (row.source === "offline") offlineCents += Number(row.totalCents);
+    else stripeCents += Number(row.totalCents);
+  }
+  return {
+    totalRevenue: (stripeCents + offlineCents) / 100,
+    stripeRevenue: stripeCents / 100,
+    offlineRevenue: offlineCents / 100,
+  };
+}
+
+export function mergeMonthlyRevenueRows(
+  rows: { month: string; source: "stripe" | "offline"; totalCents: number | string }[]
+) {
+  const byMonth = new Map<string, { month: string; total: number; stripe: number; offline: number }>();
+  for (const row of rows) {
+    const item = byMonth.get(row.month) ?? { month: row.month, total: 0, stripe: 0, offline: 0 };
+    const dollars = Number(row.totalCents) / 100;
+    item.total += dollars;
+    item[row.source] += dollars;
+    byMonth.set(row.month, item);
+  }
+  return Array.from(byMonth.values());
+}
+
 export async function getDashboardStats() {
   const db = requireDb(await getDb());
   const [bookingCount] = await db.select({ count: sql<number>`COUNT(*)` }).from(bookings);
   const [customerCount] = await db.select({ count: sql<number>`COUNT(*)` }).from(customers);
-  const [revenue] = await db
-    .select({ total: sql<number>`COALESCE(SUM(${payments.amount}), 0)` })
+  const revenueRows = await db
+    .select({
+      source: payments.source,
+      totalCents: sql<number>`COALESCE(SUM(COALESCE(${payments.amountCents}, ${payments.amount} * 100)), 0)`,
+    })
     .from(payments)
-    .where(eq(payments.status, "succeeded"));
+    .where(eq(payments.status, "succeeded"))
+    .groupBy(payments.source);
+  const revenue = summarizeRevenueBySource(revenueRows);
   const [pendingCount] = await db
     .select({ count: sql<number>`COUNT(*)` })
     .from(bookings)
@@ -1733,7 +1932,7 @@ export async function getDashboardStats() {
   return {
     totalBookings: Number(bookingCount.count),
     totalCustomers: Number(customerCount.count),
-    totalRevenue: Number(revenue.total),
+    ...revenue,
     upcomingBookings: Number(pendingCount.count),
     averageRating: Number(reviewAvg.avg),
   };
@@ -1741,15 +1940,18 @@ export async function getDashboardStats() {
 
 export async function getMonthlyRevenue() {
   const db = requireDb(await getDb());
-  return db
+  const rows = await db
     .select({
-      month: sql<string>`DATE_FORMAT(${payments.createdAt}, '%Y-%m')`.as("month"),
-      total: sql<number>`SUM(${payments.amount})`,
+      month: sql<string>`DATE_FORMAT(CASE WHEN ${payments.source} = 'offline' AND ${payments.receivedOn} IS NOT NULL THEN STR_TO_DATE(${payments.receivedOn}, '%Y-%m-%d') ELSE ${payments.createdAt} END, '%Y-%m')`.as("month"),
+      source: payments.source,
+      totalCents: sql<number>`SUM(COALESCE(${payments.amountCents}, ${payments.amount} * 100))`,
     })
     .from(payments)
     .where(eq(payments.status, "succeeded"))
-    .groupBy(sql`month`)
+    .groupBy(sql`month`, payments.source)
     .orderBy(sql`month`);
+
+  return mergeMonthlyRevenueRows(rows);
 }
 
 export async function getBookingsByService() {

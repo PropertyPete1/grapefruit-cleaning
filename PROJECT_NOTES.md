@@ -553,3 +553,32 @@ existing rows had no selected add-ons or itemized invoice snapshots.
 Final pre-deploy verification: 1,214 tests passed, 1 SMTP test skipped; TypeScript
 and production build clean; desktop 1280 and mobile 390 screenshots verified EN,
 ES, admin catalog and invoices with no horizontal page overflow.
+
+## Offline invoice payments — Aug 30, 2026
+
+Migrations 0028 and 0029 add payment provenance/audit fields and exact booking tip
+cents without changing existing financial rows. `payments.source` is `stripe` or
+`offline` and defaults to `stripe`, so all pre-feature rows retain their correct
+classification. Offline rows store the selected method (`cash`, `venmo`, `zelle`,
+`check`, or `other`), business receipt date, optional note, recording admin user,
+and recording timestamp. A balance payment and optional tip are separate
+`succeeded` rows; both share the same source, method, invoice, booking, customer,
+date, note, and recorder audit trail. Stripe rows continue to carry a Payment
+Intent and are the only rows eligible for Stripe cross-checks.
+
+Admin → Invoices now uses **Record offline payment** rather than allowing a bare
+status flip to Paid. The database transaction conditionally claims the unpaid
+invoice, requires the exact invoice balance, writes the principal payment and
+optional tip, stores the canonical booking tip, and moves a confirmed or
+in-progress booking to completed. Any failure rolls the entire transaction back.
+The paid invoice immediately falls out of the `status='sent'` reminder query, so
+payment-link reminders and chasing stop. The existing checkout is expired on a
+best-effort basis after commit; any genuinely late Stripe settlement still uses
+the refund-needed guard.
+
+Customer receipt email is optional for offline payments and defaults on. It uses
+the existing bilingual receipt template with the actual offline method and, when
+present, separate invoice, tip, and total-received lines. Revenue totals include
+all succeeded payments, while Admin → Statistics and Admin → Payments show Stripe
+and offline sources separately. Never create customer, booking, invoice, payment,
+or tip rows merely to represent an out-of-system cash job.

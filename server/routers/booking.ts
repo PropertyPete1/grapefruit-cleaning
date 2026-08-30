@@ -720,6 +720,7 @@ export async function applyConfirmationSideEffects(
       amountCents: booking.depositAmountCents ?? dollarsToCents(booking.depositAmount),
       kind: "deposit",
       method: "card",
+      source: "stripe",
       stripePaymentIntentId: paymentIntentId ?? undefined,
       status: "succeeded",
     });

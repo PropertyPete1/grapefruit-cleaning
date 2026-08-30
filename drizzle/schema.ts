@@ -166,6 +166,8 @@ export const bookings = mysqlTable("bookings", {
   tipPaidAt: timestamp("tipPaidAt"),
   /** The tip actually paid, in whole dollars. */
   tipAmount: int("tipAmount"),
+  /** Exact tip amount for new Stripe and offline writes; null means read legacy `tipAmount * 100`. */
+  tipAmountCents: int("tipAmountCents"),
   /** Payment intent that paid the tip — how a redelivered event is told from a genuine second payment. */
   tipStripePaymentIntentId: varchar("tipStripePaymentIntentId", { length: 255 }),
   /** Set when the customer tapped "no tip, just say thanks" — the page stops asking. */
@@ -552,6 +554,16 @@ export const payments = mysqlTable("payments", {
   amountCents: int("amountCents"),
   kind: mysqlEnum("kind", ["deposit", "balance", "full", "refund", "tip"]).default("deposit").notNull(),
   method: varchar("method", { length: 40 }).default("card"),
+  /** Explicit provenance: existing/default rows are Stripe; admin-entered rows are offline. */
+  source: mysqlEnum("source", ["stripe", "offline"]).default("stripe").notNull(),
+  /** Business-local date the offline money was actually received (YYYY-MM-DD). */
+  receivedOn: varchar("receivedOn", { length: 10 }),
+  /** Optional operator note for offline collections; never used as Stripe reconciliation data. */
+  note: text("note"),
+  /** users.id of the admin who recorded an offline payment. */
+  recordedByUserId: int("recordedByUserId"),
+  /** Audit timestamp for when the offline record was entered into the system. */
+  recordedAt: timestamp("recordedAt"),
   stripePaymentIntentId: varchar("stripePaymentIntentId", { length: 255 }),
   status: mysqlEnum("status", ["pending", "succeeded", "failed", "refunded"]).default("pending").notNull(),
   repairNote: text("repairNote"),

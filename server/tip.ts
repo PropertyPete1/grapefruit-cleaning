@@ -222,6 +222,7 @@ export async function applyTipPayment(
       amount,
       kind: "tip",
       method: "card",
+      source: "stripe",
       stripePaymentIntentId: paymentIntentId ?? undefined,
       status: "succeeded",
     });

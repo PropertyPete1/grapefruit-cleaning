@@ -21,7 +21,12 @@ export default function AdminStatistics() {
   const revenue = trpc.admin.monthlyRevenue.useQuery();
   const byService = trpc.admin.bookingsByService.useQuery();
 
-  const revenueData = (revenue.data ?? []).map(r => ({ month: r.month, total: Number(r.total) }));
+  const revenueData = (revenue.data ?? []).map(r => ({
+    month: r.month,
+    total: Number(r.total),
+    stripe: Number(r.stripe),
+    offline: Number(r.offline),
+  }));
   const serviceData = (byService.data ?? []).map(s => ({
     name: s.serviceType ? (SERVICE_LABELS[s.serviceType] ?? s.serviceType) : "Not chosen yet",
     value: Number(s.count),
@@ -31,11 +36,12 @@ export default function AdminStatistics() {
     <div>
       <PageHeader title="Statistics" subtitle="Revenue and booking analytics" />
 
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {[
           { label: "Lifetime revenue", value: stats.data ? fmtMoney(stats.data.totalRevenue) : null },
+          { label: "Stripe revenue", value: stats.data ? fmtMoney(stats.data.stripeRevenue) : null },
+          { label: "Offline revenue", value: stats.data ? fmtMoney(stats.data.offlineRevenue) : null },
           { label: "Total bookings", value: stats.data ? String(stats.data.totalBookings) : null },
-          { label: "Average rating", value: stats.data ? (stats.data.averageRating > 0 ? stats.data.averageRating.toFixed(1) : "—") : null },
         ].map(c => (
           <div key={c.label} className="rounded-2xl bg-card p-6 shadow-sm ring-1 ring-border">
             <p className="text-sm text-muted-foreground">{c.label}</p>
@@ -55,7 +61,7 @@ export default function AdminStatistics() {
             <Skeleton className="mt-4 h-64 w-full" />
           ) : revenueData.length === 0 ? (
             <p className="flex h-64 items-center justify-center text-sm text-muted-foreground">
-              Revenue data will appear when deposits are collected.
+              Revenue data will appear when Stripe or offline payments are recorded.
             </p>
           ) : (
             <div className="mt-4 h-64">
@@ -64,8 +70,9 @@ export default function AdminStatistics() {
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                   <XAxis dataKey="month" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fontSize: 12 }} axisLine={false} tickLine={false} tickFormatter={v => `$${v}`} />
-                  <Tooltip formatter={(v: number) => [`$${v.toLocaleString()}`, "Revenue"]} />
-                  <Bar dataKey="total" fill="#f26649" radius={[6, 6, 0, 0]} />
+                  <Tooltip formatter={(v: number, name: string) => [`$${v.toLocaleString()}`, name === "stripe" ? "Stripe" : "Offline"]} />
+                  <Bar dataKey="stripe" stackId="revenue" fill="#5b8def" radius={[0, 0, 0, 0]} />
+                  <Bar dataKey="offline" stackId="revenue" fill="#f26649" radius={[6, 6, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
