@@ -452,6 +452,6 @@
 - [x] Report all four production findings to the owner before any repair or manual feed sync
 - [x] Restore only confirmed Properties, schedule, sync, or calendar defects; do not fabricate the lost Steven property because the owner will add its feed in Admin after deployment
 - [x] Add daily health findings for properties whose iCal feed has not synced successfully in 24 hours and for missing, disabled, or stale critical cron jobs
-- [ ] Add regression tests, run TypeScript/full suite/build, publish with genuine restart, and prove `/api/version`
-- [ ] Verify the live Properties route and healthy schedule/health behavior without creating records; provide the owner the exact post-deploy steps to add Steven’s feed, sync it, and confirm turnovers in Calendar
-- [ ] Synchronize the final deployed revision to private GitHub main and document the production schedule safeguards
+- [x] Add regression tests, run TypeScript/full suite/build, publish with genuine restart, and prove `/api/version`
+- [x] Verify the live Properties route and healthy schedule/health behavior without creating records; provide the owner the exact post-deploy steps to add Steven’s feed, sync it, and confirm turnovers in Calendar
+- [x] Synchronize the final deployed revision to private GitHub main and document the production schedule safeguards
