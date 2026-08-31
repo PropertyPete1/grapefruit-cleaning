@@ -40,6 +40,7 @@ export const GUARDED_ENV_KEYS = [
  * this file for why this one value survives.
  */
 const capturedBrainToken = process.env.BRAIN_READ_TOKEN;
+const capturedBrainWriteToken = process.env.BRAIN_WRITE_TOKEN;
 const capturedLiveSmtp = {
   host: process.env.SMTP_HOST,
   port: process.env.SMTP_PORT,
@@ -61,6 +62,7 @@ for (const key of GUARDED_ENV_KEYS) {
  * it did not ask for.
  */
 export const LIVE_BRAIN_TOKEN_KEY = "__LIVE_BRAIN_READ_TOKEN__";
+export const LIVE_BRAIN_WRITE_TOKEN_KEY = "__LIVE_BRAIN_WRITE_TOKEN__";
 export const LIVE_SMTP_KEYS = {
   host: "__LIVE_SMTP_HOST__",
   port: "__LIVE_SMTP_PORT__",
@@ -70,6 +72,9 @@ export const LIVE_SMTP_KEYS = {
 
 if (capturedBrainToken) {
   process.env[LIVE_BRAIN_TOKEN_KEY] = capturedBrainToken;
+}
+if (capturedBrainWriteToken) {
+  process.env[LIVE_BRAIN_WRITE_TOKEN_KEY] = capturedBrainWriteToken;
 }
 
 if (capturedLiveSmtp.host) process.env[LIVE_SMTP_KEYS.host] = capturedLiveSmtp.host;

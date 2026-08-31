@@ -417,3 +417,14 @@
 - [x] Apply migration after schema review; run focused and full tests, TypeScript, production build, genuine restart, checkpoint, `/api/version` proof, automated UI contract verification (authenticated visual check waived by owner), and GitHub sync
 - [x] Identify the current $300 cash + $20 cash-tip case: owner confirmed those customers were never entered in this system, so no matching invoice exists and no live financial row should be created
 - [x] Preserve the out-of-system cash transaction as out of scope; do not fabricate a customer, booking, invoice, payment, or tip record
+
+## Brain write API — PR #16 deployment
+- [x] Synchronize the shared project with latest GitHub `main` containing merged PR #16 without overwriting concurrent changes
+- [x] Audit the five write routes, authorization contract, unknown-route handling, and migration 0030 before deployment
+- [x] Apply migration 0030 with production before/after checks and confirm `pnpm db:push` becomes a no-op
+- [x] Generate a strong random `BRAIN_WRITE_TOKEN`, store it only in managed Secrets, and retain only a masked first/last-four fingerprint for delivery
+- [x] Confirm `PUBLIC_BASE_URL` is defined correctly without exposing unrelated secret values
+- [ ] Run focused and full tests, TypeScript, production build, genuine restart, checkpoint, and `/api/version` proof
+- [ ] Prove all five production write routes return 401 with no token and the read token, then return a real non-mutating/validation-safe response with the write token
+- [ ] Prove an unknown production `POST /api/brain/*` route returns 404 `{\"error\":\"unknown brain route\"}`
+- [ ] Confirm production data integrity and synchronize the final deployed revision to private GitHub main
