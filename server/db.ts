@@ -22,6 +22,7 @@ import {
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { blocksSlot, STALE_DEPOSIT_MINUTES } from "./bookingRules";
+import { customerFillsFor } from "./brainWriteRules";
 import { dollarsToCents, legacyWholeDollars } from "@shared/money";
 import type { OfflinePaymentMethod } from "@shared/payments";
 
@@ -199,6 +200,60 @@ export async function findOrCreateCustomer(data: {
   }
   const result = await db.insert(customers).values({ ...data, lastName: data.lastName ?? "" });
   return Number(result[0].insertId);
+}
+
+/**
+ * The brain write API's variant of findOrCreateCustomer: the same
+ * email-first-then-phone matching and the same insert, but a match NEVER
+ * overwrites a non-empty field — blanks are filled (customerFillsFor decides
+ * which) and everything already on file is kept. The brain proposes "create",
+ * never "silently rewrite": the admin panel's clobbering update is right when
+ * the owner is looking at the form, and wrong for a spoken approval.
+ *
+ * `note` is the write's attribution line ("[via PRIMARY — <operator>]"). A
+ * new row starts its notes with it; a matched row gets it appended only when
+ * the write actually changed something — a pure match is a read, and reads
+ * are not audited into the record.
+ */
+export async function matchOrCreateCustomer(data: {
+  firstName: string;
+  lastName?: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  city?: string;
+  zip?: string;
+  note?: string;
+}): Promise<{ customerId: number; existed: boolean }> {
+  const db = requireDb(await getDb());
+  const match = data.email
+    ? eq(customers.email, data.email)
+    : data.phone
+      ? eq(customers.phone, data.phone)
+      : null;
+  const existing = match ? await db.select().from(customers).where(match).limit(1) : [];
+  if (existing.length > 0) {
+    const row = existing[0];
+    const fills = customerFillsFor(row, data);
+    if (Object.keys(fills).length > 0) {
+      await db
+        .update(customers)
+        .set(data.note ? { ...fills, notes: row.notes ? `${row.notes}\n${data.note}` : data.note } : fills)
+        .where(eq(customers.id, row.id));
+    }
+    return { customerId: row.id, existed: true };
+  }
+  const result = await db.insert(customers).values({
+    firstName: data.firstName,
+    lastName: data.lastName ?? "",
+    email: data.email,
+    phone: data.phone,
+    address: data.address,
+    city: data.city,
+    zip: data.zip,
+    notes: data.note,
+  });
+  return { customerId: Number(result[0].insertId), existed: false };
 }
 
 export async function listCustomers(search?: string) {

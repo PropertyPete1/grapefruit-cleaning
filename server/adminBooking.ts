@@ -56,6 +56,14 @@ export function generateDepositToken(): string {
  * absence of extras and of any price.
  */
 export interface AdminBookingInput {
+  /**
+   * Book for this exact customer row, skipping the find-or-create matching
+   * entirely — the brain write API's passthrough, for the operator who picked
+   * the record by id rather than spelling out contact info. The caller has
+   * already verified the row exists and fills the identity fields below from
+   * it, so the booking, its emails, and its link all carry the right name.
+   */
+  customerId?: number;
   firstName: string;
   lastName?: string;
   email?: string;
@@ -243,7 +251,10 @@ export async function createAdminBooking(
   input: AdminBookingInput,
   origin: string
 ): Promise<AdminBookingResult> {
-  if (!input.email && !input.phone) {
+  // With a customerId the record is already chosen; its row is the source of
+  // contact truth, and a row with neither email nor phone still books (the
+  // owner can read the link aloud or fix the profile after).
+  if (input.customerId == null && !input.email && !input.phone) {
     throw new TRPCError({ code: "BAD_REQUEST", message: "Enter an email or a phone number — the link needs a way to reach them." });
   }
   const hasSlot = Boolean(input.date && input.time);
@@ -325,16 +336,18 @@ export async function createAdminBooking(
   // is at stake, and the stale-release machinery skips slotless rows entirely.
   const expiresAt = depositLinkExpiresAt(createdAt, holdMinutes);
 
-  const customerId = await db.findOrCreateCustomer({
-    firstName: input.firstName,
-    lastName: input.lastName,
-    email: input.email,
-    phone: input.phone,
-    address: input.address,
-    city: input.city,
-    zip: input.zip,
-    preferredLocale: input.locale ?? "en",
-  });
+  const customerId =
+    input.customerId ??
+    (await db.findOrCreateCustomer({
+      firstName: input.firstName,
+      lastName: input.lastName,
+      email: input.email,
+      phone: input.phone,
+      address: input.address,
+      city: input.city,
+      zip: input.zip,
+      preferredLocale: input.locale ?? "en",
+    }));
 
   // Provenance: the facts the OWNER locked. Everything else is the customer's
   // to fill in — and to re-edit until they pay.
