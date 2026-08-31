@@ -13,6 +13,7 @@
  */
 import { FIRST_NUDGE_DAYS, REPEAT_NUDGE_DAYS, nudgeDecision, type NudgeCandidate } from "@shared/marketingRules";
 import * as db from "./db";
+import { listHeartbeatJobs, type HeartbeatJobInfo } from "./_core/heartbeat";
 import { sendOwnerAlert, smtpUser } from "./emails";
 
 // ---------------------------------------------------------------------------
@@ -23,6 +24,21 @@ export interface HealthFindings {
   paidOnOpenBookings: Array<{ invoiceNumber: string; reference: string; bookingStatus: string; amount: number }>;
   deadLinks: Array<{ invoiceNumber: string; amount: number; expiredOn: string }>;
   customersWithoutEmail: Array<{ name: string; phone: string | null }>;
+  staleIcalProperties: Array<{
+    id: number;
+    label: string;
+    address: string;
+    lastSuccessfulSyncAt: string | null;
+    hoursSinceSuccess: number | null;
+    lastError: string | null;
+  }>;
+  criticalScheduleProblems: Array<{
+    name: string;
+    problem: "missing" | "disabled" | "misconfigured" | "stale" | "inspection_failed";
+    detail: string;
+    lastExecutedAt: string | null;
+    nextExecutionAt: string | null;
+  }>;
   /** Public business mailbox compared with the transport's resolved sender. */
   smtpIdentity: {
     expected: string | null;
@@ -31,6 +47,101 @@ export interface HealthFindings {
   };
   /** True when something needs a human. Missing emails alone do NOT qualify. */
   hasProblems: boolean;
+}
+
+const HOUR_MS = 60 * 60 * 1000;
+const ICAL_SUCCESS_MAX_AGE_MS = 24 * HOUR_MS;
+const NEXT_EXECUTION_GRACE_MS = 15 * 60 * 1000;
+
+const CRITICAL_SCHEDULES = [
+  {
+    name: "hourly-ical-sync",
+    cron: "0 5 * * * *",
+    path: "/api/scheduled/icalSync",
+    maxAgeMs: 2 * HOUR_MS,
+  },
+  {
+    name: "daily-booking-reminders",
+    cron: "0 0 14 * * *",
+    path: "/api/scheduled/sendReminders",
+    maxAgeMs: 26 * HOUR_MS,
+  },
+] as const;
+
+function asMillis(value: Date | string | null | undefined): number | null {
+  if (!value) return null;
+  const millis = value instanceof Date ? value.getTime() : new Date(value).getTime();
+  return Number.isFinite(millis) ? millis : null;
+}
+
+function asIso(value: Date | string | null | undefined): string | null {
+  const millis = asMillis(value);
+  return millis === null ? null : new Date(millis).toISOString();
+}
+
+export function inspectCriticalSchedules(
+  jobs: HeartbeatJobInfo[],
+  now: Date = new Date()
+): HealthFindings["criticalScheduleProblems"] {
+  const byName = new Map(jobs.map(job => [job.name, job]));
+  const nowMs = now.getTime();
+  const findings: HealthFindings["criticalScheduleProblems"] = [];
+
+  for (const expected of CRITICAL_SCHEDULES) {
+    const job = byName.get(expected.name);
+    if (!job) {
+      findings.push({
+        name: expected.name,
+        problem: "missing",
+        detail: `Job is not registered; expected ${expected.cron} → ${expected.path}.`,
+        lastExecutedAt: null,
+        nextExecutionAt: null,
+      });
+      continue;
+    }
+
+    const lastExecutedMs = asMillis(job.lastExecutedAt);
+    const nextExecutionMs = asMillis(job.nextExecutionAt);
+    const base = {
+      name: expected.name,
+      lastExecutedAt: asIso(job.lastExecutedAt),
+      nextExecutionAt: asIso(job.nextExecutionAt),
+    };
+
+    if (!job.isEnable) {
+      findings.push({ ...base, problem: "disabled", detail: "Job is registered but disabled." });
+      continue;
+    }
+
+    const configDifferences: string[] = [];
+    if (job.cronExpression !== expected.cron) {
+      configDifferences.push(`cron is ${job.cronExpression || "(missing)"}; expected ${expected.cron}`);
+    }
+    if (job.callbackPath !== expected.path) {
+      configDifferences.push(`callback is ${job.callbackPath || "(missing)"}; expected ${expected.path}`);
+    }
+    if (configDifferences.length > 0) {
+      findings.push({ ...base, problem: "misconfigured", detail: configDifferences.join("; ") });
+      continue;
+    }
+
+    const staleReasons: string[] = [];
+    if (lastExecutedMs === null) {
+      staleReasons.push("no completed execution is recorded");
+    } else if (nowMs - lastExecutedMs > expected.maxAgeMs) {
+      staleReasons.push(`last execution is ${Math.round((nowMs - lastExecutedMs) / HOUR_MS * 10) / 10} hours old`);
+    }
+    if (nextExecutionMs === null) {
+      staleReasons.push("no next execution is scheduled");
+    } else if (nextExecutionMs < nowMs - NEXT_EXECUTION_GRACE_MS) {
+      staleReasons.push("next execution is stuck in the past");
+    }
+    if (staleReasons.length > 0) {
+      findings.push({ ...base, problem: "stale", detail: staleReasons.join("; ") });
+    }
+  }
+
+  return findings;
 }
 
 function fmtDate(d: Date | string | null | undefined): string {
@@ -47,14 +158,46 @@ function fmtDate(d: Date | string | null | undefined): string {
  * permanent fact of the business is how an alert channel gets ignored.
  */
 export async function runHealthCheck(now: Date = new Date()): Promise<HealthFindings> {
-  const [paid, dead, noEmail, configuredBusinessEmail] = await Promise.all([
+  const [paid, dead, noEmail, configuredBusinessEmail, activeProperties, heartbeat] = await Promise.all([
     db.findPaidInvoicesOnOpenBookings(),
     db.findInvoicesWithDeadLinks(now),
     db.findCustomersWithoutEmail(),
     db.getSetting("business_email"),
+    db.listActiveSyncProperties(),
+    listHeartbeatJobs("", { pageSize: 200 })
+      .then(result => ({ jobs: result.jobs, error: null as string | null }))
+      .catch(error => ({
+        jobs: [] as HeartbeatJobInfo[],
+        error: error instanceof Error ? error.message : String(error),
+      })),
   ]);
   const expectedSmtpUser = configuredBusinessEmail?.trim() || null;
   const effectiveSmtpUser = smtpUser()?.trim() || null;
+  const nowMs = now.getTime();
+  const staleIcalProperties = activeProperties.flatMap(property => {
+    const successfulAt = property.lastSuccessfulSyncAt;
+    const successfulMs = asMillis(successfulAt);
+    if (successfulMs !== null && nowMs - successfulMs <= ICAL_SUCCESS_MAX_AGE_MS) return [];
+    return [{
+      id: property.id,
+      label: property.label,
+      address: [property.addressLine, property.unitNumber, property.city, property.zip].filter(Boolean).join(", "),
+      lastSuccessfulSyncAt: asIso(successfulAt),
+      hoursSinceSuccess: successfulMs === null
+        ? null
+        : Math.round((nowMs - successfulMs) / HOUR_MS * 10) / 10,
+      lastError: property.lastSyncStatus && property.lastSyncStatus !== "ok" ? property.lastSyncStatus : null,
+    }];
+  });
+  const criticalScheduleProblems: HealthFindings["criticalScheduleProblems"] = heartbeat.error
+    ? [{
+        name: "Heartbeat registry",
+        problem: "inspection_failed",
+        detail: heartbeat.error,
+        lastExecutedAt: null,
+        nextExecutionAt: null,
+      }]
+    : inspectCriticalSchedules(heartbeat.jobs, now);
 
   const findings: HealthFindings = {
     paidOnOpenBookings: paid.map(r => ({
@@ -72,6 +215,8 @@ export async function runHealthCheck(now: Date = new Date()): Promise<HealthFind
       name: `${c.firstName} ${c.lastName}`.trim(),
       phone: c.phone,
     })),
+    staleIcalProperties,
+    criticalScheduleProblems,
     smtpIdentity: {
       expected: expectedSmtpUser,
       effective: effectiveSmtpUser,
@@ -84,8 +229,18 @@ export async function runHealthCheck(now: Date = new Date()): Promise<HealthFind
   findings.hasProblems =
     findings.paidOnOpenBookings.length > 0 ||
     findings.deadLinks.length > 0 ||
+    findings.staleIcalProperties.length > 0 ||
+    findings.criticalScheduleProblems.length > 0 ||
     findings.smtpIdentity.matches === false;
   return findings;
+}
+
+export function healthProblemCount(findings: HealthFindings): number {
+  return findings.paidOnOpenBookings.length +
+    findings.deadLinks.length +
+    findings.staleIcalProperties.length +
+    findings.criticalScheduleProblems.length +
+    (findings.smtpIdentity.matches === false ? 1 : 0);
 }
 
 /** The health section, as plain text. Used by both the alert and the digest. */
@@ -125,6 +280,24 @@ export function formatHealthFindings(f: HealthFindings): string {
     lines.push("The email environment likely rolled back or drifted. Restore the intended mailbox before relying on customer delivery.");
     lines.push("");
   }
+  if (f.staleIcalProperties.length > 0) {
+    lines.push(`ICAL FEEDS WITHOUT A SUCCESSFUL SYNC IN 24 HOURS (${f.staleIcalProperties.length})`);
+    lines.push("A missing turnover can leave the crew unaware of a scheduled cleaning:");
+    for (const property of f.staleIcalProperties) {
+      const age = property.hoursSinceSuccess === null ? "never" : `${property.hoursSinceSuccess} hours ago`;
+      const error = property.lastError ? ` — last error: ${property.lastError}` : "";
+      lines.push(`  • ${property.label} — ${property.address} — last success ${age}${error}`);
+    }
+    lines.push("");
+  }
+  if (f.criticalScheduleProblems.length > 0) {
+    lines.push(`CRITICAL SCHEDULES NEED ATTENTION (${f.criticalScheduleProblems.length})`);
+    lines.push("The iCal sync and reminder jobs must stay registered, enabled and current:");
+    for (const schedule of f.criticalScheduleProblems) {
+      lines.push(`  • ${schedule.name} — ${schedule.problem}: ${schedule.detail}`);
+    }
+    lines.push("");
+  }
   if (lines.length === 0) lines.push("No inconsistencies found.");
   return lines.join("\n");
 }
@@ -139,10 +312,7 @@ export function formatHealthFindings(f: HealthFindings): string {
 export async function runDailyHealthCheck(now: Date = new Date()): Promise<HealthFindings> {
   const findings = await runHealthCheck(now);
   if (findings.hasProblems) {
-    const count =
-      findings.paidOnOpenBookings.length +
-      findings.deadLinks.length +
-      (findings.smtpIdentity.matches === false ? 1 : 0);
+    const count = healthProblemCount(findings);
     await sendOwnerAlert(
       `Grapefruit: ${count} item${count === 1 ? "" : "s"} need${count === 1 ? "s" : ""} your attention`,
       [

@@ -1,0 +1,1 @@
+ALTER TABLE `connected_properties` ADD `lastSuccessfulSyncAt` timestamp;

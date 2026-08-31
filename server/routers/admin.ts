@@ -39,7 +39,7 @@ import {
   resendBalanceLink,
   sendPaymentReceiptSafely,
 } from "../balance";
-import { sendWeeklyDigest } from "../ownerDigest";
+import { healthProblemCount, sendWeeklyDigest } from "../ownerDigest";
 import { balanceLinkStatus } from "../balanceRules";
 import {
   buildStaffInviteEmail,
@@ -566,7 +566,12 @@ export const adminRouter = router({
       await db.updateConnectedProperty(id, {
         ...patch,
         ...(reservationsFound !== undefined
-          ? { reservationCount: reservationsFound, consecutiveFailures: 0, lastSyncStatus: "ok", lastSyncAt: new Date() }
+          ? {
+              reservationCount: reservationsFound,
+              consecutiveFailures: 0,
+              lastSyncStatus: "ok",
+              lastSyncAt: new Date(),
+            }
           : {}),
       });
       return { success: true as const, reservationsFound };
@@ -833,10 +838,7 @@ export const adminRouter = router({
       emailsThisWeek: data.totalSent,
       failures: data.failures.length,
       upcomingNudges: data.nudges.length,
-      problems:
-        data.health.paidOnOpenBookings.length +
-        data.health.deadLinks.length +
-        (data.health.smtpIdentity.matches === false ? 1 : 0),
+      problems: healthProblemCount(data.health),
     };
   }),
   /** Admin-only incident diagnostics. Never exposes a password or secret. */

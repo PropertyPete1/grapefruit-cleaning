@@ -25,6 +25,8 @@ const mockCandidates = vi.fn();
 const mockOwnerAlert = vi.fn();
 const mockGetSetting = vi.fn();
 const mockSmtpUser = vi.fn();
+const mockActiveProperties = vi.fn();
+const mockListHeartbeatJobs = vi.fn();
 
 vi.mock("./db", () => ({
   findPaidInvoicesOnOpenBookings: () => mockPaidOnOpen(),
@@ -35,6 +37,11 @@ vi.mock("./db", () => ({
   ownerTotals: () => mockTotals(),
   listNudgeCandidates: () => mockCandidates(),
   getSetting: (...a: unknown[]) => mockGetSetting(...a),
+  listActiveSyncProperties: () => mockActiveProperties(),
+}));
+
+vi.mock("./_core/heartbeat", () => ({
+  listHeartbeatJobs: (...a: unknown[]) => mockListHeartbeatJobs(...a),
 }));
 
 vi.mock("./emails", () => ({
@@ -63,6 +70,39 @@ beforeEach(() => {
   mockCandidates.mockResolvedValue([]);
   mockGetSetting.mockResolvedValue("grapefruitcleaningc@gmail.com");
   mockSmtpUser.mockReturnValue("grapefruitcleaningc@gmail.com");
+  mockActiveProperties.mockResolvedValue([]);
+  mockListHeartbeatJobs.mockResolvedValue({
+    total: 2,
+    actorUserId: "owner",
+    jobs: [
+      {
+        taskUid: "ical",
+        name: "hourly-ical-sync",
+        userId: "owner",
+        description: "",
+        cronExpression: "0 5 * * * *",
+        callbackPath: "/api/scheduled/icalSync",
+        callbackMethod: "POST",
+        callbackPayload: "{}",
+        isEnable: true,
+        lastExecutedAt: "2026-08-24T13:00:00Z",
+        nextExecutionAt: "2026-08-24T15:05:00Z",
+      },
+      {
+        taskUid: "reminders",
+        name: "daily-booking-reminders",
+        userId: "owner",
+        description: "",
+        cronExpression: "0 0 14 * * *",
+        callbackPath: "/api/scheduled/sendReminders",
+        callbackMethod: "POST",
+        callbackPayload: "{}",
+        isEnable: true,
+        lastExecutedAt: "2026-08-23T14:00:00Z",
+        nextExecutionAt: "2026-08-25T14:00:00Z",
+      },
+    ],
+  });
   mockTotals.mockResolvedValue({
     bookings: 5,
     upcomingBookings: 1,
@@ -145,6 +185,74 @@ describe("the daily health check", () => {
     const findings = await runHealthCheck(NOW);
     expect(findings.smtpIdentity.matches).toBe(true);
     expect(findings.hasProblems).toBe(false);
+  });
+
+  it("alerts when an active property has no successful iCal sync in 24 hours", async () => {
+    mockActiveProperties.mockResolvedValue([
+      {
+        id: 12,
+        label: "Steven — Schriber",
+        addressLine: "2208 Schriber St",
+        unitNumber: null,
+        city: "Austin",
+        zip: "78704",
+        lastSyncAt: new Date("2026-08-24T13:30:00Z"),
+        lastSuccessfulSyncAt: new Date("2026-08-23T12:00:00Z"),
+        lastSyncStatus: "Airbnb returned 403",
+      },
+    ]);
+
+    const findings = await runDailyHealthCheck(NOW);
+    expect(findings.staleIcalProperties).toEqual([
+      expect.objectContaining({
+        id: 12,
+        label: "Steven — Schriber",
+        hoursSinceSuccess: 26,
+        lastError: "Airbnb returned 403",
+      }),
+    ]);
+    expect(findings.hasProblems).toBe(true);
+    expect(mockOwnerAlert).toHaveBeenCalledOnce();
+    const [subject, body] = mockOwnerAlert.mock.calls[0]!;
+    expect(subject).toContain("1 item needs your attention");
+    expect(body).toContain("ICAL FEEDS WITHOUT A SUCCESSFUL SYNC IN 24 HOURS");
+    expect(body).toContain("2208 Schriber St");
+  });
+
+  it("alerts when a critical schedule is missing", async () => {
+    const healthy = await mockListHeartbeatJobs();
+    mockListHeartbeatJobs.mockResolvedValue({
+      ...healthy,
+      jobs: healthy.jobs.filter((job: { name: string }) => job.name !== "hourly-ical-sync"),
+    });
+
+    const findings = await runDailyHealthCheck(NOW);
+    expect(findings.criticalScheduleProblems).toEqual([
+      expect.objectContaining({ name: "hourly-ical-sync", problem: "missing" }),
+    ]);
+    expect(mockOwnerAlert.mock.calls[0]![1]).toContain("CRITICAL SCHEDULES NEED ATTENTION");
+    expect(mockOwnerAlert.mock.calls[0]![1]).toContain("Job is not registered");
+  });
+
+  it("alerts when a critical schedule is disabled or stale", async () => {
+    const healthy = await mockListHeartbeatJobs();
+    mockListHeartbeatJobs.mockResolvedValue({
+      ...healthy,
+      jobs: healthy.jobs.map((job: { name: string }) =>
+        job.name === "hourly-ical-sync"
+          ? { ...job, isEnable: false }
+          : { ...job, lastExecutedAt: "2026-08-22T14:00:00Z" }
+      ),
+    });
+
+    const findings = await runDailyHealthCheck(NOW);
+    expect(findings.criticalScheduleProblems).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "hourly-ical-sync", problem: "disabled" }),
+        expect.objectContaining({ name: "daily-booking-reminders", problem: "stale" }),
+      ])
+    );
+    expect(mockOwnerAlert.mock.calls[0]![0]).toContain("2 items need your attention");
   });
 
   it("says so plainly when there is nothing to report", async () => {

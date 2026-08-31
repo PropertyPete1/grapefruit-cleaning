@@ -80,6 +80,7 @@ const property = (overrides: Partial<ConnectedProperty> = {}): ConnectedProperty
     autoBook: true,
     perCleanEmails: false,
     lastSyncAt: null,
+    lastSuccessfulSyncAt: null,
     lastSyncStatus: null,
     reservationCount: null,
     consecutiveFailures: 0,
@@ -553,6 +554,7 @@ describe("feed failures", () => {
       5,
       expect.objectContaining({ consecutiveFailures: 1, lastSyncStatus: expect.stringContaining("404") })
     );
+    expect(mockUpdateProperty.mock.calls[0]![1]).not.toHaveProperty("lastSuccessfulSyncAt");
     expect(ownerAlerts()).toHaveLength(0);
   });
 
@@ -578,10 +580,16 @@ describe("feed failures", () => {
 
   it("success resets the streak", async () => {
     stubFeed(feedWith([]));
-    await syncConnectedProperty(property({ consecutiveFailures: 2 }));
+    const now = new Date("2026-08-31T21:00:00Z");
+    await syncConnectedProperty(property({ consecutiveFailures: 2 }), now);
     expect(mockUpdateProperty).toHaveBeenCalledWith(
       5,
-      expect.objectContaining({ consecutiveFailures: 0, lastSyncStatus: "ok" })
+      expect.objectContaining({
+        consecutiveFailures: 0,
+        lastSyncStatus: "ok",
+        lastSyncAt: now,
+        lastSuccessfulSyncAt: now,
+      })
     );
   });
 });

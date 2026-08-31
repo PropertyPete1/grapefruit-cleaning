@@ -233,6 +233,7 @@ export async function syncConnectedProperty(
   await db.updateConnectedProperty(property.id, {
     consecutiveFailures: 0,
     lastSyncAt: now,
+    lastSuccessfulSyncAt: now,
     lastSyncStatus: "ok",
     reservationCount: parsed.reservations.length,
   });

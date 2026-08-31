@@ -415,6 +415,8 @@ export const connectedProperties = mysqlTable("connected_properties", {
    */
   perCleanEmails: boolean("perCleanEmails").default(false).notNull(),
   lastSyncAt: timestamp("lastSyncAt"),
+  /** Last completed successful feed reconciliation; failures never advance it. */
+  lastSuccessfulSyncAt: timestamp("lastSuccessfulSyncAt"),
   /** "ok" or the failure message — what the admin list shows per feed. */
   lastSyncStatus: varchar("lastSyncStatus", { length: 500 }),
   /** Reservations found on the last successful poll. */

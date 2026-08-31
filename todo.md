@@ -428,3 +428,30 @@
 - [x] Prove all five production write routes return 401 with no token and the read token, then return a real non-mutating/validation-safe response with the write token
 - [x] Prove an unknown production `POST /api/brain/*` route returns 404 `{\"error\":\"unknown brain route\"}`
 - [x] Confirm production data integrity and synchronize the final deployed revision to private GitHub main
+
+## Brain write API — current production evidence recheck
+- [x] Capture current live `/api/version` and prove its deployed parent includes merged PR #16
+- [x] Query production schema and prove `invoices.issuedVia` from migration 0030 is present
+- [x] Prove `BRAIN_WRITE_TOKEN` is defined, differs from `BRAIN_READ_TOKEN`, and report only its first/last four characters
+- [x] Re-run all five production write routes with no token, read token, and write token using non-mutating validation payloads
+- [x] Report the four requested facts from fresh production evidence, not prior-session memory
+
+## Grapefruit brain — secure write-token handoff
+- [x] Inspect the Grapefruit brain container’s current environment, launch configuration, permissions, and source support for `GRAPEFRUIT_WRITE_TOKEN` without exposing values
+- [x] Fast-forward the Grapefruit brain from `329625d` to approved `0f17b3e` (merged PR #99), run its focused/full tests and build, and preserve rollback evidence
+- [x] Transfer the existing CRM `BRAIN_WRITE_TOKEN` directly into `/srv/grapefruit-brain/app.env` as `GRAPEFRUIT_WRITE_TOKEN`, preserving mode `0600`
+- [x] Record the new allowed environment name and change evidence in the cloud-computer `AGENTS.md` without recording the secret
+- [x] Recreate or restart only `grapefruit-brain` with the updated env while preserving image, mounts, loopback binding, restart policy, and business isolation
+- [x] Prove masked token alignment, CRM write authorization, Grapefruit brain HTTPS health, container health, SQLite integrity, and environment isolation
+
+## Properties and iCal turnovers — production scheduling incident
+- [x] Prove from the live production admin bundle and route tree whether the Properties nav item/page exists in the deployed build
+- [x] Query every production property with masked iCal URL, address, auto-book settings, last sync status/time/error, and determine whether Steven’s 2208 Schriber St record survived recovery
+- [x] Inspect `hourly-ical-sync` and `daily-booking-reminders` registration, enabled state, next execution, last execution, and recent successful/failed run history
+- [x] Query every auto-booked turnover and compare database records with the exact admin Calendar data source to classify sync failure versus display failure
+- [x] Report all four production findings to the owner before any repair or manual feed sync
+- [x] Restore only confirmed Properties, schedule, sync, or calendar defects; do not fabricate the lost Steven property because the owner will add its feed in Admin after deployment
+- [x] Add daily health findings for properties whose iCal feed has not synced successfully in 24 hours and for missing, disabled, or stale critical cron jobs
+- [ ] Add regression tests, run TypeScript/full suite/build, publish with genuine restart, and prove `/api/version`
+- [ ] Verify the live Properties route and healthy schedule/health behavior without creating records; provide the owner the exact post-deploy steps to add Steven’s feed, sync it, and confirm turnovers in Calendar
+- [ ] Synchronize the final deployed revision to private GitHub main and document the production schedule safeguards

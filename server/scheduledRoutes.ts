@@ -9,7 +9,7 @@ import { sendDueBalanceReminders } from "./balance";
 import { sdk } from "./_core/sdk";
 import { syncAllProperties } from "./icalSync";
 import { sendDueRebookingNudges } from "./marketing";
-import { runDailyHealthCheck, sendWeeklyDigest } from "./ownerDigest";
+import { healthProblemCount, runDailyHealthCheck, sendWeeklyDigest } from "./ownerDigest";
 import { publicOrigin } from "./publicOrigin";
 import { sendDueReminders } from "./reminders";
 
@@ -67,7 +67,7 @@ async function sendRemindersHandler(req: Request, res: Response) {
     let digestSent = false;
     try {
       health = await runDailyHealthCheck();
-      const problems = health.paidOnOpenBookings.length + health.deadLinks.length;
+      const problems = healthProblemCount(health);
       console.log(
         `[HealthCheck] ${problems} problem(s); ${health.customersWithoutEmail.length} customer(s) without email.`
       );
@@ -155,7 +155,7 @@ async function weeklyDigestHandler(req: Request, res: Response) {
     const data = await sendWeeklyDigest();
     console.log(
       `[Digest] Sent on demand: ${data.totalSent} email(s) this week, ${data.failures.length} failure(s), ` +
-        `${data.nudges.length} nudge(s) due, ${data.health.paidOnOpenBookings.length + data.health.deadLinks.length} problem(s).`
+        `${data.nudges.length} nudge(s) due, ${healthProblemCount(data.health)} problem(s).`
     );
     return res.json({
       ok: true,
@@ -163,7 +163,7 @@ async function weeklyDigestHandler(req: Request, res: Response) {
       failures: data.failures.length,
       quietFailures: data.quietFailures,
       upcomingNudges: data.nudges.length,
-      problems: data.health.paidOnOpenBookings.length + data.health.deadLinks.length,
+      problems: healthProblemCount(data.health),
       totals: data.totals,
     });
   } catch (error) {

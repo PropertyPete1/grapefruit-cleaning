@@ -103,6 +103,28 @@ Current jobs, for reference when verifying a restore:
 - The restored stale schedules were deleted and recreated under the current task UIDs recorded above. Do not
   use the historical UIDs lower in this file when checking the current scheduler.
 
+### Aug 31, 2026 Properties / iCal turnover incident
+- Fresh production bundle inspection proved `/admin/properties`, the `Properties` sidebar item, and the full
+  `AdminProperties` page chunk were still deployed. The Aug 25 rollback did not remove the UI or route.
+- Production contained zero `connected_properties` rows and zero bookings with `kind='ical_auto'`, `propertyId`,
+  or `icalUid`. Steven Van Orden's surviving Aug 13 self-serve booking at 2208 Schriber has no iCal linkage.
+  The lost property row—not the Calendar UI—is why no turnovers appeared: Admin Calendar does not filter out
+  iCal-auto bookings and would render any non-cancelled row with a date/time.
+- Both critical schedules were live and enabled under the current task UIDs above. `hourly-ical-sync` completed
+  its 21:05Z occurrence at 21:11:27Z (normal scheduler jitter) with HTTP 200 and an empty summary because there
+  were no active properties. `daily-booking-reminders` completed at 14:02:36Z with HTTP 200 and delivered its
+  due reminder. Do not recreate either schedule while these task UIDs remain enabled and current.
+- Migration 0031 adds nullable `connected_properties.lastSuccessfulSyncAt`. Only a complete successful feed
+  reconciliation advances it; feed validation during create/edit and failed polls do not. The daily health
+  check alerts on any active property without a completed successful sync in 24 hours.
+- The same daily health check now reads the live Heartbeat registry and alerts when `hourly-ical-sync` or
+  `daily-booking-reminders` is missing, disabled, has the wrong cron/callback, has no current last execution,
+  or has a next execution stuck in the past. Hourly is stale after two hours; daily is stale after 26 hours;
+  a 15-minute next-execution grace absorbs normal scheduler jitter.
+- The owner elected to reconnect Steven's Airbnb feed through Admin → Properties after this deployment. Do not
+  fabricate the lost feed URL or property row from the surviving booking. After saving it, press **Sync now**
+  and verify the new `ical_auto` turnovers on Admin → Calendar.
+
 ## STANDING RULE — what counts as proof that email works
 A claim that email is fixed is only credible when BOTH of these appear in the same report:
 1. The PRODUCTION process boot timestamp, showing the running container started AFTER the credential or code
