@@ -211,7 +211,7 @@ describe("read-only by construction", () => {
    * adapter the write was accepted. Nothing is ever written either way; the
    * point is that the protocol should say so.
    */
-  describe("write methods are refused with 405", () => {
+  describe("methods outside GET/HEAD/POST are refused with 405", () => {
     const guard = () => {
       const { guards } = captureRoutes();
       expect(guards).toHaveLength(1);
@@ -252,18 +252,21 @@ describe("read-only by construction", () => {
       expect(re.test("/api/brainstorm")).toBe(false);
     });
 
-    it("answers 405 with Allow: GET, HEAD on every write verb", () => {
-      for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+    it("answers 405 with Allow: GET, HEAD, POST on every other verb", () => {
+      for (const method of ["PUT", "PATCH", "DELETE"]) {
         const { res, headers, nextCalled } = runGuard(method);
         expect(res.statusCode, method).toBe(405);
         expect(res.body, method).toEqual({ error: "method not allowed" });
-        expect(headers.Allow, method).toBe("GET, HEAD");
+        expect(headers.Allow, method).toBe("GET, HEAD, POST");
         expect(nextCalled, method).toBe(false);
       }
     });
 
-    it("lets GET and HEAD through to the real handlers", () => {
-      for (const method of ["GET", "HEAD"]) {
+    it("lets GET, HEAD and POST through to the real handlers", () => {
+      // POST passes because the write API (brainWriteRoutes.ts) owns it — its
+      // own registrations and its POST JSON-404 catch-all sit right after
+      // this module, so no POST under the prefix ever reaches the SPA.
+      for (const method of ["GET", "HEAD", "POST"]) {
         const { nextCalled, res } = runGuard(method);
         expect(nextCalled, method).toBe(true);
         expect(res.statusCode, method).toBe(200); // untouched by the guard
@@ -274,7 +277,7 @@ describe("read-only by construction", () => {
       // No BRAIN_READ_TOKEN in the environment here: a wrong verb is wrong
       // whether or not the caller is authenticated, and a caller fixing a verb
       // should not first have to fix a credential.
-      const { res } = runGuard("POST");
+      const { res } = runGuard("PUT");
       expect(res.statusCode).toBe(405);
       expect(mockPageCustomers).not.toHaveBeenCalled();
       expect(mockPageBookings).not.toHaveBeenCalled();

@@ -13,6 +13,10 @@
  * else, and every response is built from an explicit field allowlist — street
  * addresses, notes, message bodies, Stripe ids and pay/tip tokens cannot leak
  * because they are never copied out of the row.
+ *
+ * The write surface (spec: lifestyle-brain/docs/grapefruit-write-api.md) is
+ * brainWriteRoutes.ts, deliberately a separate module behind a separate
+ * token, registered right after this one.
  */
 import type { Express, Request, Response } from "express";
 import { createHash, timingSafeEqual } from "crypto";
@@ -24,7 +28,8 @@ import * as db from "./db";
 const PAGE_LIMIT_MAX = 200;
 const PAGE_LIMIT_DEFAULT = 50;
 
-function requestIp(req: Request): string {
+/** Shared with brainWriteRoutes.ts — one definition of "the caller's IP". */
+export function requestIp(req: Request): string {
   const fwd = req.headers["x-forwarded-for"];
   if (typeof fwd === "string" && fwd.length > 0) return fwd.split(",")[0]!.trim();
   return req.socket?.remoteAddress ?? "unknown";
@@ -33,9 +38,10 @@ function requestIp(req: Request): string {
 /**
  * Hash both sides before comparing: timingSafeEqual demands equal-length
  * buffers, and hashing gets there without an early length check that would
- * itself leak the token's length.
+ * itself leak the token's length. Shared with brainWriteRoutes.ts, which
+ * compares against its own, independent token.
  */
-function tokenMatches(header: string | undefined, expected: string): boolean {
+export function tokenMatches(header: string | undefined, expected: string): boolean {
   if (typeof header !== "string" || !header.startsWith("Bearer ")) return false;
   const presented = createHash("sha256").update(header.slice("Bearer ".length)).digest();
   return timingSafeEqual(presented, createHash("sha256").update(expected).digest());
@@ -237,20 +243,24 @@ async function listPaymentsHandler(req: Request, res: Response) {
 }
 
 export function registerBrainRoutes(app: Express): void {
-  // A POST/PUT/PATCH/DELETE to a brain path would otherwise fall through every
-  // GET registration and land on the SPA catch-all, answering 200 with the
-  // marketing site's HTML. Nothing is written either way — this module
-  // registers no write handlers — but a 200 tells PRIMARY's adapter the method
-  // was accepted, which is the opposite of the truth. Answer 405 with an Allow
-  // header so the read-only contract is stated in the protocol rather than
-  // merely implied by what is absent.
+  // A PUT/PATCH/DELETE to a brain path would otherwise fall through every
+  // registration and land on the SPA catch-all, answering 200 with the
+  // marketing site's HTML. Nothing is written either way, but a 200 tells
+  // PRIMARY's adapter the method was accepted, which is the opposite of the
+  // truth. Answer 405 with an Allow header so the contract is stated in the
+  // protocol rather than merely implied by what is absent.
+  //
+  // POST passes through: the write API (brainWriteRoutes.ts, registered right
+  // after this module) owns those, behind its own separate token — and its
+  // POST JSON-404 catch-all guarantees no POST under the prefix ever reaches
+  // the SPA either. This module still registers GET handlers and nothing else.
   //
   // Deliberately ahead of auth: the method is wrong regardless of the token, and
   // a caller fixing a verb should not first have to fix a credential. This
   // leaks only the fact that /api/brain/* exists, which the 503/401 already do.
   app.all(/^\/api\/brain(\/|$)/, (req, res, next) => {
-    if (req.method === "GET" || req.method === "HEAD") return next();
-    res.setHeader("Allow", "GET, HEAD");
+    if (req.method === "GET" || req.method === "HEAD" || req.method === "POST") return next();
+    res.setHeader("Allow", "GET, HEAD, POST");
     return res.status(405).json({ error: "method not allowed" });
   });
   app.get("/api/brain/ping", guarded(pingHandler));

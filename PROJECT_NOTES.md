@@ -518,6 +518,38 @@ was saved, `/api/brain/ping` still answered 503, and an env-only checkpoint left
 file change. If a future round changes only environment values, touch a file (a
 notes entry like this one counts) or the deploy is a no-op.
 
+### Brain Write API (Aug 30 2026 — built, NOT deployed)
+
+Phase 2 of the brain bridge, built to lifestyle-brain/docs/grapefruit-write-api.md
+(PRIMARY's adapter is fixture-pinned against exactly these shapes). Five POST
+routes under `/api/brain` in `server/brainWriteRoutes.ts`: `customers`,
+`bookings`, `bookings/:id/reschedule`, `bookings/:id/cancel`, `invoices`. Each
+calls the same internal function the admin panel trusts — `createAdminBooking`
+(with a new `customerId` passthrough that skips find-or-create), the reschedule
+building blocks (`adminSlotBookable` with `excludeBookingId`), one
+status-cancelled `updateBooking`, `issueManualInvoice` verbatim, and a new
+`db.matchOrCreateCustomer` that fills blanks on a match but never overwrites
+(pure logic in `server/brainWriteRules.ts`). Every write body carries an
+`actor` attribution tag, stored in booking/customer notes (admin side of the
+"From customer:" boundary) and the invoices' new nullable `issuedVia` column
+(migration 0030, additive).
+
+Credential is `Authorization: Bearer $BRAIN_WRITE_TOKEN` — a NEW secret,
+independent of the read token; the read token is refused on every write route
+by construction, and the write routes 503 while the secret is unset, so the
+code deploys cold and activates when the pair (`GRAPEFRUIT_WRITE_TOKEN` on the
+brain) is set. The read module's 405 guard now admits POST through to the
+write module; PUT/PATCH/DELETE still 405, and an unknown POST path answers the
+PINNED `404 {"error":"unknown brain route"}` the brain maps to "paths skewed".
+
+**To activate on deploy:** (1) migration 0030 must run, (2) set
+`BRAIN_WRITE_TOKEN` (32+ random bytes hex), (3) `PUBLIC_BASE_URL` must be set
+or deposit/payment links built server-to-server come out relative-broken, and
+(4) remember the Aug 19/25 env trap: saving a secret does not restart the
+container — a committable file change is required for a genuine redeploy.
+Contract pinned by `server/brainWriteRoutes.test.ts`, `brainWriteRules.test.ts`
+and the real-Express stack test `server/brainStack.test.ts`.
+
 ## Dynamic bilingual add-on catalog — Aug 27, 2026
 
 The public add-on system is now a database catalog, not a compile-time nine-ID

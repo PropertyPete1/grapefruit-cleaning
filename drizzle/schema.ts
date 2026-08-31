@@ -490,6 +490,15 @@ export const invoices = mysqlTable("invoices", {
   /** users.id of the admin who approved it. */
   approvedByUserId: int("approvedByUserId"),
   /**
+   * Brain-write attribution: "[via PRIMARY — <operator>]" when the invoice was
+   * raised through the token-authenticated write API rather than the admin
+   * panel. The invoice has no notes column and its line items are
+   * customer-visible, so the audit trail gets its own column. NULL for every
+   * invoice the admin panel creates. Internal only — never rendered into the
+   * email, the pay page, or the Stripe session.
+   */
+  issuedVia: varchar("issuedVia", { length: 200 }),
+  /**
    * "balance" = auto-generated remaining-balance invoice with a payment link,
    * created when a booking is marked completed. "manual" = created by hand in
    * Admin → Invoices (the pre-existing behavior).
