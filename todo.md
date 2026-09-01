@@ -473,5 +473,6 @@
 - [x] Open availability through 7:00 PM using estimated duration, lead-time, and admin-editable booking hours in Services & Pricing
 - [x] Add daily health findings for unpaid/incomplete bookings older than the hold window
 - [x] Add regression tests for abandoned-hold release, admin cancel/delete release, expired-slot rebooking, 7:00 PM duration cutoff, scroll reset, and EN/ES flow state
-- [ ] Run TypeScript, full suite, production build, genuine restart, checkpoint, `/api/version` proof, and GitHub synchronization
-- [ ] Re-walk the live EN/ES flow on mobile and desktop after deployment and verify slot release, prices, add-ons, deposit math, validation, and confirmation handoff
+- [x] Run TypeScript, full suite, production build, genuine restart, checkpoint, `/api/version` proof, and GitHub synchronization
+- [x] Re-walk the live EN/ES flow on mobile and desktop after deployment and verify slot release, prices, add-ons, deposit math, validation, and confirmation handoff
+- [x] Fix the deployed five-minute Heartbeat callback so the job uses `/api/scheduled/checkoutHolds` and returns the cron-only JSON handler instead of a 200 SPA HTML shell; successful JSON run proven
