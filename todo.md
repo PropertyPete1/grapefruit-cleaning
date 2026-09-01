@@ -491,5 +491,5 @@
 - [x] Add daily health findings for upcoming pending-time bookings and stale unanswered customer reschedule requests
 - [x] Replace missing/platform branding with Grapefruit favicon, Apple touch icon, PWA icons, Open Graph image, and Twitter metadata on all public/admin/staff routes
 - [x] Add focused migration, authorization, atomicity, conflict, pending-time, reminder, email, staff, customer workflow, audit, icon, manifest, and metadata regression tests
-- [ ] Run complete tests, TypeScript, production build, genuine restart, checkpoint, `/api/version` proof, and GitHub synchronization
-- [ ] Verify live admin/customer/cleaner rescheduling behavior without altering commercial records, and fetch every deployed icon/manifest/social-preview asset from all production domains
+- [x] Run complete tests, TypeScript, production build, genuine restart, checkpoint, `/api/version` proof, and GitHub synchronization
+- [x] Verify live admin/customer/cleaner rescheduling behavior without altering commercial records, and fetch every deployed icon/manifest/social-preview asset from all production domains
