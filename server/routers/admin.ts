@@ -50,7 +50,14 @@ import {
   smtpDiagnostics,
   verifySmtpTransport,
 } from "../emails";
-import { loadDurationConfig, loadSchedulingRules, occupiedIntervals, SERVICE_NAMES, withDurationHours } from "./booking";
+import {
+  finalizeBooking,
+  loadDurationConfig,
+  loadSchedulingRules,
+  occupiedIntervals,
+  SERVICE_NAMES,
+  withDurationHours,
+} from "./booking";
 import { sendJobStartedEmailSafely } from "../statusEmails";
 import { sendTipRequestEmailSafely } from "../tip";
 import { storagePut } from "../storage";
@@ -419,6 +426,33 @@ export const adminRouter = router({
           code: "BAD_REQUEST",
           message: "This booking has no time yet — the customer picks one on their link before it can be confirmed.",
         });
+      }
+
+      // A pending public Checkout remains payable unless Stripe is closed too.
+      // Close it before freeing the DB slot; if payment won the race, finalize
+      // the booking and refuse to mislabel the paid job as cancelled.
+      if (
+        before?.status === "pending_deposit" &&
+        (input.status === "cancelled" || input.status === "expired") &&
+        before.stripeSessionId
+      ) {
+        try {
+          const stripe = getStripe();
+          const session = await stripe.checkout.sessions.retrieve(before.stripeSessionId);
+          if (session.payment_status === "paid") {
+            await finalizeBooking(before.id, (session.payment_intent as string | null) ?? null);
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Payment already completed. The booking was confirmed instead of cancelled.",
+            });
+          }
+          if (session.status === "open") await stripe.checkout.sessions.expire(before.stripeSessionId);
+        } catch (error) {
+          const code = (error as { code?: unknown })?.code;
+          // A missing provider session cannot be paid and is safe to retire.
+          // Any other provider failure keeps the DB hold intact.
+          if (code !== "resource_missing") throw error;
+        }
       }
       try {
         await db.updateBooking(input.id, { status: input.status });

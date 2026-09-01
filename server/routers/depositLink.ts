@@ -47,6 +47,7 @@ import { getStripe } from "../stripe";
 import { publicProcedure, router } from "../_core/trpc";
 import { finalizeBooking, loadPricingConfig, loadSchedulingRules, occupiedIntervals, SERVICE_NAMES } from "./booking";
 import { bookingAddonSnapshots, loadAddonCatalog, resolveSelectedAddons } from "../addonCatalog";
+import { releaseExpiredCheckoutHolds } from "../checkoutHolds";
 
 const extrasInput = z.array(z.string().min(1).max(100)).max(50);
 
@@ -538,7 +539,7 @@ export const depositLinkRouter = router({
       // Hand back any stale hold on this slot, then check under the same
       // composed rules as everywhere else — excluding this booking's own row,
       // which may still hold the previous time it is moving away from.
-      await db.expireStaleBookingsForSlot(input.date, input.time);
+      await releaseExpiredCheckoutHolds();
       const rows = (await db.getOccupiedBookings(input.date)).filter(row => row.id !== booking.id);
       const bookable = isSlotBookable(
         {

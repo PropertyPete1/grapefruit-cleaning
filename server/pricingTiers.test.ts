@@ -21,6 +21,8 @@ vi.mock("./db", () => ({
   updateBooking: vi.fn(),
   listSettings: vi.fn().mockResolvedValue([]),
   expireStaleBookingsForSlot: vi.fn().mockResolvedValue(0),
+  listElapsedDepositBookings: vi.fn().mockResolvedValue([]),
+  expireElapsedDepositBooking: vi.fn().mockResolvedValue(false),
   isSlotTakenError: () => false,
 }));
 

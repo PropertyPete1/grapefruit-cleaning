@@ -181,9 +181,11 @@ export function CatalogAddonsSummary({
           <span className="shrink-0 font-medium">${centsToDollars(addon.startingPriceCents).toFixed(2)}</span>
         </div>
       ))}
-      <div className="flex items-center justify-between border-t pt-2 text-sm font-semibold">
-        <span>{labels.subtotal}</span><span>${centsToDollars(subtotalCents).toFixed(2)}</span>
-      </div>
+      {selected.length > 0 && (
+        <div className="flex items-center justify-between border-t pt-2 text-sm font-semibold">
+          <span>{labels.subtotal}</span><span>${centsToDollars(subtotalCents).toFixed(2)}</span>
+        </div>
+      )}
       {selected.some(addon => addon.mayVary || addon.priceMode !== "fixed") && (
         <p className="text-xs leading-relaxed text-amber-700 dark:text-amber-300">{labels.confirmation}</p>
       )}

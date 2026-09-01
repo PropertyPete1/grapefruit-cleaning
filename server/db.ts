@@ -828,6 +828,48 @@ export async function expireStaleDepositBookings(now: Date = new Date()): Promis
   return affectedRows(result);
 }
 
+/**
+ * Public/admin checkout rows whose pinned slot-hold window has elapsed.
+ * Selected first so the caller can close any still-open Stripe Checkout
+ * session before changing the booking status and freeing the slot.
+ */
+export async function listElapsedDepositBookings(now: Date = new Date()) {
+  const db = requireDb(await getDb());
+  return db
+    .select({
+      id: bookings.id,
+      reference: bookings.reference,
+      scheduledDate: bookings.scheduledDate,
+      scheduledTime: bookings.scheduledTime,
+      stripeSessionId: bookings.stripeSessionId,
+      createdAt: bookings.createdAt,
+      holdMinutes: bookings.holdMinutes,
+      kind: bookings.kind,
+    })
+    .from(bookings)
+    .where(
+      and(
+        eq(bookings.status, "pending_deposit"),
+        isNotNull(bookings.scheduledDate),
+        isNotNull(bookings.scheduledTime),
+        bookingHoldElapsed(now)
+      )
+    );
+}
+
+/**
+ * Release one elapsed hold only if it is still unpaid and still beyond its
+ * pinned window. The conditional update closes races with a Stripe webhook.
+ */
+export async function expireElapsedDepositBooking(id: number, now: Date = new Date()): Promise<boolean> {
+  const db = requireDb(await getDb());
+  const result = await db
+    .update(bookings)
+    .set({ status: "expired" })
+    .where(and(eq(bookings.id, id), eq(bookings.status, "pending_deposit"), bookingHoldElapsed(now)));
+  return affectedRows(result) > 0;
+}
+
 /** Confirmed/in-progress bookings scheduled within the next 8 days (reminder scan window). */
 export async function listUpcomingConfirmedBookings(today: string) {
   const db = requireDb(await getDb());

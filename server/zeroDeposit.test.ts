@@ -54,6 +54,8 @@ vi.mock("./db", async () => {
       phone: "2105550134",
     }),
     expireStaleBookingsForSlot: (...a: unknown[]) => mockExpireForSlot(...a),
+    listElapsedDepositBookings: vi.fn().mockResolvedValue([]),
+    expireElapsedDepositBooking: vi.fn().mockResolvedValue(false),
     confirmUnpaidBooking: (...a: unknown[]) => mockConfirmUnpaid(...a),
     createPayment: (...a: unknown[]) => mockCreatePayment(...a),
     createInvoice: (...a: unknown[]) => mockCreateInvoice(...a),

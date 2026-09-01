@@ -16,21 +16,14 @@ describe("booking schedule defaults", () => {
     expect(slotsForDay(DEFAULT_SCHEDULE[0])).toEqual([]);
   });
 
-  it("Monday–Friday run 8 AM to 6 PM (last slot 5 PM), noon included by default", () => {
-    for (const day of [1, 2, 3, 4, 5]) {
+  it("Monday–Saturday run 8 AM to 7 PM (last raw start 6 PM), noon included by default", () => {
+    for (const day of [1, 2, 3, 4, 5, 6]) {
       const slots = slotsForDay(DEFAULT_SCHEDULE[day]);
       expect(slots[0]).toBe("08:00");
-      expect(slots[slots.length - 1]).toBe("17:00");
+      expect(slots[slots.length - 1]).toBe("18:00");
       expect(slots).toContain("12:00");
-      expect(slots).toHaveLength(10); // 8..17 inclusive
+      expect(slots).toHaveLength(11); // 8..18 inclusive
     }
-  });
-
-  it("Saturday runs 8 AM to 4 PM (last slot 3 PM)", () => {
-    const slots = slotsForDay(DEFAULT_SCHEDULE[6]);
-    expect(slots[0]).toBe("08:00");
-    expect(slots[slots.length - 1]).toBe("15:00");
-    expect(slots).toContain("12:00");
   });
 });
 
@@ -133,8 +126,8 @@ describe("date handling", () => {
     expect(slotsForDate("2026-07-19", DEFAULT_SCHEDULE)).toEqual([]);
   });
 
-  it("returns Saturday slots ending at 15:00 under the default schedule", () => {
+  it("returns Saturday raw slots ending at 18:00 under the default schedule", () => {
     const slots = slotsForDate("2026-07-25", DEFAULT_SCHEDULE);
-    expect(slots[slots.length - 1]).toBe("15:00");
+    expect(slots[slots.length - 1]).toBe("18:00");
   });
 });

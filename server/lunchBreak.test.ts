@@ -33,6 +33,8 @@ vi.mock("./db", () => ({
   findOrCreateCustomer: vi.fn().mockResolvedValue(7),
   updateBooking: vi.fn().mockResolvedValue(undefined),
   expireStaleBookingsForSlot: vi.fn().mockResolvedValue(0),
+  listElapsedDepositBookings: vi.fn().mockResolvedValue([]),
+  expireElapsedDepositBooking: vi.fn().mockResolvedValue(false),
   isSlotTakenError: () => false,
 }));
 
@@ -237,8 +239,8 @@ describe("the duration interaction", () => {
 
   it("still refuses a job that would run past closing, break or no break", async () => {
     settings({ lunch: "true" });
-    // 16:00 + 3h = 19:00 against an 18:00 close.
-    await expect(caller().create({ ...input, time: "16:00" })).rejects.toThrow(/not available/i);
+    // 17:00 + 3h = 20:00 against a 19:00 close.
+    await expect(caller().create({ ...input, time: "17:00" })).rejects.toThrow(/not available/i);
   });
 });
 

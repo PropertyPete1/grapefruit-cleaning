@@ -29,6 +29,7 @@ import {
 } from "@shared/duration";
 import { PageHeader, SERVICE_LABELS, TableOrCards } from "./adminShared";
 import { AddonCatalogManager } from "./AddonCatalogManager";
+import { BookingHoursSection } from "./AdminSettings";
 
 const EXTRA_LABELS: Record<ExtraId, string> = {
   pets: "Home with pets",
@@ -915,6 +916,9 @@ export default function AdminServices() {
       </div>
 
       <JobDurationsSection />
+      <div className="mt-8">
+        <BookingHoursSection />
+      </div>
       <AddonCatalogManager />
     </div>
   );

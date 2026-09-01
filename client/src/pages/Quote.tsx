@@ -169,6 +169,12 @@ export default function Quote() {
     setStep(Math.max(0, Math.min(totalSteps - 1, next)));
   };
 
+  useEffect(() => {
+    // Reset after the incoming panel renders. Otherwise a shorter next step
+    // inherits the outgoing panel's bottom offset on both phone and desktop.
+    window.scrollTo({ top: 0, behavior: "auto" });
+  }, [step]);
+
   const toggleExtra = (id: string) =>
     setExtras(prev => (prev.includes(id) ? prev.filter(e => e !== id) : [...prev, id]));
 
@@ -197,6 +203,7 @@ export default function Quote() {
 
   const goToBooking = () => {
     const params = new URLSearchParams({
+      source: "quote",
       type,
       bedrooms: String(bedrooms),
       bathrooms: String(bathrooms),

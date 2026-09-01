@@ -26,6 +26,7 @@ const mockOwnerAlert = vi.fn();
 const mockGetSetting = vi.fn();
 const mockSmtpUser = vi.fn();
 const mockActiveProperties = vi.fn();
+const mockElapsedHolds = vi.fn();
 const mockListHeartbeatJobs = vi.fn();
 
 vi.mock("./db", () => ({
@@ -38,6 +39,7 @@ vi.mock("./db", () => ({
   listNudgeCandidates: () => mockCandidates(),
   getSetting: (...a: unknown[]) => mockGetSetting(...a),
   listActiveSyncProperties: () => mockActiveProperties(),
+  listElapsedDepositBookings: (...a: unknown[]) => mockElapsedHolds(...a),
 }));
 
 vi.mock("./_core/heartbeat", () => ({
@@ -71,10 +73,24 @@ beforeEach(() => {
   mockGetSetting.mockResolvedValue("grapefruitcleaningc@gmail.com");
   mockSmtpUser.mockReturnValue("grapefruitcleaningc@gmail.com");
   mockActiveProperties.mockResolvedValue([]);
+  mockElapsedHolds.mockResolvedValue([]);
   mockListHeartbeatJobs.mockResolvedValue({
-    total: 2,
+    total: 3,
     actorUserId: "owner",
     jobs: [
+      {
+        taskUid: "checkout",
+        name: "checkout-hold-release",
+        userId: "owner",
+        description: "",
+        cronExpression: "0 */5 * * * *",
+        callbackPath: "/api/scheduled/checkoutHolds",
+        callbackMethod: "POST",
+        callbackPayload: "{}",
+        isEnable: true,
+        lastExecutedAt: "2026-08-24T13:55:00Z",
+        nextExecutionAt: "2026-08-24T14:05:00Z",
+      },
       {
         taskUid: "ical",
         name: "hourly-ical-sync",
@@ -241,7 +257,9 @@ describe("the daily health check", () => {
       jobs: healthy.jobs.map((job: { name: string }) =>
         job.name === "hourly-ical-sync"
           ? { ...job, isEnable: false }
-          : { ...job, lastExecutedAt: "2026-08-22T14:00:00Z" }
+          : job.name === "daily-booking-reminders"
+            ? { ...job, lastExecutedAt: "2026-08-22T14:00:00Z" }
+            : job
       ),
     });
 
@@ -253,6 +271,36 @@ describe("the daily health check", () => {
       ])
     );
     expect(mockOwnerAlert.mock.calls[0]![0]).toContain("2 items need your attention");
+  });
+
+  it("alerts when an unpaid checkout hold is still pending after its own window", async () => {
+    mockElapsedHolds.mockResolvedValue([
+      {
+        id: 42,
+        reference: "GFC-STUCK42",
+        scheduledDate: "2026-08-29",
+        scheduledTime: "08:00",
+        stripeSessionId: "cs_stuck",
+        createdAt: new Date("2026-08-24T13:30:00Z"),
+        holdMinutes: 15,
+        kind: "public",
+      },
+    ]);
+
+    const findings = await runDailyHealthCheck(NOW);
+
+    expect(findings.overdueCheckoutHolds).toEqual([
+      expect.objectContaining({
+        id: 42,
+        reference: "GFC-STUCK42",
+        holdMinutes: 15,
+        minutesOverdue: 15,
+      }),
+    ]);
+    expect(findings.hasProblems).toBe(true);
+    expect(mockOwnerAlert.mock.calls[0]![0]).toContain("1 item needs your attention");
+    expect(mockOwnerAlert.mock.calls[0]![1]).toContain("UNPAID CHECKOUT HOLDS PAST THEIR WINDOW");
+    expect(mockOwnerAlert.mock.calls[0]![1]).toContain("GFC-STUCK42");
   });
 
   it("says so plainly when there is nothing to report", async () => {

@@ -9,8 +9,9 @@ import { composeAddress } from "@shared/property";
 import type { Booking, Customer } from "../drizzle/schema";
 import * as db from "./db";
 import { buildReminderEmail, deliverEmail, type BookingEmailData } from "./emails";
-import { EXTRA_NAMES, FREQUENCY_NAMES, SERVICE_NAMES } from "./routers/booking";
+import { EXTRA_NAMES, finalizeBooking, FREQUENCY_NAMES, SERVICE_NAMES } from "./routers/booking";
 import { centsToDollars, dollarsToCents } from "@shared/money";
+import { releaseExpiredCheckoutHolds } from "./checkoutHolds";
 
 /** Days between two YYYY-MM-DD dates (b - a), using UTC to avoid TZ drift. */
 export function daysBetween(a: string, b: string): number {
@@ -83,7 +84,10 @@ export async function sendDueReminders(
   today?: string
 ): Promise<{ scanned: number; sent: number; expired: number; details: string[] }> {
   const todayStr = today ?? new Date().toISOString().slice(0, 10);
-  const expired = await db.expireStaleDepositBookings();
+  // Daily fallback for the dedicated five-minute cleanup job. Close any open
+  // Stripe session before releasing its row so an old checkout cannot pay for
+  // a slot that has already returned to availability.
+  const expired = (await releaseExpiredCheckoutHolds(new Date(), finalizeBooking)).released;
   const bookings = await db.listUpcomingConfirmedBookings(todayStr);
   const details: string[] = [];
   let sent = 0;

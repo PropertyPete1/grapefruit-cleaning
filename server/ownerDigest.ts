@@ -15,6 +15,7 @@ import { FIRST_NUDGE_DAYS, REPEAT_NUDGE_DAYS, nudgeDecision, type NudgeCandidate
 import * as db from "./db";
 import { listHeartbeatJobs, type HeartbeatJobInfo } from "./_core/heartbeat";
 import { sendOwnerAlert, smtpUser } from "./emails";
+import { holdMinutesFor } from "./bookingRules";
 
 // ---------------------------------------------------------------------------
 // Health check
@@ -39,6 +40,15 @@ export interface HealthFindings {
     lastExecutedAt: string | null;
     nextExecutionAt: string | null;
   }>;
+  overdueCheckoutHolds: Array<{
+    id: number;
+    reference: string;
+    date: string | null;
+    time: string | null;
+    kind: string;
+    holdMinutes: number;
+    minutesOverdue: number;
+  }>;
   /** Public business mailbox compared with the transport's resolved sender. */
   smtpIdentity: {
     expected: string | null;
@@ -54,6 +64,12 @@ const ICAL_SUCCESS_MAX_AGE_MS = 24 * HOUR_MS;
 const NEXT_EXECUTION_GRACE_MS = 15 * 60 * 1000;
 
 const CRITICAL_SCHEDULES = [
+  {
+    name: "checkout-hold-release",
+    cron: "0 */5 * * * *",
+    path: "/api/scheduled/checkoutHolds",
+    maxAgeMs: 15 * 60 * 1000,
+  },
   {
     name: "hourly-ical-sync",
     cron: "0 5 * * * *",
@@ -158,12 +174,13 @@ function fmtDate(d: Date | string | null | undefined): string {
  * permanent fact of the business is how an alert channel gets ignored.
  */
 export async function runHealthCheck(now: Date = new Date()): Promise<HealthFindings> {
-  const [paid, dead, noEmail, configuredBusinessEmail, activeProperties, heartbeat] = await Promise.all([
+  const [paid, dead, noEmail, configuredBusinessEmail, activeProperties, overdueHolds, heartbeat] = await Promise.all([
     db.findPaidInvoicesOnOpenBookings(),
     db.findInvoicesWithDeadLinks(now),
     db.findCustomersWithoutEmail(),
     db.getSetting("business_email"),
     db.listActiveSyncProperties(),
+    db.listElapsedDepositBookings(now),
     listHeartbeatJobs("", { pageSize: 200 })
       .then(result => ({ jobs: result.jobs, error: null as string | null }))
       .catch(error => ({
@@ -198,6 +215,19 @@ export async function runHealthCheck(now: Date = new Date()): Promise<HealthFind
         nextExecutionAt: null,
       }]
     : inspectCriticalSchedules(heartbeat.jobs, now);
+  const overdueCheckoutHolds: HealthFindings["overdueCheckoutHolds"] = overdueHolds.map(row => {
+    const window = holdMinutesFor(row);
+    const createdMs = asMillis(row.createdAt) ?? nowMs;
+    return {
+      id: row.id,
+      reference: row.reference,
+      date: row.scheduledDate,
+      time: row.scheduledTime,
+      kind: row.kind,
+      holdMinutes: window,
+      minutesOverdue: Math.max(0, Math.floor((nowMs - createdMs) / 60_000 - window)),
+    };
+  });
 
   const findings: HealthFindings = {
     paidOnOpenBookings: paid.map(r => ({
@@ -217,6 +247,7 @@ export async function runHealthCheck(now: Date = new Date()): Promise<HealthFind
     })),
     staleIcalProperties,
     criticalScheduleProblems,
+    overdueCheckoutHolds,
     smtpIdentity: {
       expected: expectedSmtpUser,
       effective: effectiveSmtpUser,
@@ -231,6 +262,7 @@ export async function runHealthCheck(now: Date = new Date()): Promise<HealthFind
     findings.deadLinks.length > 0 ||
     findings.staleIcalProperties.length > 0 ||
     findings.criticalScheduleProblems.length > 0 ||
+    findings.overdueCheckoutHolds.length > 0 ||
     findings.smtpIdentity.matches === false;
   return findings;
 }
@@ -240,6 +272,7 @@ export function healthProblemCount(findings: HealthFindings): number {
     findings.deadLinks.length +
     findings.staleIcalProperties.length +
     findings.criticalScheduleProblems.length +
+    findings.overdueCheckoutHolds.length +
     (findings.smtpIdentity.matches === false ? 1 : 0);
 }
 
@@ -292,9 +325,20 @@ export function formatHealthFindings(f: HealthFindings): string {
   }
   if (f.criticalScheduleProblems.length > 0) {
     lines.push(`CRITICAL SCHEDULES NEED ATTENTION (${f.criticalScheduleProblems.length})`);
-    lines.push("The iCal sync and reminder jobs must stay registered, enabled and current:");
+    lines.push("Checkout release, iCal sync and reminder jobs must stay registered, enabled and current:");
     for (const schedule of f.criticalScheduleProblems) {
       lines.push(`  • ${schedule.name} — ${schedule.problem}: ${schedule.detail}`);
+    }
+    lines.push("");
+  }
+  if (f.overdueCheckoutHolds.length > 0) {
+    lines.push(`UNPAID CHECKOUT HOLDS PAST THEIR WINDOW (${f.overdueCheckoutHolds.length})`);
+    lines.push("These rows should have been released automatically and may still be blocking availability:");
+    for (const hold of f.overdueCheckoutHolds) {
+      lines.push(
+        `  • ${hold.reference} — ${hold.date ?? "no date"} ${hold.time ?? ""} — ` +
+        `${hold.minutesOverdue} minute(s) overdue (window ${hold.holdMinutes} min, ${hold.kind})`
+      );
     }
     lines.push("");
   }

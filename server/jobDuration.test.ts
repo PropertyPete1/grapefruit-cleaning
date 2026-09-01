@@ -32,6 +32,8 @@ vi.mock("./db", () => ({
   getCouponByCode: vi.fn().mockResolvedValue(undefined),
   findOrCreateCustomer: vi.fn().mockResolvedValue(7),
   updateBooking: vi.fn().mockResolvedValue(undefined),
+  listElapsedDepositBookings: vi.fn().mockResolvedValue([]),
+  expireElapsedDepositBooking: vi.fn().mockResolvedValue(false),
   expireStaleBookingsForSlot: vi.fn().mockResolvedValue(0),
   createPayment: vi.fn(),
   getCustomerById: vi.fn().mockResolvedValue(undefined),
@@ -77,7 +79,7 @@ import { adminRouter } from "./routers/admin";
 import { bookingRouter, finalizeBooking, occupiedIntervals } from "./routers/booking";
 import type { TrpcContext } from "./_core/context";
 
-/** A Wednesday: open 8:00–18:00 under the default schedule. */
+/** A Wednesday: open 8:00–19:00 under the default schedule. */
 const WEDNESDAY = "2026-08-19";
 const ALL_SERVICES: CleaningType[] = ["residential", "commercial", "airbnb", "moveinout", "deep", "office"];
 
@@ -332,12 +334,12 @@ describe("overlap at the boundaries", () => {
 
 describe("finishing before closing time", () => {
   it("allows a job that ends exactly at close", () => {
-    // Default Wednesday closes at 18:00, so a 4-hour job may start at 14:00.
-    expect(fitsBeforeClose("14:00", 4, WEDNESDAY, DEFAULT_SCHEDULE)).toBe(true);
+    // Default Wednesday closes at 19:00, so a 4-hour job may start at 15:00.
+    expect(fitsBeforeClose("15:00", 4, WEDNESDAY, DEFAULT_SCHEDULE)).toBe(true);
   });
 
   it("refuses one that would run an hour past", () => {
-    expect(fitsBeforeClose("15:00", 4, WEDNESDAY, DEFAULT_SCHEDULE)).toBe(false);
+    expect(fitsBeforeClose("16:00", 4, WEDNESDAY, DEFAULT_SCHEDULE)).toBe(false);
   });
 
   it("refuses everything on a closed day", () => {
@@ -379,11 +381,11 @@ describe("duration blocking composes with the other rules", () => {
 
   it("withholds a start too late in the day for the job to finish", () => {
     const forFourHours = bookableSlots({ ...base, occupied: [], jobHours: 4 });
-    expect(forFourHours).toContain("14:00"); // 14:00 + 4h = 18:00, exactly close
-    expect(forFourHours).not.toContain("15:00");
-    expect(forFourHours).not.toContain("17:00");
+    expect(forFourHours).toContain("15:00"); // 15:00 + 4h = 19:00, exactly close
+    expect(forFourHours).not.toContain("16:00");
+    expect(forFourHours).not.toContain("18:00");
     // A short job still gets the late slots.
-    expect(bookableSlots({ ...base, occupied: [], jobHours: 1 })).toContain("17:00");
+    expect(bookableSlots({ ...base, occupied: [], jobHours: 1 })).toContain("18:00");
   });
 
   it("still applies the lead time", () => {
@@ -398,7 +400,7 @@ describe("duration blocking composes with the other rules", () => {
   });
 
   it("returns nothing bookable for a day fully committed", () => {
-    const allDay = [{ time: "08:00", hours: 10 }];
+    const allDay = [{ time: "08:00", hours: 11 }];
     expect(bookableSlots({ ...base, occupied: allDay, jobHours: 1 })).toEqual([]);
   });
 
@@ -565,14 +567,14 @@ describe("booking.availability blocks the whole span", () => {
   it("withholds late starts once it knows how long the job is", async () => {
     const withJob = await publicCaller().availability({ date: WEDNESDAY, serviceType: "deep", sqft: 2500 });
     const free = withJob.filter(s => s.available).map(s => s.time);
-    // A 5-hour deep clean against an 18:00 close may start no later than 13:00.
-    expect(free).toContain("13:00");
-    expect(free).not.toContain("14:00");
+    // A 5-hour deep clean against a 19:00 close may start no later than 14:00.
+    expect(free).toContain("14:00");
+    expect(free).not.toContain("15:00");
   });
 
   it("does not restrict late starts before it knows", async () => {
     const withoutJob = await publicCaller().availability({ date: WEDNESDAY });
-    expect(withoutJob.filter(s => s.available).map(s => s.time)).toContain("17:00");
+    expect(withoutJob.filter(s => s.available).map(s => s.time)).toContain("18:00");
   });
 
   it("uses the admin's ladder, not the defaults", async () => {
@@ -584,9 +586,9 @@ describe("booking.availability blocks the whole span", () => {
     });
     const slots = await publicCaller().availability({ date: WEDNESDAY, serviceType: "residential", sqft: 5000 });
     const free = slots.filter(s => s.available).map(s => s.time);
-    // Two hours now, so 16:00 is the last start that finishes by 18:00.
-    expect(free).toContain("16:00");
-    expect(free).not.toContain("17:00");
+    // Two hours now, so 17:00 is the last start that finishes by 19:00.
+    expect(free).toContain("17:00");
+    expect(free).not.toContain("18:00");
   });
 });
 
@@ -609,9 +611,9 @@ describe("booking.create refuses an overlapping start", () => {
     await expect(publicCaller().create(createInput)).resolves.toMatchObject({ bookingId: 99 });
   });
 
-  it("rejects a start too late to finish before closing", async () => {
-    // 14:00 + 5h = 19:00, an hour past the 18:00 close.
-    await expect(publicCaller().create({ ...createInput, time: "14:00" })).rejects.toThrow(/not available/i);
+  it("accepts the last start that finishes exactly at 7 PM and rejects the next hour", async () => {
+    await expect(publicCaller().create({ ...createInput, time: "14:00" })).resolves.toMatchObject({ bookingId: 99 });
+    await expect(publicCaller().create({ ...createInput, time: "15:00" })).rejects.toThrow(/not available/i);
   });
 
   it("says it in Spanish for a Spanish booking", async () => {

@@ -19,6 +19,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mockCreateBooking = vi.fn();
 const mockUpdateBooking = vi.fn();
 const mockExpireStaleForSlot = vi.fn();
+const mockListElapsedDepositBookings = vi.fn();
 const mockSessionCreate = vi.fn();
 
 vi.mock("./db", async () => {
@@ -33,6 +34,8 @@ vi.mock("./db", async () => {
     getBookingById: vi.fn().mockResolvedValue(undefined),
     getBalanceInvoiceForBooking: vi.fn().mockResolvedValue(undefined),
     expireStaleBookingsForSlot: (...args: unknown[]) => mockExpireStaleForSlot(...args),
+    listElapsedDepositBookings: (...args: unknown[]) => mockListElapsedDepositBookings(...args),
+    expireElapsedDepositBooking: vi.fn().mockResolvedValue(false),
     // The real discriminator — this is part of what's under test.
     isSlotTakenError: actual.isSlotTakenError,
   };
@@ -226,15 +229,16 @@ beforeEach(() => {
   mockCreateBooking.mockReset().mockResolvedValue(99);
   mockUpdateBooking.mockReset().mockResolvedValue(undefined);
   mockExpireStaleForSlot.mockReset().mockResolvedValue(0);
+  mockListElapsedDepositBookings.mockReset().mockResolvedValue([]);
   mockSessionCreate.mockReset().mockResolvedValue({ id: "cs_1", url: "https://stripe.test/pay" });
 });
 
 describe("booking.create against the constraint", () => {
-  it("hands back the slot an abandoned checkout is still holding, before inserting", async () => {
+  it("runs the provider-safe abandoned-checkout sweep before inserting", async () => {
     await caller().create(input);
-    expect(mockExpireStaleForSlot).toHaveBeenCalledWith(OPEN_MONDAY, "10:00");
+    expect(mockListElapsedDepositBookings).toHaveBeenCalledOnce();
     // Order matters: releasing the slot after the insert would be too late.
-    expect(mockExpireStaleForSlot.mock.invocationCallOrder[0]!).toBeLessThan(
+    expect(mockListElapsedDepositBookings.mock.invocationCallOrder[0]!).toBeLessThan(
       mockCreateBooking.mock.invocationCallOrder[0]!
     );
   });

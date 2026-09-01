@@ -76,7 +76,7 @@ function hourLabel(h: number): string {
   return h < 12 ? `${h}:00 AM` : `${h - 12}:00 PM`;
 }
 
-function BookingHoursSection() {
+export function BookingHoursSection() {
   const utils = trpc.useUtils();
   const settings = trpc.admin.settings.useQuery();
   const save = trpc.admin.saveSetting.useMutation({
@@ -116,8 +116,8 @@ function BookingHoursSection() {
     <div className="rounded-2xl bg-card p-8 shadow-sm ring-1 ring-border">
       <h2 className="font-display text-lg font-bold text-foreground">Booking hours</h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        Controls which days and time slots customers can book. Slots are hourly; the last appointment starts one
-        hour before closing. Sunday stays closed unless you switch it on here.
+        Controls which days and time slots customers can book. Slots are hourly; the last start is calculated from
+        that service's estimated duration so every job finishes by closing. Sunday stays closed unless you switch it on here.
       </p>
       <div className="mt-6 space-y-3">
         {DAY_ORDER.map(day => {
@@ -247,7 +247,7 @@ function DepositHoldSection() {
       <h2 className="font-display text-lg font-bold text-foreground">Phone booking deposit hold</h2>
       <p className="mt-1 text-sm text-muted-foreground">
         When you create a booking by hand, this is how long their slot stays held while you wait for the
-        deposit. Someone who booked online gets one hour; a customer you quoted on the phone usually needs the
+        deposit. Someone who booked online gets 15 minutes; a customer you quoted on the phone usually needs the
         evening, so this defaults to 24. Their deposit link expires at the same moment the hold does.
       </p>
       <p className="mt-2 text-xs text-muted-foreground">

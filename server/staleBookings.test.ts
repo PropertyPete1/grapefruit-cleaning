@@ -9,10 +9,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mockGetBookingById = vi.fn();
 const mockUpdateBooking = vi.fn();
 const mockCreatePayment = vi.fn();
-const mockExpireStale = vi.fn();
+const mockListElapsed = vi.fn();
+const mockExpireElapsed = vi.fn();
 const mockGetOccupiedBookings = vi.fn();
 const mockSessionCreate = vi.fn();
+const mockSessionRetrieve = vi.fn();
+const mockSessionExpire = vi.fn();
 const mockConfirmUnpaidBooking = vi.fn();
+const mockCreateBooking = vi.fn();
 
 vi.mock("./db", () => ({
   getSetting: vi.fn().mockResolvedValue(null),
@@ -23,13 +27,14 @@ vi.mock("./db", () => ({
   getCouponByCode: vi.fn().mockResolvedValue(undefined),
   incrementCouponRedemptions: vi.fn(),
   getCustomerById: vi.fn().mockResolvedValue(undefined),
-  expireStaleDepositBookings: (...args: unknown[]) => mockExpireStale(...args),
+  listElapsedDepositBookings: (...args: unknown[]) => mockListElapsed(...args),
+  expireElapsedDepositBooking: (...args: unknown[]) => mockExpireElapsed(...args),
   expireStaleBookingsForSlot: vi.fn().mockResolvedValue(0),
   isSlotTakenError: () => false,
   listUpcomingConfirmedBookings: vi.fn().mockResolvedValue([]),
   getOccupiedBookings: (...args: unknown[]) => mockGetOccupiedBookings(...args),
   findOrCreateCustomer: vi.fn().mockResolvedValue(7),
-  createBooking: vi.fn().mockResolvedValue(99),
+  createBooking: (...args: unknown[]) => mockCreateBooking(...args),
 }));
 
 vi.mock("./property", () => ({
@@ -41,13 +46,16 @@ vi.mock("./stripe", () => ({
     checkout: {
       sessions: {
         create: (...args: unknown[]) => mockSessionCreate(...args),
+        retrieve: (...args: unknown[]) => mockSessionRetrieve(...args),
+        expire: (...args: unknown[]) => mockSessionExpire(...args),
       },
     },
   }),
 }));
 
-import { blocksSlot, STALE_DEPOSIT_MINUTES } from "./bookingRules";
+import { blocksSlot, STALE_DEPOSIT_MINUTES, STRIPE_CHECKOUT_SESSION_MINUTES } from "./bookingRules";
 import { bookingRouter, finalizeBooking } from "./routers/booking";
+import { adminRouter } from "./routers/admin";
 import { sendDueReminders } from "./reminders";
 import { OPEN_MONDAY } from "./testDates";
 import type { TrpcContext } from "./_core/context";
@@ -68,9 +76,13 @@ beforeEach(() => {
   mockGetBookingById.mockReset();
   mockUpdateBooking.mockReset();
   mockCreatePayment.mockReset();
-  mockExpireStale.mockReset();
+  mockListElapsed.mockReset().mockResolvedValue([]);
+  mockExpireElapsed.mockReset().mockResolvedValue(true);
   mockGetOccupiedBookings.mockReset().mockResolvedValue([]);
   mockSessionCreate.mockReset().mockResolvedValue({ id: "cs_test_123", url: "https://stripe.test/pay" });
+  mockSessionRetrieve.mockReset().mockResolvedValue({ status: "open", payment_status: "unpaid" });
+  mockSessionExpire.mockReset().mockResolvedValue({ status: "expired" });
+  mockCreateBooking.mockReset().mockResolvedValue(99);
   // Default: this caller wins the claim. Races override it per-test.
   mockConfirmUnpaidBooking.mockReset().mockResolvedValue(true);
 });
@@ -225,7 +237,7 @@ describe("booking.create checkout session", () => {
     locale: "en" as const,
   };
 
-  it("sets expires_at so the payment link dies when the booking goes stale", async () => {
+  it("pins a 15-minute slot hold while respecting Stripe's 30-minute provider minimum", async () => {
     const before = Math.floor(Date.now() / 1000);
     const result = await caller().create(createInput);
     const after = Math.floor(Date.now() / 1000);
@@ -233,8 +245,12 @@ describe("booking.create checkout session", () => {
     expect(mockSessionCreate).toHaveBeenCalledTimes(1);
     const session = mockSessionCreate.mock.calls[0]![0] as { expires_at: number; allow_promotion_codes: boolean };
     expect(session.allow_promotion_codes).toBe(false);
-    expect(session.expires_at).toBeGreaterThanOrEqual(before + STALE_DEPOSIT_MINUTES * 60);
-    expect(session.expires_at).toBeLessThanOrEqual(after + STALE_DEPOSIT_MINUTES * 60);
+    expect(session.expires_at).toBeGreaterThanOrEqual(before + STRIPE_CHECKOUT_SESSION_MINUTES * 60);
+    expect(session.expires_at).toBeLessThanOrEqual(after + STRIPE_CHECKOUT_SESSION_MINUTES * 60);
+    expect(mockCreateBooking).toHaveBeenCalledWith(expect.objectContaining({
+      status: "pending_deposit",
+      holdMinutes: STALE_DEPOSIT_MINUTES,
+    }));
   });
 
   it("rejects a booking whose slot is already taken", async () => {
@@ -244,11 +260,74 @@ describe("booking.create checkout session", () => {
   });
 });
 
+describe("admin cancellation releases the slot safely", () => {
+  const caller = () =>
+    adminRouter.createCaller({
+      user: { id: 1, role: "admin" },
+      req: { protocol: "https", headers: { origin: "https://example.com" } },
+    } as never);
+
+  it("closes an open Stripe Checkout before cancelling the booking row", async () => {
+    mockGetBookingById.mockResolvedValue({
+      id: 42,
+      status: "pending_deposit",
+      scheduledDate: OPEN_MONDAY,
+      scheduledTime: "10:00",
+      stripeSessionId: "cs_test_open",
+    });
+
+    await expect(caller().updateBookingStatus({ id: 42, status: "cancelled" })).resolves.toEqual({ success: true });
+
+    expect(mockSessionRetrieve).toHaveBeenCalledWith("cs_test_open");
+    expect(mockSessionExpire).toHaveBeenCalledWith("cs_test_open");
+    expect(mockUpdateBooking).toHaveBeenCalledWith(42, { status: "cancelled" });
+    expect(mockSessionExpire.mock.invocationCallOrder[0]).toBeLessThan(mockUpdateBooking.mock.invocationCallOrder[0]);
+  });
+
+  it("finalizes a paid-session race and refuses to relabel it cancelled", async () => {
+    mockGetBookingById.mockResolvedValue({
+      id: 42,
+      customerId: 7,
+      status: "pending_deposit",
+      scheduledDate: OPEN_MONDAY,
+      scheduledTime: "10:00",
+      stripeSessionId: "cs_test_paid",
+      depositAmount: 33,
+      couponCode: null,
+      extras: "[]",
+      reference: "GFC-PAID42",
+      serviceType: "residential",
+      sqft: 900,
+      estimatedHours: 1,
+    });
+    mockSessionRetrieve.mockResolvedValue({
+      status: "complete",
+      payment_status: "paid",
+      payment_intent: "pi_paid42",
+    });
+
+    await expect(caller().updateBookingStatus({ id: 42, status: "cancelled" })).rejects.toThrow(
+      /confirmed instead of cancelled/i
+    );
+
+    expect(mockConfirmUnpaidBooking).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ stripePaymentIntentId: "pi_paid42" })
+    );
+    expect(mockUpdateBooking).not.toHaveBeenCalledWith(42, { status: "cancelled" });
+  });
+});
+
 describe("reminder cron expiry", () => {
-  it("expires stale pending_deposit bookings on every cron run", async () => {
-    mockExpireStale.mockResolvedValue(3);
+  it("uses the Stripe-aware release sweep as a daily fallback", async () => {
+    mockListElapsed.mockResolvedValue([
+      { id: 1, reference: "GFC-A", stripeSessionId: null },
+      { id: 2, reference: "GFC-B", stripeSessionId: null },
+      { id: 3, reference: "GFC-C", stripeSessionId: null },
+    ]);
     const summary = await sendDueReminders("2026-07-16");
-    expect(mockExpireStale).toHaveBeenCalledTimes(1);
+    expect(mockListElapsed).toHaveBeenCalledTimes(1);
+    expect(mockExpireElapsed).toHaveBeenCalledTimes(3);
     expect(summary.expired).toBe(3);
   });
 });

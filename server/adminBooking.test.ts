@@ -53,6 +53,8 @@ vi.mock("./db", async () => {
       phone: "2105550000",
     }),
     expireStaleBookingsForSlot: vi.fn().mockResolvedValue(0),
+    listElapsedDepositBookings: vi.fn().mockResolvedValue([]),
+    expireElapsedDepositBooking: vi.fn().mockResolvedValue(false),
     isSlotTakenError: () => false,
     listInvoices: vi.fn().mockResolvedValue([]),
     listInvoicesAwaitingApproval: vi.fn().mockResolvedValue([]),
@@ -345,10 +347,10 @@ describe("the notice-period override", () => {
 });
 
 describe("the deposit link's slot hold", () => {
-  it("holds for 24 hours by default, where the public flow holds for one", async () => {
+  it("holds for 24 hours by default, where the public flow holds for 15 minutes", async () => {
     await adminCaller().createBooking(input);
     expect(written().holdMinutes).toBe(24 * 60);
-    expect(STALE_DEPOSIT_MINUTES).toBe(60);
+    expect(STALE_DEPOSIT_MINUTES).toBe(15);
   });
 
   it("takes the configured window when the owner sets one", async () => {

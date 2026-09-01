@@ -30,7 +30,11 @@ import { LEAD_TIME_SETTING_KEY, parseLeadTimeHours } from "@shared/leadTime";
 import { LUNCH_SETTING_KEY, parseLunchBreak, parseSchedule, SCHEDULE_SETTING_KEY } from "@shared/schedule";
 import * as db from "../db";
 import { assertRateLimit, clientIp } from "../antiSpam";
-import { blocksSlot, STALE_DEPOSIT_MINUTES } from "../bookingRules";
+import {
+  blocksSlot,
+  STALE_DEPOSIT_MINUTES,
+  STRIPE_CHECKOUT_SESSION_MINUTES,
+} from "../bookingRules";
 import { parseAdminProvided } from "../depositLinkRules";
 import { composeAddress, plausibleVerifiedSqft, PROPERTY_TYPES } from "@shared/property";
 import { sendBookingEmails } from "../emails";
@@ -40,6 +44,7 @@ import { getStripe } from "../stripe";
 import { publicProcedure, router } from "../_core/trpc";
 import { bookingAddonSnapshots, loadAddonCatalog, resolveSelectedAddons } from "../addonCatalog";
 import { centsToDollars, depositCents, dollarsToCents, legacyWholeDollars } from "@shared/money";
+import { releaseExpiredCheckoutHolds } from "../checkoutHolds";
 
 const quoteInputSchema = z.object({
   type: z.enum(["residential", "commercial", "airbnb", "moveinout", "deep", "office"]),
@@ -418,7 +423,7 @@ export const bookingRouter = router({
       // checkout on this slot — getOccupiedBookings already counts those as
       // free, but the row keeps the slot until its status changes, and the
       // index goes by the row.
-      await db.expireStaleBookingsForSlot(input.date, input.time);
+      await releaseExpiredCheckoutHolds();
 
       // Re-check as close to the insert as this can get. Two things can have
       // moved since the first check: another booking may have taken overlapping
@@ -471,6 +476,10 @@ export const bookingRouter = router({
           // the booking is confirmed by the insert itself. No Stripe session
           // ever exists for it, so no stale-hold clock and no expiry either.
           status: exactDepositCents > 0 ? "pending_deposit" : "confirmed",
+          // This is a short checkout reservation, not a confirmed job. Pin the
+          // window on the row so a later config or code change cannot resurrect
+          // a slot that was already released and rebooked.
+          holdMinutes: exactDepositCents > 0 ? STALE_DEPOSIT_MINUTES : undefined,
           couponCode,
           discountApplied,
           discountAppliedCents,
@@ -531,10 +540,10 @@ export const bookingRouter = router({
         customer_email: input.email,
         client_reference_id: String(bookingId),
         allow_promotion_codes: false,
-        // The payment link dies when the booking goes stale and releases its
-        // slot (STALE_DEPOSIT_MINUTES), so an old tab can't quietly pay for a
-        // slot that has been given away. Stripe allows 30 min–24 h.
-        expires_at: Math.floor(Date.now() / 1000) + STALE_DEPOSIT_MINUTES * 60,
+        // Stripe only allows 30 min–24 h at creation. Our five-minute sweep
+        // expires this session through Stripe's API after the 15-minute row
+        // hold lapses, then releases the booking slot.
+        expires_at: Math.floor(Date.now() / 1000) + STRIPE_CHECKOUT_SESSION_MINUTES * 60,
         line_items: [
           {
             price_data: {
@@ -662,8 +671,8 @@ export async function finalizeBooking(bookingId: number, paymentIntentId: string
   //
   // Gated on whether this booking still holds its own slot, NOT on its status.
   // A pending_deposit row releases its slot on the clock, at
-  // STALE_DEPOSIT_MINUTES, but only flips to "expired" when the daily cron
-  // runs — so a status check misses every conflict in that window. While the
+  // STALE_DEPOSIT_MINUTES, but only flips to "expired" when the cleanup sweep
+  // runs — so a status check can miss a conflict inside scheduler jitter. While the
   // booking does still hold its slot, getOccupiedBookings would match itself.
   //
   // Overlap, not an identical start: while this checkout sat unpaid, a longer

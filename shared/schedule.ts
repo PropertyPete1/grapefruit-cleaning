@@ -2,13 +2,12 @@
  * Booking schedule — settings-driven weekly hours.
  *
  * Defaults (used when the admin has not customized anything):
- *   Monday–Friday: 8:00 AM – 6:00 PM
- *   Saturday:      8:00 AM – 4:00 PM
+ *   Monday–Saturday: 8:00 AM – 7:00 PM
  *   Sunday:        Closed (bookings blocked unless manually enabled by admin)
  *
  * The admin can override any day via the `booking_schedule` site setting
- * (JSON). Slots are hourly, starting on the hour; the last slot starts one
- * hour before closing time.
+ * (JSON). Slots are hourly, starting on the hour; availability applies the
+ * job's estimated duration so the last offered start still finishes by close.
  *
  * The 12:00 lunch gap the original site had is now the `booking_lunch_break`
  * setting, and it is OFF by default — noon is bookable unless the owner says
@@ -29,13 +28,13 @@ export interface DaySchedule {
 export type WeeklySchedule = Record<number, DaySchedule>;
 
 export const DEFAULT_SCHEDULE: WeeklySchedule = {
-  0: { open: false, start: 8, end: 16 }, // Sunday — closed by default
-  1: { open: true, start: 8, end: 18 },
-  2: { open: true, start: 8, end: 18 },
-  3: { open: true, start: 8, end: 18 },
-  4: { open: true, start: 8, end: 18 },
-  5: { open: true, start: 8, end: 18 },
-  6: { open: true, start: 8, end: 16 }, // Saturday 8–4
+  0: { open: false, start: 8, end: 19 }, // Sunday — closed by default
+  1: { open: true, start: 8, end: 19 },
+  2: { open: true, start: 8, end: 19 },
+  3: { open: true, start: 8, end: 19 },
+  4: { open: true, start: 8, end: 19 },
+  5: { open: true, start: 8, end: 19 },
+  6: { open: true, start: 8, end: 19 },
 };
 
 /** Setting key that stores the admin-customized schedule as JSON. */

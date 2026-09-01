@@ -8,7 +8,10 @@
  * calendar slot. Admin-created bookings pin their own, longer window — see
  * holdMinutesFor and shared/holdWindow.ts.
  */
-export const STALE_DEPOSIT_MINUTES = 60;
+export const STALE_DEPOSIT_MINUTES = 15;
+
+/** Stripe Checkout itself cannot be created with less than a 30-minute expiry. */
+export const STRIPE_CHECKOUT_SESSION_MINUTES = 30;
 
 /**
  * The hold window that applies to one booking, in minutes.
@@ -17,8 +20,9 @@ export const STALE_DEPOSIT_MINUTES = 60;
  * the booking is created: raising the setting later must not resurrect a slot
  * that has already been released and given to someone else.
  *
- * NULL means a row written before the column existed — every one of those came
- * from the public flow, so the old global constant is exactly right for them.
+ * NULL means a row written before the column existed. The current public hold
+ * is deliberately used as the safe fallback; the cleanup migration/sweep
+ * releases any legacy unpaid row already beyond that window.
  */
 export function holdMinutesFor(booking: { holdMinutes?: number | null }): number {
   const pinned = booking.holdMinutes;

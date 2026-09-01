@@ -43,6 +43,8 @@ vi.mock("./db", async () => {
       phone: "5125550134",
     }),
     expireStaleBookingsForSlot: vi.fn().mockResolvedValue(0),
+    listElapsedDepositBookings: vi.fn().mockResolvedValue([]),
+    expireElapsedDepositBooking: vi.fn().mockResolvedValue(false),
     confirmUnpaidBooking: (...a: unknown[]) => mockConfirmUnpaid(...a),
     createPayment: vi.fn(),
     incrementCouponRedemptions: vi.fn(),

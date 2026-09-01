@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
+import { es } from "date-fns/locale";
 import {
   Briefcase,
   Building2,
@@ -86,8 +87,10 @@ export default function Booking() {
   const sessionId = params.get("session_id");
   const refParam = params.get("ref");
   const cancelled = params.get("cancelled");
+  const fromQuote = params.get("source") === "quote";
+  const firstStep = fromQuote ? 1 : 0;
 
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useState(firstStep);
   const [direction, setDirection] = useState(1);
 
   const [type, setType] = useState<CleaningType>(() => {
@@ -230,7 +233,12 @@ export default function Booking() {
   // before closing. booking.create re-derives both and re-checks.
   const availability = trpc.booking.availability.useQuery(
     { date: dateString ?? "", serviceType: type, sqft },
-    { enabled: Boolean(dateString) }
+    {
+      enabled: Boolean(dateString),
+      staleTime: 0,
+      refetchInterval: 15_000,
+      refetchOnWindowFocus: true,
+    }
   );
   const scheduleQuery = trpc.booking.schedule.useQuery(undefined, { staleTime: 5 * 60 * 1000 });
 
@@ -265,7 +273,11 @@ export default function Booking() {
 
   useEffect(() => {
     if (cancelled) {
-      toast.info(locale === "es" ? "Pago cancelado. Su reserva sigue guardada — puede intentarlo de nuevo." : "Payment cancelled. Your booking is saved — you can try again anytime.");
+      toast.info(
+        locale === "es"
+          ? "Pago cancelado. El horario queda reservado por 15 minutos; vuelva al pago o espere a que se libere."
+          : "Payment cancelled. The time stays reserved for 15 minutes; return to checkout or wait for it to be released."
+      );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cancelled]);
@@ -278,12 +290,16 @@ export default function Booking() {
     t.booking.steps.review,
   ];
   const totalSteps = stepTitles.length;
+  const visibleSteps = fromQuote ? [1, 2, 3, 4] : [0, 1, 2, 3, 4];
 
   const go = (next: number) => {
     setDirection(next > step ? 1 : -1);
-    setStep(Math.max(0, Math.min(totalSteps - 1, next)));
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    setStep(Math.max(firstStep, Math.min(totalSteps - 1, next)));
   };
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "auto" });
+  }, [step]);
 
   const validateStep = (): boolean => {
     if (step === 1) {
@@ -490,9 +506,9 @@ export default function Booking() {
 
         {/* Progress */}
         <div className="mx-auto mt-10 flex max-w-3xl items-center gap-2">
-          {stepTitles.map((title, i) => (
+          {visibleSteps.map(i => (
             <button
-              key={title}
+              key={stepTitles[i]}
               type="button"
               onClick={() => i < step && go(i)}
               className="group flex flex-1 flex-col items-center gap-2"
@@ -507,7 +523,7 @@ export default function Booking() {
                   i <= step ? "text-primary" : "text-muted-foreground"
                 }`}
               >
-                {title}
+                {stepTitles[i]}
               </span>
             </button>
           ))}
@@ -594,6 +610,7 @@ export default function Booking() {
                     <div className="flex justify-center rounded-2xl border border-border p-2">
                       <Calendar
                         mode="single"
+                        locale={locale === "es" ? es : undefined}
                         selected={date}
                         onSelect={d => {
                           setDate(d);
@@ -1047,7 +1064,7 @@ export default function Booking() {
                 <Button
                   variant="ghost"
                   onClick={() => go(step - 1)}
-                  disabled={step === 0}
+                  disabled={step === firstStep}
                   className="btn-press rounded-full px-5"
                 >
                   <ChevronLeft className="mr-1 h-4 w-4" /> {t.common.back}

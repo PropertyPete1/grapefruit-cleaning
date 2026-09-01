@@ -45,10 +45,15 @@ export default function AdminAppointments() {
     (pendingApproval.data ?? []).flatMap(inv => (inv.bookingId ? [[inv.bookingId, inv.amount] as const] : []))
   );
   const updateStatus = trpc.admin.updateBookingStatus.useMutation({
-    onSuccess: () => {
+    onSuccess: (_result, variables) => {
       utils.admin.bookings.invalidate();
       utils.admin.stats.invalidate();
-      toast.success("Booking status updated");
+      utils.booking.availability.invalidate();
+      toast.success(
+        variables.status === "cancelled" || variables.status === "expired"
+          ? "Booking released — the slot is available again"
+          : "Booking status updated"
+      );
     },
     onError: () => toast.error("Failed to update status"),
   });

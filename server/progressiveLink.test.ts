@@ -29,6 +29,7 @@ const mockLookupProperty = vi.fn();
 const mockSendMail = vi.fn();
 const mockFindOrCreateCustomer = vi.fn();
 const mockExpireForSlot = vi.fn();
+const mockListElapsedDepositBookings = vi.fn();
 const mockConfirmUnpaid = vi.fn();
 const mockCreatePayment = vi.fn();
 
@@ -52,6 +53,8 @@ vi.mock("./db", async () => {
       phone: "2105550134",
     }),
     expireStaleBookingsForSlot: (...a: unknown[]) => mockExpireForSlot(...a),
+    listElapsedDepositBookings: (...a: unknown[]) => mockListElapsedDepositBookings(...a),
+    expireElapsedDepositBooking: vi.fn().mockResolvedValue(false),
     confirmUnpaidBooking: (...a: unknown[]) => mockConfirmUnpaid(...a),
     createPayment: (...a: unknown[]) => mockCreatePayment(...a),
     incrementCouponRedemptions: vi.fn(),
@@ -173,6 +176,7 @@ beforeEach(() => {
   mockGetBookingByPayToken.mockResolvedValue(linkRow());
   mockGetBookingById.mockResolvedValue(linkRow());
   mockExpireForSlot.mockResolvedValue(0);
+  mockListElapsedDepositBookings.mockResolvedValue([]);
   mockSendMail.mockResolvedValue({ messageId: "1" });
 });
 
@@ -450,8 +454,8 @@ describe("claiming the slot", () => {
       claimed: true,
     });
     expect(patched()).toMatchObject({ scheduledDate: OPEN_MONDAY, scheduledTime: "10:00", estimatedHours: 3 });
-    // The stale-hold handback ran before the check, as in every booking path.
-    expect(mockExpireForSlot).toHaveBeenCalledWith(OPEN_MONDAY, "10:00");
+    // The provider-safe stale-hold sweep ran before the check, as in every booking path.
+    expect(mockListElapsedDepositBookings).toHaveBeenCalledOnce();
   });
 
   it("requires service and size first — duration is unknowable without them", async () => {
@@ -488,7 +492,7 @@ describe("claiming the slot", () => {
   });
 
   it("refuses a start the job cannot finish before close", async () => {
-    await expect(payCaller().claimSlot({ token: TOKEN, date: OPEN_MONDAY, time: "16:00" })).rejects.toThrow(
+    await expect(payCaller().claimSlot({ token: TOKEN, date: OPEN_MONDAY, time: "17:00" })).rejects.toThrow(
       /not available/i
     );
   });

@@ -30,6 +30,8 @@ vi.mock("./db", () => ({
   getCouponByCode: vi.fn().mockResolvedValue(undefined),
   findOrCreateCustomer: vi.fn().mockResolvedValue(7),
   updateBooking: vi.fn().mockResolvedValue(undefined),
+  listElapsedDepositBookings: vi.fn().mockResolvedValue([]),
+  expireElapsedDepositBooking: vi.fn().mockResolvedValue(false),
   expireStaleBookingsForSlot: vi.fn().mockResolvedValue(0),
   isSlotTakenError: () => false,
 }));
@@ -52,7 +54,7 @@ import type { TrpcContext } from "./_core/context";
 
 const BOOKING_PAGE = fileURLToPath(new URL("../client/src/pages/Booking.tsx", import.meta.url));
 
-/** A Wednesday: open 8:00–18:00, slots 8–11 and 13–17 under the default schedule. */
+/** A Wednesday: open 8:00–19:00 under the default schedule. */
 const TODAY = "2026-08-19";
 
 /** Freezes the clock at a wall-clock time on TODAY, San Antonio. */
@@ -139,18 +141,19 @@ describe("what today still offers", () => {
   it("leaves the slots that clear the notice period and finish before closing", async () => {
     // 09:30 on the day. Default 3-hour notice → nothing before 12:30, so 13:00
     // is the first candidate. A 1,200 sq ft residential clean runs 3 hours
-    // against an 18:00 close → last start 15:00.
+    // against a 19:00 close → last start 16:00.
     vi.setSystemTime(atLocal("09:30"));
     expect(await offeredToday({ serviceType: "residential", sqft: 1200 })).toEqual([
       "13:00",
       "14:00",
       "15:00",
+      "16:00",
     ]);
   });
 
   it("offers the whole rest of the day first thing in the morning", async () => {
     // 05:00, before opening: the 3-hour notice clears everything from 08:00,
-    // and a 2-hour job fits up to a 16:00 start.
+    // and a 2-hour job fits up to a 17:00 start.
     vi.setSystemTime(atLocal("05:00"));
     expect(await offeredToday({ serviceType: "residential", sqft: 800 })).toEqual([
       "08:00",
@@ -162,6 +165,7 @@ describe("what today still offers", () => {
       "14:00",
       "15:00",
       "16:00",
+      "17:00",
     ]);
   });
 
@@ -192,10 +196,10 @@ describe("what today still offers", () => {
 
   it("holds the closing boundary exactly", async () => {
     vi.setSystemTime(atLocal("05:00"));
-    // A 5-hour deep clean against an 18:00 close may start at 13:00, not 14:00.
+    // A 5-hour deep clean against a 19:00 close may start at 14:00, not 15:00.
     const deep = await offeredToday({ serviceType: "deep", sqft: 2500 });
-    expect(deep).toContain("13:00");
-    expect(deep).not.toContain("14:00");
+    expect(deep).toContain("14:00");
+    expect(deep).not.toContain("15:00");
   });
 
   it("opens the last hour of the day when the notice period is switched off", async () => {
@@ -207,9 +211,9 @@ describe("what today still offers", () => {
       },
     });
     vi.setSystemTime(atLocal("16:30"));
-    // A one-hour job at 17:00 lands exactly on the 18:00 close, and half an
-    // hour of notice is enough with the rule off.
-    expect(await offeredToday({ serviceType: "residential", sqft: 800 })).toEqual(["17:00"]);
+    // A one-hour job at 18:00 lands exactly on the 19:00 close; 17:00 is also
+    // still ahead of the current 16:30 clock.
+    expect(await offeredToday({ serviceType: "residential", sqft: 800 })).toEqual(["17:00", "18:00"]);
   });
 
   it("never offers an hour that has already gone, even with no notice required", async () => {
@@ -221,14 +225,15 @@ describe("what today still offers", () => {
     for (const gone of ["08:00", "09:00", "10:00", "11:00", "13:00", "14:00"]) {
       expect(offered, gone).not.toContain(gone);
     }
-    expect(offered).toEqual(["15:00", "16:00"]);
+    expect(offered).toEqual(["15:00", "16:00", "17:00"]);
   });
 
   it("takes a longer notice period into account", async () => {
     settings({ leadTime: "8" });
     vi.setSystemTime(atLocal("08:00"));
-    // Eight hours from 08:00 is 16:00; a 2-hour job then fits at 16:00 only.
-    expect(await offeredToday({ serviceType: "residential", sqft: 800 })).toEqual(["16:00"]);
+    // Eight hours from 08:00 is 16:00; two-hour jobs starting at 16:00 or
+    // 17:00 both finish by the 19:00 close.
+    expect(await offeredToday({ serviceType: "residential", sqft: 800 })).toEqual(["16:00", "17:00"]);
   });
 
   it("still removes the hours a crew is already committed to", async () => {
@@ -282,10 +287,10 @@ describe("booking.create accepts a valid same-day slot", () => {
     expect(mockCreateBooking).not.toHaveBeenCalled();
   });
 
-  it("still refuses one that would run past closing", async () => {
+  it("accepts a three-hour job ending at 7 PM and refuses the next start", async () => {
     vi.setSystemTime(atLocal("05:00"));
-    // 16:00 + 3h = 19:00, an hour past the 18:00 close.
-    await expect(caller().create({ ...input, time: "16:00" })).rejects.toThrow(/not available/i);
+    await expect(caller().create({ ...input, time: "16:00" })).resolves.toMatchObject({ bookingId: 99 });
+    await expect(caller().create({ ...input, time: "17:00" })).rejects.toThrow(/not available/i);
   });
 
   it("refuses a date that has already gone by", async () => {

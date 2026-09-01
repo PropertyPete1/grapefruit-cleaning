@@ -12,6 +12,32 @@ import { sendDueRebookingNudges } from "./marketing";
 import { healthProblemCount, runDailyHealthCheck, sendWeeklyDigest } from "./ownerDigest";
 import { publicOrigin } from "./publicOrigin";
 import { sendDueReminders } from "./reminders";
+import { releaseExpiredCheckoutHolds } from "./checkoutHolds";
+import { finalizeBooking } from "./routers/booking";
+
+async function checkoutHoldsHandler(req: Request, res: Response) {
+  let isCron = false;
+  try {
+    isCron = (await sdk.authenticateRequest(req)).isCron === true;
+  } catch {
+    isCron = false;
+  }
+  if (!isCron) return res.status(403).json({ error: "cron-only endpoint" });
+
+  try {
+    const summary = await releaseExpiredCheckoutHolds(new Date(), finalizeBooking);
+    console.log(
+      `[CheckoutHolds] Scanned ${summary.scanned}; released ${summary.released}; recovered paid ${summary.recoveredPaid}; errors ${summary.errors.length}.`
+    );
+    return res.json({ ok: summary.errors.length === 0, ...summary });
+  } catch (error) {
+    console.error("[CheckoutHolds] Handler error:", error);
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : String(error),
+      timestamp: new Date().toISOString(),
+    });
+  }
+}
 
 async function sendRemindersHandler(req: Request, res: Response) {
   // Authenticate first, and on its own: a bad/absent session makes
@@ -176,6 +202,7 @@ async function weeklyDigestHandler(req: Request, res: Response) {
 }
 
 export function registerScheduledRoutes(app: Express): void {
+  app.post("/api/scheduled/checkoutHolds", checkoutHoldsHandler);
   app.post("/api/scheduled/sendReminders", sendRemindersHandler);
   app.post("/api/scheduled/icalSync", icalSyncHandler);
   app.post("/api/scheduled/weeklyDigest", weeklyDigestHandler);

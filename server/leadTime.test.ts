@@ -27,6 +27,8 @@ vi.mock("./db", () => ({
   createBooking: (...args: unknown[]) => mockCreateBooking(...args),
   updateBooking: vi.fn().mockResolvedValue(undefined),
   expireStaleBookingsForSlot: vi.fn().mockResolvedValue(0),
+  listElapsedDepositBookings: vi.fn().mockResolvedValue([]),
+  expireElapsedDepositBooking: vi.fn().mockResolvedValue(false),
   isSlotTakenError: () => false,
 }));
 
@@ -213,6 +215,7 @@ describe("composition with the weekly schedule", () => {
       "15:00",
       "16:00",
       "17:00",
+      "18:00",
     ]);
   });
 
@@ -228,7 +231,7 @@ describe("composition with the weekly schedule", () => {
         occupied: [],
         now,
       })
-    ).toEqual(["13:00", "14:00", "15:00", "16:00", "17:00"]);
+    ).toEqual(["13:00", "14:00", "15:00", "16:00", "17:00", "18:00"]);
   });
 
   it("empties the day once every slot is inside the window", () => {
@@ -314,6 +317,7 @@ describe("booking.availability applies the lead time", () => {
       "15:00",
       "16:00",
       "17:00",
+      "18:00",
     ]);
   });
 
@@ -340,7 +344,7 @@ describe("booking.availability applies the lead time", () => {
     vi.setSystemTime(new Date(slotStartInstant(WEDNESDAY, "08:00")));
     const slots = await publicCaller().availability({ date: WEDNESDAY });
     // 8 hours from 08:00 is 16:00.
-    expect(slots.filter(s => s.available).map(s => s.time)).toEqual(["16:00", "17:00"]);
+    expect(slots.filter(s => s.available).map(s => s.time)).toEqual(["16:00", "17:00", "18:00"]);
   });
 
   it("composes with taken slots rather than overriding them", async () => {

@@ -125,6 +125,32 @@ Current jobs, for reference when verifying a restore:
   fabricate the lost feed URL or property row from the surviving booking. After saving it, press **Sync now**
   and verify the new `ical_auto` turnovers on Admin → Calendar.
 
+## BOOKING CHECKOUT-HOLD AND FLOW REPAIR — Sep 1, 2026
+- The live pre-fix audit found zero currently stale public holds, but the prior public flow reserved inventory for
+  60 minutes while cleanup normally ran only inside the daily reminder job. Public self-serve Checkout now pins a
+  15-minute database hold. Stripe Checkout must keep its provider-minimum 30-minute expiry, so every release path
+  retrieves and closes the still-open Stripe session before atomically marking the booking `expired`. A paid-session
+  race is finalized instead of released, and provider lookup/close failure keeps the hold rather than risking a paid
+  slot being resold.
+- Register `checkout-hold-release` at POST `/api/scheduled/checkoutHolds` with cron `0 */5 * * * *`. The endpoint is
+  Heartbeat-only. The daily reminder job remains a fallback and runs the same Stripe-aware sweep before reminders.
+  Booking creation, availability, and progressive-link slot claims also invoke the safe sweep so an elapsed hold can
+  be rebooked without waiting for cron.
+- Admin has no destructive booking delete. Moving a booking to `cancelled` or `expired` is the audit-safe release:
+  it closes any open Checkout first, refuses a paid-session race, then nulls the generated slot key through status.
+  The Appointments page invalidates public availability and explicitly confirms that the slot is available again.
+- Quote-to-Booking handoff now carries `source=quote`; Booking preserves the quoted service/size/extras/frequency and
+  starts at Date & Time, while a direct `/book` visit still asks for service. Quote and Booking both reset scroll on
+  step changes. Booking availability is always stale and refetches every 15 seconds plus on window focus. The Spanish
+  booking calendar now uses the Spanish date locale, and an empty add-on review shows text instead of a `$0.00` line.
+- `booking_schedule` remains the live source of truth and is editable in Admin → Settings and Admin → Services &
+  Pricing through the same component. On Sep 1, the owner-approved live setting was changed from mixed 2/4/6 PM closes
+  to 7 PM on every open day. Duration and lead-time rules still subtract from that close; e.g. a three-hour job may
+  start at 4 PM and finish at 7 PM, but may not start at 5 PM.
+- Daily health now reports every `pending_deposit` booking whose own `holdMinutes` has elapsed, and treats the
+  five-minute checkout-release job as critical alongside iCal sync and daily reminders. A stuck unpaid hold therefore
+  appears in owner health even if the release job is missing, disabled, misconfigured, or stale.
+
 ## STANDING RULE — what counts as proof that email works
 A claim that email is fixed is only credible when BOTH of these appear in the same report:
 1. The PRODUCTION process boot timestamp, showing the running container started AFTER the credential or code

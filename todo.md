@@ -455,3 +455,23 @@
 - [x] Add regression tests, run TypeScript/full suite/build, publish with genuine restart, and prove `/api/version`
 - [x] Verify the live Properties route and healthy schedule/health behavior without creating records; provide the owner the exact post-deploy steps to add Steven’s feed, sync it, and confirm turnovers in Calendar
 - [x] Synchronize the final deployed revision to private GitHub main and document the production schedule safeguards
+
+## Booking flow — slot holds, duplicate step, scroll, hours, and end-to-end audit
+- [x] Audit production slot occupancy and count every unpaid/incomplete booking older than the intended 10–15 minute checkout hold window
+- [x] Trace checkout creation/payment-confirmation semantics and prove why an abandoned checkout blocks a slot indefinitely today
+- [x] Trace admin delete/cancel behavior, slot-conflict persistence, and prove why deleted/cancelled bookings may fail to release availability
+- [x] Trace the repeated cleaning-type question to its exact EN/ES booking steps and state handoff
+- [x] Trace step-transition scroll behavior on mobile and desktop and identify why new steps retain bottom-page position
+- [x] Report the current booking-hours cutoff, setting source, duration/lead-time rules, and last valid start-time calculation before changing it
+- [x] Walk the full live EN/ES booking flow on mobile and desktop without completing payment; classify all additional findings by severity
+- [x] Report causes and production findings for all five items before any code, setting, schedule, or booking-data repair
+- [x] Implement a bounded 10–15 minute checkout hold that expires automatically; create confirmed bookings only after successful payment
+- [x] Make admin cancellation/deletion release slot occupancy immediately and preserve audit/history safety
+- [x] Add a safe one-time sweep for existing stale unpaid/incomplete holds and report the exact number released
+- [x] Remove the redundant cleaning-type question while preserving the first answer through checkout
+- [x] Reset scroll to the top on every booking-step transition on mobile and desktop
+- [x] Open availability through 7:00 PM using estimated duration, lead-time, and admin-editable booking hours in Services & Pricing
+- [x] Add daily health findings for unpaid/incomplete bookings older than the hold window
+- [x] Add regression tests for abandoned-hold release, admin cancel/delete release, expired-slot rebooking, 7:00 PM duration cutoff, scroll reset, and EN/ES flow state
+- [ ] Run TypeScript, full suite, production build, genuine restart, checkpoint, `/api/version` proof, and GitHub synchronization
+- [ ] Re-walk the live EN/ES flow on mobile and desktop after deployment and verify slot release, prices, add-ons, deposit math, validation, and confirmation handoff
