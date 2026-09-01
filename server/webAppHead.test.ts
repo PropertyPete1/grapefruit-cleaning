@@ -75,15 +75,23 @@ describe("webAppHeadTags", () => {
     expect(tags).toContain('content="GF Staff"');
   });
 
-  it("renders nothing for customer routes", () => {
-    expect(webAppHeadTags("/")).toBe("");
-    expect(webAppHeadTags("/en/pricing")).toBe("");
+  it("renders the public Grapefruit app identity and localized crawler metadata", () => {
+    const en = webAppHeadTags("/en/pricing");
+    expect(en).toContain('href="/manifest.webmanifest"');
+    expect(en).toContain('href="/manus-storage/favicon-256_0edfb26b.png"');
+    expect(en).toContain('property="og:locale" content="en_US"');
+    expect(en).toContain('name="twitter:card" content="summary_large_image"');
+    expect(en).toContain('content="https://grapeclean.com/manus-storage/grapefruit-logo_9a11bb63.jpg"');
+
+    const es = webAppHeadTags("/es/precios");
+    expect(es).toContain('content="Grapefruit Cleaning Co. | Limpieza residencial y comercial"');
+    expect(es).toContain('property="og:locale" content="es_LA"');
   });
 
   it("marks every tag as owned so the client applier can manage them", () => {
     const tags = webAppHeadTags("/admin");
     const owned = tags.match(new RegExp(`${WEBAPP_TAG_ATTR}="true"`, "g")) ?? [];
-    expect(owned).toHaveLength(7);
+    expect(owned).toHaveLength(17);
   });
 });
 
@@ -105,9 +113,9 @@ describe("injectWebAppHead", () => {
     expect(out.startsWith("<!doctype html>")).toBe(true);
   });
 
-  it("returns customer HTML byte-for-byte unchanged", () => {
-    expect(injectWebAppHead(TEMPLATE, "/")).toBe(TEMPLATE);
-    expect(injectWebAppHead(TEMPLATE, "/en/pricing")).toBe(TEMPLATE);
+  it("injects public Grapefruit identity and social metadata on customer routes", () => {
+    expect(injectWebAppHead(TEMPLATE, "/")).toContain('href="/manifest.webmanifest"');
+    expect(injectWebAppHead(TEMPLATE, "/en/pricing")).toContain('property="og:image"');
   });
 
   it("leaves HTML without a </head> alone rather than corrupting it", () => {
@@ -149,19 +157,20 @@ describe("index.html responses", () => {
     }
   });
 
-  it("serves the original HTML on customer routes", () => {
+  it("serves the public Grapefruit identity on customer routes", () => {
     for (const url of ["/", "/en", "/es/precios", "/en/services/deep-cleaning"]) {
       const body = html(url);
-      expect(body).toBe(TEMPLATE);
-      expect(body).not.toContain("manifest");
-      expect(body).not.toContain("apple-mobile-web-app");
+      expect(body).toContain('href="/manifest.webmanifest"');
+      expect(body).toContain("apple-mobile-web-app");
+      expect(body).toContain('name="twitter:card" content="summary_large_image"');
     }
   });
 
   it("does not treat lookalike paths as crew routes", () => {
-    expect(html("/administrator")).toBe(TEMPLATE);
-    expect(html("/staffing")).toBe(TEMPLATE);
-    expect(html("/en/admin")).toBe(TEMPLATE);
+    expect(html("/administrator")).toContain('href="/manifest.webmanifest"');
+    expect(html("/staffing")).toContain('href="/manifest.webmanifest"');
+    expect(html("/en/admin")).toContain('href="/manifest.webmanifest"');
+    expect(html("/administrator")).not.toContain("manifest.admin");
   });
 
   it("marks the shell no-cache so a stale copy can't linger across a deploy", () => {

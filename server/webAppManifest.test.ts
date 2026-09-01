@@ -77,13 +77,14 @@ describe("webAppTargetForPath", () => {
     });
   });
 
-  it("declares nothing on customer routes, leaving their install behavior alone", () => {
-    const target = webAppTargetForPath("/en/pricing");
-    expect(target.scope).toBe("customer");
-    expect(target.manifestHref).toBeNull();
-    expect(target.appleTouchIcon).toBeNull();
-    expect(target.appleTitle).toBeNull();
-    expect(target.themeColor).toBeNull();
+  it("points customer routes at the Grapefruit public manifest and brand icon", () => {
+    expect(webAppTargetForPath("/en/pricing")).toEqual({
+      scope: "customer",
+      manifestHref: "/manifest.webmanifest",
+      appleTouchIcon: "/manus-storage/favicon-256_0edfb26b.png",
+      appleTitle: "Grapefruit Cleaning",
+      themeColor: "#F26D5B",
+    });
   });
 
   it("gives the two dashboards different icons and titles", () => {
@@ -109,6 +110,23 @@ describe("the shipped manifests", () => {
       scope: "/admin",
       display: "standalone",
     });
+  });
+
+  it("ships a public Grapefruit manifest using the production-storage brand icon", () => {
+    const manifest = load("manifest.webmanifest");
+    expect(manifest).toMatchObject({
+      name: "Grapefruit Cleaning Co.",
+      short_name: "Grapefruit",
+      start_url: "/",
+      scope: "/",
+      display: "standalone",
+    });
+    expect(manifest.icons).toEqual([
+      expect.objectContaining({
+        src: "/manus-storage/favicon-256_0edfb26b.png",
+        sizes: "256x256",
+      }),
+    ]);
   });
 
   // Kept working for anyone who already installed it; staff opening the crew

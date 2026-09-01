@@ -40,6 +40,7 @@ import {
   buildFeedFailureAlert,
   buildUnplacedCleanAlert,
   deliverEmail,
+  sendCleanerRescheduleNotice,
   sendOwnerAlert,
 } from "./emails";
 import { parseIcalFeed, type IcalReservation } from "./ical";
@@ -279,6 +280,7 @@ async function createAutoBooking(
     customerId: property.customerId,
     propertyId: property.id,
     icalUid: reservation.uid,
+    icalCheckoutDate: reservation.checkoutDate,
     kind: "ical_auto" as const,
     serviceType: property.serviceType,
     frequency: "onetime" as const,
@@ -358,6 +360,8 @@ async function placeBooking(
   date: string,
   options: { quiet: boolean; reference?: string }
 ): Promise<"placed" | "unplaced"> {
+  const before = await db.getBookingById(bookingId);
+  if (!before || before.status !== "confirmed") return "unplaced";
   const { schedule, lunchBreak, durations } = await loadSchedulingRules();
   const jobHours = durationHoursFor(property.serviceType, property.sqft, durations);
   const rows = (await db.getOccupiedBookings(date)).filter(row => row.id !== bookingId);
@@ -370,19 +374,45 @@ async function placeBooking(
 
   if (time) {
     try {
-      await db.updateBooking(bookingId, { scheduledDate: date, scheduledTime: time, estimatedHours: jobHours });
+      const moved = await db.moveBookingSchedule({
+        bookingId,
+        toDate: date,
+        toTime: time,
+        estimatedHours: jobHours,
+        icalCheckoutDate: date,
+        actorType: "ical",
+        actorLabel: property.label,
+        action: options.quiet ? "ical_retry_placed" : "ical_moved",
+        note: `Airbnb checkout moved to ${date}.`,
+      });
+      if (moved.outcome !== "moved") return "unplaced";
       // `quiet` marks the hourly retry of an already-announced turnover. The
       // date-keyed claim inside the notice is what actually prevents a repeat,
       // but the flag carries the intent: a retry landing on the SAME date is
       // silent, while a reservation that genuinely MOVED is a reschedule and
       // says so.
       await sendTurnoverScheduledNotice(property, bookingId, date, time, !options.quiet);
+      await notifyAssignedCleanerOfIcalMove(moved.before, moved.after, property.label);
       return "placed";
     } catch (error) {
       if (!db.isSlotTakenError(error)) throw error;
     }
   }
-  await db.updateBooking(bookingId, { scheduledDate: null, scheduledTime: null });
+  const pending = await db.moveBookingSchedule({
+    bookingId,
+    toDate: date,
+    toTime: null,
+    estimatedHours: jobHours,
+    icalCheckoutDate: date,
+    actorType: "ical",
+    actorLabel: property.label,
+    action: "ical_pending_time",
+    note: `Airbnb checkout moved to ${date}; no legal start time is available yet.`,
+  });
+  if (pending.outcome === "moved") {
+    await sendTurnoverScheduledNotice(property, bookingId, date, null, !options.quiet);
+    await notifyAssignedCleanerOfIcalMove(pending.before, pending.after, property.label);
+  }
   if (!options.quiet) {
     const alert = buildUnplacedCleanAlert({
       label: property.label,
@@ -393,6 +423,29 @@ async function placeBooking(
     await sendOwnerAlert(alert.title, alert.content);
   }
   return "unplaced";
+}
+
+async function notifyAssignedCleanerOfIcalMove(
+  before: NonNullable<Awaited<ReturnType<typeof db.getBookingById>>>,
+  after: NonNullable<Awaited<ReturnType<typeof db.getBookingById>>>,
+  label: string
+): Promise<void> {
+  if (!after.employeeId) return;
+  const employee = await db.getEmployeeById(after.employeeId);
+  if (!employee?.email) return;
+  await sendCleanerRescheduleNotice({
+    bookingId: after.id,
+    reference: after.reference,
+    customerName: "",
+    locale: "en",
+    fromDate: before.scheduledDate,
+    fromTime: before.scheduledTime,
+    toDate: after.scheduledDate ?? "",
+    toTime: after.scheduledTime,
+    note: `Airbnb calendar update for ${label}.`,
+    employeeName: `${employee.firstName} ${employee.lastName}`.trim(),
+    employeeEmail: employee.email,
+  });
 }
 
 /**

@@ -27,6 +27,8 @@ const mockGetSetting = vi.fn();
 const mockSmtpUser = vi.fn();
 const mockActiveProperties = vi.fn();
 const mockElapsedHolds = vi.fn();
+const mockPendingTimes = vi.fn();
+const mockStaleRequests = vi.fn();
 const mockListHeartbeatJobs = vi.fn();
 
 vi.mock("./db", () => ({
@@ -40,6 +42,8 @@ vi.mock("./db", () => ({
   getSetting: (...a: unknown[]) => mockGetSetting(...a),
   listActiveSyncProperties: () => mockActiveProperties(),
   listElapsedDepositBookings: (...a: unknown[]) => mockElapsedHolds(...a),
+  listUpcomingPendingTimeBookings: (...a: unknown[]) => mockPendingTimes(...a),
+  listStaleOpenRescheduleRequests: (...a: unknown[]) => mockStaleRequests(...a),
 }));
 
 vi.mock("./_core/heartbeat", () => ({
@@ -74,6 +78,8 @@ beforeEach(() => {
   mockSmtpUser.mockReturnValue("grapefruitcleaningc@gmail.com");
   mockActiveProperties.mockResolvedValue([]);
   mockElapsedHolds.mockResolvedValue([]);
+  mockPendingTimes.mockResolvedValue([]);
+  mockStaleRequests.mockResolvedValue([]);
   mockListHeartbeatJobs.mockResolvedValue({
     total: 3,
     actorUserId: "owner",
@@ -301,6 +307,46 @@ describe("the daily health check", () => {
     expect(mockOwnerAlert.mock.calls[0]![0]).toContain("1 item needs your attention");
     expect(mockOwnerAlert.mock.calls[0]![1]).toContain("UNPAID CHECKOUT HOLDS PAST THEIR WINDOW");
     expect(mockOwnerAlert.mock.calls[0]![1]).toContain("GFC-STUCK42");
+  });
+
+  it("alerts when an upcoming confirmed booking has a date but no start time", async () => {
+    mockPendingTimes.mockResolvedValue([
+      { id: 91, reference: "GFC-TBD91", scheduledDate: "2026-08-25", kind: "public", employeeId: 4 },
+    ]);
+
+    const findings = await runDailyHealthCheck(NOW);
+
+    expect(findings.pendingTimeBookings).toEqual([
+      expect.objectContaining({ reference: "GFC-TBD91", date: "2026-08-25", employeeId: 4 }),
+    ]);
+    expect(findings.hasProblems).toBe(true);
+    expect(mockOwnerAlert.mock.calls[0]![1]).toContain("UPCOMING BOOKINGS WITH NO START TIME");
+    expect(mockOwnerAlert.mock.calls[0]![1]).toContain("GFC-TBD91");
+  });
+
+  it("alerts when a customer reschedule request has waited over 24 hours", async () => {
+    mockStaleRequests.mockResolvedValue([
+      {
+        id: 17,
+        status: "pending",
+        proposedDate: "2026-08-28",
+        proposedTime: "13:00",
+        updatedAt: new Date("2026-08-23T12:00:00Z"),
+        bookingId: 91,
+        reference: "GFC-WAIT91",
+        customerFirstName: "Ana",
+        customerLastName: "Ruiz",
+      },
+    ]);
+
+    const findings = await runDailyHealthCheck(NOW);
+
+    expect(findings.staleRescheduleRequests).toEqual([
+      expect.objectContaining({ reference: "GFC-WAIT91", customer: "Ana Ruiz", status: "pending" }),
+    ]);
+    expect(findings.hasProblems).toBe(true);
+    expect(mockOwnerAlert.mock.calls[0]![1]).toContain("CUSTOMER RESCHEDULE REQUESTS WAITING OVER 24 HOURS");
+    expect(mockOwnerAlert.mock.calls[0]![1]).toContain("GFC-WAIT91");
   });
 
   it("says so plainly when there is nothing to report", async () => {

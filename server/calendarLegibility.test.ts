@@ -25,7 +25,9 @@ const CALENDARS = [
 /** The className of the month-view event chip on a calendar page. */
 function chipClasses(path: string): string {
   const source = readFileSync(path, "utf-8");
-  const match = source.match(/className="(truncate rounded-md bg-[^"]+)"/);
+  const match =
+    source.match(/className="(truncate rounded-md bg-[^"]+)"/) ??
+    source.match(/className=\{`(truncate rounded-md[\s\S]*?)`\}/);
   expect(match, `no month-view event chip found in ${path}`).toBeTruthy();
   return match![1]!;
 }

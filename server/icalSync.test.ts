@@ -14,6 +14,9 @@ const mockUpdateBooking = vi.fn();
 const mockListAutoBookings = vi.fn();
 const mockUpdateProperty = vi.fn();
 const mockGetCustomerById = vi.fn();
+const mockGetBookingById = vi.fn();
+const mockMoveBookingSchedule = vi.fn();
+const mockGetEmployeeById = vi.fn();
 const mockClaimTurnoverNotice = vi.fn();
 const mockSendMail = vi.fn();
 const mockNotifyOwner = vi.fn();
@@ -31,6 +34,9 @@ vi.mock("./db", async () => {
     listAutoBookingsForProperty: (...a: unknown[]) => mockListAutoBookings(...a),
     updateConnectedProperty: (...a: unknown[]) => mockUpdateProperty(...a),
     getCustomerById: (...a: unknown[]) => mockGetCustomerById(...a),
+    getBookingById: (...a: unknown[]) => mockGetBookingById(...a),
+    moveBookingSchedule: (...a: unknown[]) => mockMoveBookingSchedule(...a),
+    getEmployeeById: (...a: unknown[]) => mockGetEmployeeById(...a),
     claimTurnoverNotice: (...a: unknown[]) => mockClaimTurnoverNotice(...a),
     listActiveSyncProperties: vi.fn().mockResolvedValue([]),
   };
@@ -158,6 +164,18 @@ beforeEach(() => {
     email: "hank@example.com",
     preferredLocale: "en",
   });
+  mockGetBookingById.mockImplementation(async (id: number) => autoRow({ id }));
+  mockMoveBookingSchedule.mockImplementation(async (input: { bookingId: number; toDate: string; toTime: string | null }) => {
+    const before = autoRow({ id: input.bookingId });
+    const after = { ...before, scheduledDate: input.toDate, scheduledTime: input.toTime };
+    mockUpdateBooking(input.bookingId, {
+      scheduledDate: input.toDate,
+      scheduledTime: input.toTime,
+      estimatedHours: expect.any(Number),
+    });
+    return { outcome: "moved", before, after };
+  });
+  mockGetEmployeeById.mockResolvedValue(undefined);
   // The claim succeeds by default: a fresh reservation has never been announced.
   mockClaimTurnoverNotice.mockResolvedValue(true);
   mockNotifyOwner.mockResolvedValue(undefined);

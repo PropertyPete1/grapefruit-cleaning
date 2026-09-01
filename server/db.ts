@@ -6,6 +6,8 @@ import {
   addons,
   blogPosts,
   bookingAddons,
+  bookingRescheduleRequests,
+  bookingScheduleEvents,
   bookings,
   connectedProperties,
   contactMessages,
@@ -402,6 +404,248 @@ export async function getBookingByStripeSession(sessionId: string) {
 export async function updateBooking(id: number, data: Partial<typeof bookings.$inferInsert>) {
   const db = requireDb(await getDb());
   await db.update(bookings).set(normalizeBookingMoney(data)).where(eq(bookings.id, id));
+}
+
+export async function setBookingRescheduleToken(id: number, tokenHash: string, expiresAt: Date) {
+  const db = requireDb(await getDb());
+  await db
+    .update(bookings)
+    .set({ rescheduleTokenHash: tokenHash, rescheduleTokenExpiresAt: expiresAt })
+    .where(eq(bookings.id, id));
+}
+
+export async function getBookingByRescheduleTokenHash(tokenHash: string) {
+  const db = requireDb(await getDb());
+  const rows = await db
+    .select({ booking: bookings, customer: customers })
+    .from(bookings)
+    .leftJoin(customers, eq(bookings.customerId, customers.id))
+    .where(eq(bookings.rescheduleTokenHash, tokenHash))
+    .limit(1);
+  return rows[0];
+}
+
+export type MoveBookingScheduleInput = {
+  bookingId: number;
+  toDate: string;
+  toTime: string | null;
+  estimatedHours: number | null;
+  icalCheckoutDate?: string | null;
+  actorType: "admin" | "customer" | "staff" | "ical" | "brain" | "system";
+  actorUserId?: number | null;
+  actorLabel?: string | null;
+  action: string;
+  note?: string | null;
+  requestId?: number | null;
+  resolveRequest?: boolean;
+};
+
+export type MoveBookingScheduleOutcome =
+  | { outcome: "moved"; before: typeof bookings.$inferSelect; after: typeof bookings.$inferSelect }
+  | { outcome: "not_found" }
+  | { outcome: "not_eligible"; status: string };
+
+/**
+ * Moves one confirmed booking and records the immutable schedule audit in the
+ * same transaction. Commercial columns are deliberately absent from the SET.
+ */
+export async function moveBookingSchedule(input: MoveBookingScheduleInput): Promise<MoveBookingScheduleOutcome> {
+  const db = requireDb(await getDb());
+  return db.transaction(async tx => {
+    const [before] = await tx.select().from(bookings).where(eq(bookings.id, input.bookingId)).limit(1);
+    if (!before) return { outcome: "not_found" } as const;
+    if (before.status !== "confirmed") return { outcome: "not_eligible", status: before.status } as const;
+
+    const result = await tx
+      .update(bookings)
+      .set({
+        scheduledDate: input.toDate,
+        scheduledTime: input.toTime,
+        estimatedHours: input.estimatedHours,
+        weekReminderSentAt: null,
+        dayReminderSentAt: null,
+        ...(input.icalCheckoutDate !== undefined ? { icalCheckoutDate: input.icalCheckoutDate } : {}),
+        ...(before.kind === "ical_auto" ? { turnoverNoticeDate: input.toDate } : {}),
+      })
+      .where(and(eq(bookings.id, input.bookingId), eq(bookings.status, "confirmed")));
+    if (affectedRows(result) === 0) return { outcome: "not_eligible", status: before.status } as const;
+
+    const eventResult = await tx.insert(bookingScheduleEvents).values({
+      bookingId: before.id,
+      requestId: input.requestId ?? null,
+      actorType: input.actorType,
+      actorUserId: input.actorUserId ?? null,
+      actorLabel: input.actorLabel ?? null,
+      action: input.action,
+      fromDate: before.scheduledDate,
+      fromTime: before.scheduledTime,
+      toDate: input.toDate,
+      toTime: input.toTime,
+      note: input.note ?? null,
+    });
+
+    if (input.requestId && input.resolveRequest) {
+      await tx
+        .update(bookingRescheduleRequests)
+        .set({
+          status: "approved",
+          resolvedByUserId: input.actorUserId ?? null,
+          resolvedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(bookingRescheduleRequests.id, input.requestId),
+            eq(bookingRescheduleRequests.bookingId, before.id),
+            inArray(bookingRescheduleRequests.status, ["pending", "countered"])
+          )
+        );
+    }
+
+    const [after] = await tx.select().from(bookings).where(eq(bookings.id, before.id)).limit(1);
+    if (!after) throw new Error("Booking disappeared after reschedule");
+    void eventResult;
+    return { outcome: "moved", before, after } as const;
+  });
+}
+
+export async function createBookingScheduleEvent(data: typeof bookingScheduleEvents.$inferInsert) {
+  const db = requireDb(await getDb());
+  const result = await db.insert(bookingScheduleEvents).values(data);
+  return Number(result[0].insertId);
+}
+
+export async function listBookingScheduleEvents(bookingId: number) {
+  const db = requireDb(await getDb());
+  return db
+    .select()
+    .from(bookingScheduleEvents)
+    .where(eq(bookingScheduleEvents.bookingId, bookingId))
+    .orderBy(desc(bookingScheduleEvents.createdAt), desc(bookingScheduleEvents.id));
+}
+
+export async function listUpcomingPendingTimeBookings(today: string) {
+  const db = requireDb(await getDb());
+  return db
+    .select({
+      id: bookings.id,
+      reference: bookings.reference,
+      scheduledDate: bookings.scheduledDate,
+      kind: bookings.kind,
+      employeeId: bookings.employeeId,
+    })
+    .from(bookings)
+    .where(
+      and(
+        eq(bookings.status, "confirmed"),
+        gte(bookings.scheduledDate, today),
+        isNull(bookings.scheduledTime)
+      )
+    )
+    .orderBy(asc(bookings.scheduledDate));
+}
+
+export async function listStaleOpenRescheduleRequests(cutoff: Date) {
+  const db = requireDb(await getDb());
+  return db
+    .select({
+      id: bookingRescheduleRequests.id,
+      status: bookingRescheduleRequests.status,
+      proposedDate: bookingRescheduleRequests.proposedDate,
+      proposedTime: bookingRescheduleRequests.proposedTime,
+      updatedAt: bookingRescheduleRequests.updatedAt,
+      bookingId: bookings.id,
+      reference: bookings.reference,
+      customerFirstName: customers.firstName,
+      customerLastName: customers.lastName,
+    })
+    .from(bookingRescheduleRequests)
+    .innerJoin(bookings, eq(bookingRescheduleRequests.bookingId, bookings.id))
+    .leftJoin(customers, eq(bookings.customerId, customers.id))
+    .where(
+      and(
+        inArray(bookingRescheduleRequests.status, ["pending", "countered"]),
+        lte(bookingRescheduleRequests.updatedAt, cutoff)
+      )
+    )
+    .orderBy(asc(bookingRescheduleRequests.updatedAt));
+}
+
+export async function createBookingRescheduleRequest(data: typeof bookingRescheduleRequests.$inferInsert) {
+  const db = requireDb(await getDb());
+  return db.transaction(async tx => {
+    const [booking] = await tx.select().from(bookings).where(eq(bookings.id, data.bookingId)).limit(1);
+    if (!booking) return { outcome: "not_found" } as const;
+    if (booking.status !== "confirmed") return { outcome: "not_eligible", status: booking.status } as const;
+    const open = await tx
+      .select({ id: bookingRescheduleRequests.id })
+      .from(bookingRescheduleRequests)
+      .where(
+        and(
+          eq(bookingRescheduleRequests.bookingId, booking.id),
+          inArray(bookingRescheduleRequests.status, ["pending", "countered"])
+        )
+      )
+      .limit(1);
+    if (open.length > 0) return { outcome: "already_open", requestId: open[0]!.id } as const;
+
+    const result = await tx.insert(bookingRescheduleRequests).values(data);
+    const requestId = Number(result[0].insertId);
+    await tx.insert(bookingScheduleEvents).values({
+      bookingId: booking.id,
+      requestId,
+      actorType: "customer",
+      action: "requested",
+      fromDate: booking.scheduledDate,
+      fromTime: booking.scheduledTime,
+      toDate: data.proposedDate,
+      toTime: data.proposedTime,
+      note: data.customerNote ?? null,
+    });
+    return { outcome: "created", requestId } as const;
+  });
+}
+
+export async function getBookingRescheduleRequest(id: number) {
+  const db = requireDb(await getDb());
+  const rows = await db.select().from(bookingRescheduleRequests).where(eq(bookingRescheduleRequests.id, id)).limit(1);
+  return rows[0];
+}
+
+export async function getOpenBookingRescheduleRequest(bookingId: number) {
+  const db = requireDb(await getDb());
+  const rows = await db
+    .select()
+    .from(bookingRescheduleRequests)
+    .where(
+      and(
+        eq(bookingRescheduleRequests.bookingId, bookingId),
+        inArray(bookingRescheduleRequests.status, ["pending", "countered"])
+      )
+    )
+    .orderBy(desc(bookingRescheduleRequests.createdAt))
+    .limit(1);
+  return rows[0];
+}
+
+export async function listBookingRescheduleRequests(status?: "pending" | "countered" | "approved" | "declined" | "withdrawn") {
+  const db = requireDb(await getDb());
+  const base = db
+    .select({ request: bookingRescheduleRequests, booking: bookings, customer: customers })
+    .from(bookingRescheduleRequests)
+    .innerJoin(bookings, eq(bookingRescheduleRequests.bookingId, bookings.id))
+    .leftJoin(customers, eq(bookings.customerId, customers.id));
+  const rows = status
+    ? await base.where(eq(bookingRescheduleRequests.status, status)).orderBy(desc(bookingRescheduleRequests.createdAt))
+    : await base.orderBy(desc(bookingRescheduleRequests.createdAt));
+  return rows.map(row => ({ ...row, booking: stripPayToken(row.booking) }));
+}
+
+export async function updateBookingRescheduleRequest(
+  id: number,
+  data: Partial<typeof bookingRescheduleRequests.$inferInsert>
+) {
+  const db = requireDb(await getDb());
+  await db.update(bookingRescheduleRequests).set(data).where(eq(bookingRescheduleRequests.id, id));
 }
 
 export async function updateBookingWithAddons(
@@ -1011,6 +1255,12 @@ export async function updateContactMessage(id: number, status: "new" | "replied"
 export async function listEmployees() {
   const db = requireDb(await getDb());
   return db.select().from(employees).orderBy(desc(employees.createdAt));
+}
+
+export async function getEmployeeById(id: number) {
+  const db = requireDb(await getDb());
+  const rows = await db.select().from(employees).where(eq(employees.id, id)).limit(1);
+  return rows[0] ?? null;
 }
 
 export async function getEmployeeByUserId(userId: number) {

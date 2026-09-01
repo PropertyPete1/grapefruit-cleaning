@@ -27,17 +27,17 @@
 import type { Express, Request, Response } from "express";
 import { TRPCError } from "@trpc/server";
 import { CLEANING_TYPES, type CleaningType } from "@shared/pricing";
-import { durationHoursFor } from "@shared/duration";
 import { CUSTOM_ITEM_MAX } from "@shared/invoiceItems";
 import { assertRateLimit } from "./antiSpam";
 import * as db from "./db";
-import { createAdminBooking, adminSlotBookable, slotUnavailableError } from "./adminBooking";
+import { createAdminBooking, slotUnavailableError } from "./adminBooking";
 import { requestIp, tokenMatches } from "./brainRoutes";
 import { withAuditLine } from "./brainWriteRules";
 import { issueManualInvoice } from "./balance";
 import { publicOrigin } from "./publicOrigin";
 import { sendDepositLinkEmail } from "./emails";
-import { loadSchedulingRules, SERVICE_NAMES } from "./routers/booking";
+import { SERVICE_NAMES } from "./routers/booking";
+import { moveConfirmedBooking, notifyEffectiveScheduleMove } from "./rescheduling";
 
 /** What a handler resolved to; guardedWrite sends (and may replay) it. */
 interface WriteResult {
@@ -410,16 +410,7 @@ async function createBookingHandler(req: Request): Promise<WriteResult> {
 
 const RESCHEDULE_FIELDS = ["actor", "date", "time"] as const;
 
-/**
- * No general reschedule function exists in the app today, so this composes
- * the admin building blocks exactly: load the booking, refuse the dead
- * states, run the same rules/duration/stale-release/slot-check sandwich the
- * admin paths run (with this booking excluded from its own occupancy), then
- * one updateBooking catching the unique-index race as a conflict.
- * Deliberately NOT admin.scheduleBooking, which hard-rejects every
- * kind !== "ical_auto". No customer email exists for a reschedule today; v1
- * sends none, and the brain says so in its read-back.
- */
+/** Uses the same atomic move, audit, reminder reset and notification path as Admin. */
 async function rescheduleBookingHandler(req: Request): Promise<WriteResult> {
   const id = bookingIdOf(req, "no such booking — nothing was rescheduled");
   const body = bodyOf(req);
@@ -435,40 +426,23 @@ async function rescheduleBookingHandler(req: Request): Promise<WriteResult> {
   if (booking.status === "cancelled") refuse(400, "that booking is cancelled — book it again instead of rescheduling it");
   if (booking.status === "expired") refuse(400, "that booking's hold expired — book it again instead of rescheduling it");
 
-  const { schedule, lunchBreak, leadTimeHours, durations } = await loadSchedulingRules();
-  // The booking's own pinned duration when it has one, the ladder otherwise —
-  // and the same one-hour floor the admin path checks unpriced bookings with.
-  const estimatedHours =
-    booking.estimatedHours ??
-    (booking.serviceType && booking.sqft != null
-      ? durationHoursFor(booking.serviceType, booking.sqft, durations)
-      : null);
-
-  await db.expireStaleBookingsForSlot(date, time);
-  const bookable = await adminSlotBookable({
-    date,
-    time,
-    jobHours: estimatedHours ?? 1,
-    overrideNotice: false,
-    schedule,
-    lunchBreak,
-    leadTimeHours,
-    durations,
-    excludeBookingId: id,
-  });
-  if (!bookable) refuse(400, slotUnavailableError().message);
-
   try {
-    await db.updateBooking(id, {
-      scheduledDate: date,
-      scheduledTime: time,
-      estimatedHours,
-      notes: withAuditLine(booking.notes, `${actor} rescheduled to ${date} ${time}`),
+    const moved = await moveConfirmedBooking({
+      bookingId: id,
+      target: { date, time },
+      actor: { type: "brain", label: actor },
+      note: actor,
+      action: "brain_moved",
     });
+    await notifyEffectiveScheduleMove({ before: moved.before, after: moved.after, note: actor });
   } catch (error) {
-    if (db.isSlotTakenError(error)) {
+    if (error instanceof TRPCError && error.code === "NOT_FOUND") {
+      refuse(404, "no such booking — nothing was rescheduled");
+    }
+    if (error instanceof TRPCError && error.code === "CONFLICT") {
       refuse(409, "Another booking already holds that date and time.");
     }
+    if (error instanceof TRPCError) refuse(400, error.message);
     throw error;
   }
   return { status: 200, body: { ok: true } };

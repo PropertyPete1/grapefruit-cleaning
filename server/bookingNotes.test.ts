@@ -24,6 +24,7 @@ const mockSendMail = vi.fn();
 
 vi.mock("./db", () => ({
   getSetting: vi.fn().mockResolvedValue(null),
+  setBookingRescheduleToken: vi.fn().mockResolvedValue(undefined),
   getBookingById: (...args: unknown[]) => mockGetBookingById(...args),
   getCustomerById: (...args: unknown[]) => mockGetCustomerById(...args),
   listInvoicesAwaitingApproval: (...args: unknown[]) => mockListAwaitingApproval(...args),

@@ -5,6 +5,7 @@ import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeader, SERVICE_LABELS, StatusBadge } from "./adminShared";
+import { RescheduleDialog } from "./RescheduleDialog";
 
 function ym(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -28,22 +29,21 @@ export default function AdminCalendar() {
    * this narrowing changes nothing at runtime — it makes the types tell the
    * same story.
    */
-  const scheduled = useMemo(
+  const dated = useMemo(
     () =>
       (bookings.data ?? []).filter(
-        (b): b is typeof b & { scheduledDate: string; scheduledTime: string } =>
-          b.scheduledDate != null && b.scheduledTime != null
+        (b): b is typeof b & { scheduledDate: string } => b.scheduledDate != null
       ),
     [bookings.data]
   );
 
   const byDate = useMemo(() => {
-    const map: Record<string, typeof scheduled> = {};
-    for (const b of scheduled) {
+    const map: Record<string, typeof dated> = {};
+    for (const b of dated) {
       (map[b.scheduledDate] ||= []).push(b);
     }
     return map;
-  }, [scheduled]);
+  }, [dated]);
 
   const firstWeekday = new Date(month.getFullYear(), month.getMonth(), 1).getDay();
   const cells: (number | null)[] = [
@@ -122,10 +122,10 @@ export default function AdminCalendar() {
                           // 12:1 dark — so the chip keeps its colour and reads.
                           <div
                             key={b.id}
-                            className="truncate rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-accent-foreground"
-                            title={`${b.reference} · ${b.serviceType ? SERVICE_LABELS[b.serviceType] : "Service TBD"} · ${formatJobSpan(b.scheduledTime, b.durationHours)}`}
+                            className={`truncate rounded-md px-1.5 py-0.5 text-[10px] font-medium ${b.scheduledTime ? "bg-primary/10 text-accent-foreground" : "bg-amber-100 text-amber-900"}`}
+                            title={`${b.reference} · ${b.serviceType ? SERVICE_LABELS[b.serviceType] : "Service TBD"} · ${b.scheduledTime ? formatJobSpan(b.scheduledTime, b.durationHours) : "Time to be decided"}`}
                           >
-                            {b.scheduledTime}–{intervalEndTime(b.scheduledTime, b.durationHours)}{" "}
+                            {b.scheduledTime ? `${b.scheduledTime}–${intervalEndTime(b.scheduledTime, b.durationHours)}` : "TIME TBD"}{" "}
                             {b.serviceType ? SERVICE_LABELS[b.serviceType] : "Service TBD"}
                           </div>
                         ))}
@@ -145,13 +145,13 @@ export default function AdminCalendar() {
       {/* Upcoming list */}
       <div className="mt-6 rounded-2xl bg-card p-6 shadow-sm ring-1 ring-border">
         <h2 className="font-semibold text-foreground">This month's appointments</h2>
-        {scheduled.length === 0 ? (
+        {dated.length === 0 ? (
           <p className="mt-3 text-sm text-muted-foreground">No appointments scheduled this month.</p>
         ) : (
           <div className="mt-3 space-y-2">
-            {scheduled
+            {dated
               .slice()
-              .sort((a, b) => (a.scheduledDate + a.scheduledTime).localeCompare(b.scheduledDate + b.scheduledTime))
+              .sort((a, b) => `${a.scheduledDate}${a.scheduledTime ?? "99:99"}`.localeCompare(`${b.scheduledDate}${b.scheduledTime ?? "99:99"}`))
               .map(b => (
                 <div key={b.id} className="flex items-center justify-between rounded-xl border border-border p-3 text-sm">
                   <div>
@@ -160,9 +160,10 @@ export default function AdminCalendar() {
                   </div>
                   <div className="text-right">
                     <p className="text-muted-foreground">
-                      {b.scheduledDate} · {formatJobSpan(b.scheduledTime, b.durationHours)}
+                      {b.scheduledDate} · {b.scheduledTime ? formatJobSpan(b.scheduledTime, b.durationHours) : "Time to be decided"}
                     </p>
                     <StatusBadge status={b.status} />
+                    {b.status === "confirmed" && <div className="mt-2"><RescheduleDialog booking={b} /></div>}
                   </div>
                 </div>
               ))}

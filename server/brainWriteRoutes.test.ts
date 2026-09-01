@@ -28,6 +28,8 @@ const {
   mockLoadSchedulingRules,
   mockIssueManualInvoice,
   mockSendDepositLinkEmail,
+  mockMoveBooking,
+  mockNotifyBookingMoved,
 } = vi.hoisted(() => ({
   mockMatchOrCreateCustomer: vi.fn(),
   mockGetCustomerById: vi.fn(),
@@ -43,6 +45,8 @@ const {
   mockLoadSchedulingRules: vi.fn(),
   mockIssueManualInvoice: vi.fn(),
   mockSendDepositLinkEmail: vi.fn(),
+  mockMoveBooking: vi.fn(),
+  mockNotifyBookingMoved: vi.fn(),
 }));
 
 vi.mock("./db", () => ({
@@ -77,6 +81,10 @@ vi.mock("./routers/booking", () => ({
 
 vi.mock("./balance", () => ({ issueManualInvoice: mockIssueManualInvoice }));
 vi.mock("./emails", () => ({ sendDepositLinkEmail: mockSendDepositLinkEmail }));
+vi.mock("./rescheduling", () => ({
+  moveConfirmedBooking: (...a: unknown[]) => mockMoveBooking(...a),
+  notifyEffectiveScheduleMove: (...a: unknown[]) => mockNotifyBookingMoved(...a),
+}));
 
 import { _resetRateLimits } from "./antiSpam";
 import { _resetIdempotencyReplays, registerBrainWriteRoutes } from "./brainWriteRoutes";
@@ -267,6 +275,12 @@ beforeEach(() => {
   mockGetCustomerById.mockResolvedValue({ ...CUSTOMER_ROW });
   mockGetBookingById.mockResolvedValue({ ...BOOKING_ROW });
   mockIssueManualInvoice.mockResolvedValue({ ...ISSUED });
+  mockMoveBooking.mockResolvedValue({
+    outcome: "moved",
+    before: { ...BOOKING_ROW },
+    after: { ...BOOKING_ROW, scheduledDate: "2026-09-02", scheduledTime: "14:00" },
+  });
+  mockNotifyBookingMoved.mockResolvedValue({ customerDelivered: true, cleanerDelivered: false });
   vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_configured");
 });
 
@@ -617,37 +631,31 @@ describe("POST /api/brain/bookings", () => {
 describe("POST /api/brain/bookings/:id/reschedule", () => {
   const RESCHEDULE = { body: { actor: ACTOR, date: "2026-09-02", time: "14:00" }, params: { id: "88" } };
 
-  it("composes the admin building blocks exactly and answers { ok: true }", async () => {
+  it("delegates to the shared atomic reschedule service and answers { ok: true }", async () => {
     const res = await call("/api/brain/bookings/:id/reschedule", RESCHEDULE);
     expect(res.statusCode).toBe(200);
     expect(res.body).toEqual({ ok: true });
     expectCalledOnceWith(mockGetBookingById, 88);
-    expectCalledOnceWith(mockExpireStale, "2026-09-02", "14:00");
-    expectCalledOnceWith(mockAdminSlotBookable, {
-      date: "2026-09-02",
-      time: "14:00",
-      jobHours: 4,
-      overrideNotice: false,
-      schedule: RULES.schedule,
-      lunchBreak: true,
-      leadTimeHours: 72,
-      durations: DEFAULT_DURATIONS,
-      excludeBookingId: 88,
+    expectCalledOnceWith(mockMoveBooking, {
+      bookingId: 88,
+      target: { date: "2026-09-02", time: "14:00" },
+      actor: { type: "brain", label: ACTOR },
+      note: ACTOR,
+      action: "brain_moved",
     });
-    expectCalledOnceWith(mockUpdateBooking, 88, {
-      scheduledDate: "2026-09-02",
-      scheduledTime: "14:00",
-      estimatedHours: 4,
-      notes: `gate code 4411\n${ACTOR} rescheduled to 2026-09-02 14:00`,
+    expectCalledOnceWith(mockNotifyBookingMoved, {
+      before: BOOKING_ROW,
+      after: expect.objectContaining({ scheduledDate: "2026-09-02", scheduledTime: "14:00" }),
+      note: ACTOR,
     });
   });
 
-  it("falls back to the duration ladder when the booking pinned no hours", async () => {
+  it("leaves duration resolution to the shared service when the booking pinned no hours", async () => {
     mockGetBookingById.mockResolvedValue({ ...BOOKING_ROW, estimatedHours: null });
     await call("/api/brain/bookings/:id/reschedule", RESCHEDULE);
-    const expected = durationHoursFor("deep", 1800, DEFAULT_DURATIONS);
-    expect(mockAdminSlotBookable).toHaveBeenCalledWith(expect.objectContaining({ jobHours: expected }));
-    expect(mockUpdateBooking).toHaveBeenCalledWith(88, expect.objectContaining({ estimatedHours: expected }));
+    expect(mockMoveBooking).toHaveBeenCalledWith(expect.objectContaining({ bookingId: 88 }));
+    expect(mockAdminSlotBookable).not.toHaveBeenCalled();
+    expect(mockUpdateBooking).not.toHaveBeenCalled();
   });
 
   it("404s a missing booking", async () => {
@@ -669,7 +677,7 @@ describe("POST /api/brain/bookings/:id/reschedule", () => {
   });
 
   it("400s a slot the scheduling gates refuse, in the admin panel's words", async () => {
-    mockAdminSlotBookable.mockResolvedValue(false);
+    mockMoveBooking.mockRejectedValue(new TRPCError({ code: "BAD_REQUEST", message: SLOT_REFUSAL }));
     const res = await call("/api/brain/bookings/:id/reschedule", RESCHEDULE);
     expect(res.statusCode).toBe(400);
     expect(res.body).toEqual({ error: SLOT_REFUSAL });
@@ -677,8 +685,7 @@ describe("POST /api/brain/bookings/:id/reschedule", () => {
   });
 
   it("409s the unique-index race — the slot was taken between check and write", async () => {
-    mockUpdateBooking.mockRejectedValue(new Error("ER_DUP_ENTRY slotKey"));
-    mockIsSlotTaken.mockReturnValue(true);
+    mockMoveBooking.mockRejectedValue(new TRPCError({ code: "CONFLICT", message: "Another booking already holds that date and time." }));
     const res = await call("/api/brain/bookings/:id/reschedule", RESCHEDULE);
     expect(res.statusCode).toBe(409);
     expect(res.body).toEqual({ error: "Another booking already holds that date and time." });

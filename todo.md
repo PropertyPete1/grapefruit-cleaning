@@ -476,3 +476,20 @@
 - [x] Run TypeScript, full suite, production build, genuine restart, checkpoint, `/api/version` proof, and GitHub synchronization
 - [x] Re-walk the live EN/ES flow on mobile and desktop after deployment and verify slot release, prices, add-ons, deposit math, validation, and confirmation handoff
 - [x] Fix the deployed five-minute Heartbeat callback so the job uses `/api/scheduled/checkoutHolds` and returns the cron-only JSON handler instead of a 200 SPA HTML shell; successful JSON run proven
+
+## Booking rescheduling and Grapefruit link-preview branding
+- [x] Audit existing booking state transitions, admin cancellation/completion, iCal-driven moves, slot release/claim, reminders, assignments, invoices/deposits/add-ons, and email logging before building
+- [x] Audit the current real Karyme booking state without changing it and identify how an unknown-time move to tomorrow can be represented safely
+- [x] Audit live production favicon, apple-touch-icon, PWA manifest icons, `og:image`, `twitter:card`, and every referenced asset across public, admin, and staff routes
+- [x] Report the existing reusable machinery, exact favicon cause, additive schema/migration plan, rollout/rollback plan, and test matrix before implementation
+- [x] Add atomic admin rescheduling for exact date/time and date-only pending-time moves with optional reason/note, immediate old-slot release, new-slot claim, and full audit attribution
+- [x] Add customer reschedule-request links and bilingual propose/approve/counter workflow without allowing direct self-booking
+- [x] Update admin Calendar and cleaner/staff views for moved and pending-time jobs; notify assigned crew when a job moves
+- [x] Send bilingual customer confirmation and owner/customer-request alerts for every move, log every attempt in `email_log`, and keep reminders anchored to the new schedule
+- [x] Preserve booking identity, deposit, invoice, payment, pricing, add-ons, and snapshots unchanged through every reschedule
+- [x] Enforce lead time, duration, 7 PM close, conflict, checkout-hold, iCal ownership, cancellation, and completed-job guards
+- [x] Add daily health findings for upcoming pending-time bookings and stale unanswered customer reschedule requests
+- [x] Replace missing/platform branding with Grapefruit favicon, Apple touch icon, PWA icons, Open Graph image, and Twitter metadata on all public/admin/staff routes
+- [x] Add focused migration, authorization, atomicity, conflict, pending-time, reminder, email, staff, customer workflow, audit, icon, manifest, and metadata regression tests
+- [ ] Run complete tests, TypeScript, production build, genuine restart, checkpoint, `/api/version` proof, and GitHub synchronization
+- [ ] Verify live admin/customer/cleaner rescheduling behavior without altering commercial records, and fetch every deployed icon/manifest/social-preview asset from all production domains

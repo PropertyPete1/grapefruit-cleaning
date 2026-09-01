@@ -16,6 +16,8 @@ import {
 } from "@/components/ui/select";
 import { DepositLinkCell } from "./DepositLinkCell";
 import { SetTimeDialog } from "./SetTimeDialog";
+import { RescheduleDialog } from "./RescheduleDialog";
+import { RescheduleRequestsPanel } from "./RescheduleRequestsPanel";
 import { BookingDetails, type BookingDetailsRow } from "./BookingDetails";
 import {
   NotesBlock,
@@ -90,6 +92,8 @@ export default function AdminAppointments() {
         }
       />
 
+      <RescheduleRequestsPanel />
+
       <div className="rounded-2xl bg-card shadow-sm ring-1 ring-border">
         {bookings.isLoading ? (
           <div className="space-y-3 p-6">
@@ -152,6 +156,13 @@ export default function AdminAppointments() {
                             {formatJobSpan(b.scheduledTime, b.durationHours)}
                           </span>
                         </>
+                      ) : b.scheduledDate ? (
+                        <>
+                          <span>{fmtDate(b.scheduledDate)}</span>
+                          <span className="mt-1 block w-fit rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+                            Time to be decided
+                          </span>
+                        </>
                       ) : b.kind === "ical_auto" ? (
                         /* An unplaced turnover — the [ACTION NEEDED] state. */
                         <SetTimeDialog
@@ -172,6 +183,11 @@ export default function AdminAppointments() {
                         >
                           ⚠ Slot conflict
                         </span>
+                      )}
+                      {b.status === "confirmed" && (
+                        <div className="mt-2">
+                          <RescheduleDialog booking={b} />
+                        </div>
                       )}
                     </td>
                     <td className="max-w-44 truncate px-5 py-3.5 text-xs text-muted-foreground">
@@ -289,7 +305,9 @@ export default function AdminAppointments() {
                 subtitle={
                   b.scheduledDate && b.scheduledTime
                     ? `${fmtDate(b.scheduledDate)} · ${formatJobSpan(b.scheduledTime, b.durationHours)}`
-                    : "Customer picks a time"
+                    : b.scheduledDate
+                      ? `${fmtDate(b.scheduledDate)} · Time to be decided`
+                      : "Customer picks a time"
                 }
                 amount={b.depositLink === "incomplete" ? "—" : fmtMoney(b.totalAmount)}
                 badge={<StatusBadge status={b.status} />}
@@ -327,6 +345,7 @@ export default function AdminAppointments() {
                         />
                       </div>
                     )}
+                    {b.status === "confirmed" && <RescheduleDialog booking={b} compact />}
                     <Select
                       value={b.status}
                       onValueChange={v => updateStatus.mutate({ id: b.id, status: v as (typeof STATUSES)[number] })}

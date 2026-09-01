@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { boolean, int, mysqlEnum, mysqlTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/mysql-core";
+import { boolean, index, int, mysqlEnum, mysqlTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/mysql-core";
 
 /**
  * Booking statuses that occupy their calendar slot. Cancelled and expired
@@ -141,6 +141,15 @@ export const bookings = mysqlTable("bookings", {
   /** Timestamp when the 1-day-before reminder email was sent (null = not sent yet). */
   dayReminderSentAt: timestamp("dayReminderSentAt"),
   /**
+   * SHA-256 of the long-lived customer reschedule-link bearer token.
+   *
+   * Only the hash is stored. The raw token appears in customer email URLs and
+   * is never returned by booking list/detail APIs.
+   */
+  rescheduleTokenHash: varchar("rescheduleTokenHash", { length: 64 }),
+  /** End of the customer reschedule link's validity window. */
+  rescheduleTokenExpiresAt: timestamp("rescheduleTokenExpiresAt"),
+  /**
    * Timestamp when the "we've started your cleaning" email was sent (null = not
    * sent yet). This column, not the status, is what makes that email
    * once-per-booking: a job flipped back to confirmed and started again is a
@@ -280,6 +289,15 @@ export const bookings = mysqlTable("bookings", {
    */
   icalUid: varchar("icalUid", { length: 255 }),
   /**
+   * Checkout date last observed in the property's iCal feed.
+   *
+   * This is intentionally separate from scheduledDate: an admin may move the
+   * cleaning without changing the reservation itself. Comparing the next feed
+   * poll with this source date prevents the hourly sync from undoing a manual
+   * move while still detecting a genuine host-date change.
+   */
+  icalSourceDate: varchar("icalSourceDate", { length: 10 }),
+  /**
    * The scheduled date the host was last told about for this turnover, or NULL
    * if they have not been told yet.
    *
@@ -298,8 +316,54 @@ export const bookings = mysqlTable("bookings", {
 }, table => [
   uniqueIndex(SLOT_UNIQUE_INDEX).on(table.slotKey),
   uniqueIndex("bookings_property_uid_unique").on(table.propertyId, table.icalUid),
+  uniqueIndex("bookings_rescheduleTokenHash_unique").on(table.rescheduleTokenHash),
 ]);
 export type Booking = typeof bookings.$inferSelect;
+
+/** Customer proposals and admin approve/counter/decline state. */
+export const bookingRescheduleRequests = mysqlTable("booking_reschedule_requests", {
+  id: int("id").autoincrement().primaryKey(),
+  bookingId: int("bookingId").notNull(),
+  status: mysqlEnum("status", ["pending", "countered", "approved", "declined", "withdrawn"])
+    .default("pending")
+    .notNull(),
+  proposedDate: varchar("proposedDate", { length: 10 }).notNull(),
+  proposedTime: varchar("proposedTime", { length: 5 }).notNull(),
+  customerNote: text("customerNote"),
+  counterDate: varchar("counterDate", { length: 10 }),
+  counterTime: varchar("counterTime", { length: 5 }),
+  adminNote: text("adminNote"),
+  locale: mysqlEnum("locale", ["en", "es"]).default("en").notNull(),
+  resolvedByUserId: int("resolvedByUserId"),
+  resolvedAt: timestamp("resolvedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => [
+  index("booking_reschedule_requests_booking_idx").on(table.bookingId),
+  index("booking_reschedule_requests_status_created_idx").on(table.status, table.createdAt),
+]);
+export type BookingRescheduleRequest = typeof bookingRescheduleRequests.$inferSelect;
+
+/** Immutable audit history for every proposal, counter, and effective move. */
+export const bookingScheduleEvents = mysqlTable("booking_schedule_events", {
+  id: int("id").autoincrement().primaryKey(),
+  bookingId: int("bookingId").notNull(),
+  requestId: int("requestId"),
+  actorType: mysqlEnum("actorType", ["admin", "customer", "staff", "ical", "brain", "system"]).notNull(),
+  actorUserId: int("actorUserId"),
+  actorLabel: varchar("actorLabel", { length: 200 }),
+  action: varchar("action", { length: 40 }).notNull(),
+  fromDate: varchar("fromDate", { length: 10 }),
+  fromTime: varchar("fromTime", { length: 5 }),
+  toDate: varchar("toDate", { length: 10 }),
+  toTime: varchar("toTime", { length: 5 }),
+  note: text("note"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [
+  index("booking_schedule_events_booking_created_idx").on(table.bookingId, table.createdAt),
+  index("booking_schedule_events_request_idx").on(table.requestId),
+]);
+export type BookingScheduleEvent = typeof bookingScheduleEvents.$inferSelect;
 
 // ---------- Dynamic add-on catalog ----------
 

@@ -108,7 +108,7 @@ export function localBusinessJsonLd(site?: {
       "@type": "OpeningHoursSpecification",
       dayOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
       opens: "08:00",
-      closes: "18:00",
+      closes: "19:00",
     },
   };
   if (site?.business_phone) jsonLd.telephone = site.business_phone;

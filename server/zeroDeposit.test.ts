@@ -38,6 +38,7 @@ vi.mock("./db", async () => {
   const actual = await vi.importActual<typeof import("./db")>("./db");
   return {
     stripPayToken: actual.stripPayToken,
+    setBookingRescheduleToken: vi.fn().mockResolvedValue(undefined),
     getSetting: (...a: unknown[]) => mockGetSetting(...a),
     getOccupiedBookings: (...a: unknown[]) => mockGetOccupiedBookings(...a),
     createBooking: (...a: unknown[]) => mockCreateBooking(...a),

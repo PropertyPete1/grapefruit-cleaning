@@ -46,6 +46,8 @@ import {
   deliverEmail,
   sendDepositLinkEmail,
   sendPropertyConnectedEmail,
+  sendRescheduleCounterEmail,
+  sendRescheduleDeclinedEmail,
   sendSmtpDiagnostic,
   smtpDiagnostics,
   verifySmtpTransport,
@@ -67,6 +69,14 @@ import { addonCatalogAdminRouter } from "./addonCatalogAdmin";
 import { loadAddonCatalog } from "../addonCatalog";
 import { centsToDollars, dollarsToCents } from "@shared/money";
 import { OFFLINE_PAYMENT_METHODS } from "@shared/payments";
+import { mintBookingRescheduleUrl } from "../rescheduleAccess";
+import {
+  approveRescheduleRequest as approveRescheduleRequestService,
+  counterRescheduleRequest as counterRescheduleRequestService,
+  declineRescheduleRequest as declineRescheduleRequestService,
+  moveConfirmedBooking,
+  notifyEffectiveScheduleMove,
+} from "../rescheduling";
 
 /** Admin-only procedure guard. */
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -488,6 +498,163 @@ export const adminRouter = router({
       return { success: true } as const;
     }),
 
+  rescheduleBooking: adminProcedure
+    .input(
+      z.object({
+        id: z.number().int().positive(),
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        time: z.string().regex(/^\d{2}:\d{2}$/).nullable(),
+        note: z.string().trim().max(2000).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const moved = await moveConfirmedBooking({
+        bookingId: input.id,
+        target: { date: input.date, time: input.time },
+        actor: { type: "admin", userId: ctx.user.id, label: ctx.user.name || ctx.user.email || "Admin" },
+        note: input.note,
+      });
+      const delivery = await notifyEffectiveScheduleMove({
+        before: moved.before,
+        after: moved.after,
+        note: input.note,
+      });
+      return { success: true as const, delivery };
+    }),
+
+  sendRescheduleLink: adminProcedure
+    .input(z.object({ bookingId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const booking = await db.getBookingById(input.bookingId);
+      if (!booking) throw new TRPCError({ code: "NOT_FOUND", message: "Booking not found" });
+      if (booking.status !== "confirmed") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Only a confirmed booking can receive a reschedule link." });
+      }
+      const customer = await db.getCustomerById(booking.customerId);
+      if (!customer?.email) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This customer has no email address." });
+      }
+      const locale = (booking.locale as "en" | "es") ?? "en";
+      const access = await mintBookingRescheduleUrl({
+        bookingId: booking.id,
+        locale,
+        origin: originFromRequest(ctx.req),
+      });
+      const subject = locale === "es"
+        ? `Solicite un cambio para ${booking.reference}`
+        : `Request a change for ${booking.reference}`;
+      const body = locale === "es"
+        ? `Hola ${customer.firstName},\n\nPuede proponer una nueva fecha y hora aquí. Su cita no cambiará hasta que Karyme la apruebe:\n${access.url}`
+        : `Hi ${customer.firstName},\n\nYou can propose a new date and time here. Your appointment will not change until Karyme approves it:\n${access.url}`;
+      const emailSent = await deliverEmail(customer.email, subject, body, undefined, {
+        emailType: "reschedule_link",
+        bookingId: booking.id,
+      });
+      return { success: true as const, emailSent };
+    }),
+
+  rescheduleRequests: adminProcedure
+    .input(
+      z.object({
+        status: z.enum(["pending", "countered", "approved", "declined", "withdrawn"]).optional(),
+      }).optional()
+    )
+    .query(({ input }) => db.listBookingRescheduleRequests(input?.status)),
+
+  bookingScheduleEvents: adminProcedure
+    .input(z.object({ bookingId: z.number().int().positive() }))
+    .query(({ input }) => db.listBookingScheduleEvents(input.bookingId)),
+
+  approveRescheduleRequest: adminProcedure
+    .input(
+      z.object({
+        requestId: z.number().int().positive(),
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        time: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
+        note: z.string().trim().max(2000).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const request = await db.getBookingRescheduleRequest(input.requestId);
+      if (!request) throw new TRPCError({ code: "NOT_FOUND", message: "Reschedule request not found" });
+      const target = input.date !== undefined
+        ? { date: input.date, time: input.time ?? null }
+        : undefined;
+      const moved = await approveRescheduleRequestService({
+        requestId: input.requestId,
+        actor: { type: "admin", userId: ctx.user.id, label: ctx.user.name || ctx.user.email || "Admin" },
+        note: input.note,
+        target,
+      });
+      const delivery = await notifyEffectiveScheduleMove({ before: moved.before, after: moved.after, note: input.note });
+      return { success: true as const, delivery };
+    }),
+
+  counterRescheduleRequest: adminProcedure
+    .input(
+      z.object({
+        requestId: z.number().int().positive(),
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        time: z.string().regex(/^\d{2}:\d{2}$/).nullable(),
+        note: z.string().trim().max(2000).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const result = await counterRescheduleRequestService({
+        requestId: input.requestId,
+        actor: { type: "admin", userId: ctx.user.id, label: ctx.user.name || ctx.user.email || "Admin" },
+        target: { date: input.date, time: input.time },
+        note: input.note,
+      });
+      const customer = await db.getCustomerById(result.booking.customerId);
+      if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Customer not found" });
+      const locale = (result.booking.locale as "en" | "es") ?? "en";
+      const access = await mintBookingRescheduleUrl({
+        bookingId: result.booking.id,
+        locale,
+        origin: originFromRequest(ctx.req),
+      });
+      const emailSent = await sendRescheduleCounterEmail({
+        bookingId: result.booking.id,
+        reference: result.booking.reference,
+        customerName: customer.firstName,
+        customerEmail: customer.email,
+        locale,
+        fromDate: result.booking.scheduledDate,
+        fromTime: result.booking.scheduledTime,
+        toDate: input.date,
+        toTime: input.time,
+        note: input.note,
+        rescheduleUrl: access.url,
+      });
+      return { success: true as const, emailSent };
+    }),
+
+  declineRescheduleRequest: adminProcedure
+    .input(z.object({ requestId: z.number().int().positive(), note: z.string().trim().max(2000).optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const result = await declineRescheduleRequestService({
+        requestId: input.requestId,
+        actor: { type: "admin", userId: ctx.user.id, label: ctx.user.name || ctx.user.email || "Admin" },
+        note: input.note,
+      });
+      const customer = await db.getCustomerById(result.booking.customerId);
+      if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Customer not found" });
+      const emailSent = await sendRescheduleDeclinedEmail({
+        bookingId: result.booking.id,
+        reference: result.booking.reference,
+        customerName: customer.firstName,
+        customerEmail: customer.email,
+        locale: (result.booking.locale as "en" | "es") ?? "en",
+        fromDate: result.booking.scheduledDate,
+        fromTime: result.booking.scheduledTime,
+        toDate: result.request.proposedDate,
+        toTime: result.request.proposedTime,
+        note: input.note,
+      });
+      return { success: true as const, emailSent };
+    }),
+
   // ---------- Connected properties (Airbnb auto-booking) ----------
   properties: adminProcedure.query(async () => {
     const rows = await db.listConnectedProperties();
@@ -634,7 +801,7 @@ export const adminRouter = router({
         time: z.string().regex(/^\d{2}:\d{2}$/),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const booking = await db.getBookingById(input.id);
       if (!booking) throw new TRPCError({ code: "NOT_FOUND", message: "Booking not found" });
       if (booking.kind !== "ical_auto") {
@@ -646,40 +813,20 @@ export const adminRouter = router({
       if (booking.status !== "confirmed") {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Only a confirmed booking can be scheduled." });
       }
-      const { schedule, lunchBreak, durations } = await loadSchedulingRules();
-      const jobHours =
-        booking.estimatedHours ?? durationHoursFor(booking.serviceType, booking.sqft, durations);
-      const rows = (await db.getOccupiedBookings(input.date)).filter(row => row.id !== booking.id);
-      const bookable = isSlotBookable(
-        {
-          date: input.date,
-          schedule,
-          lunchBreak,
-          leadTimeHours: 0,
-          occupied: occupiedIntervals(rows, durations),
-          jobHours,
-        },
-        input.time
-      );
-      if (!bookable) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "That time doesn't fit — the hours, the lunch break, or another booking rules it out.",
-        });
-      }
-      try {
-        await db.updateBooking(booking.id, {
-          scheduledDate: input.date,
-          scheduledTime: input.time,
-          estimatedHours: jobHours,
-        });
-      } catch (error) {
-        if (db.isSlotTakenError(error)) {
-          throw new TRPCError({ code: "CONFLICT", message: "Another booking just took that time — pick another." });
-        }
-        throw error;
-      }
-      return { success: true as const };
+      const moved = await moveConfirmedBooking({
+        bookingId: booking.id,
+        target: { date: input.date, time: input.time },
+        actor: { type: "admin", userId: ctx.user.id, label: ctx.user.name || ctx.user.email || "Admin" },
+        note: "Manual placement of an Airbnb turnover.",
+        overrideLeadTime: true,
+        action: "ical_manual_move",
+      });
+      const delivery = await notifyEffectiveScheduleMove({
+        before: moved.before,
+        after: moved.after,
+        note: "Manual placement of an Airbnb turnover.",
+      });
+      return { success: true as const, delivery };
     }),
 
   // ---------- Customers ----------

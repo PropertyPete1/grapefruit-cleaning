@@ -62,6 +62,7 @@ const INVOICE = {
 
 vi.mock("./db", () => ({
   getSetting: vi.fn().mockResolvedValue(null),
+  setBookingRescheduleToken: vi.fn().mockResolvedValue(undefined),
   // Both racers read the row before either has written — that IS the race.
   getBookingById: vi.fn(async () => ({ ...BOOKING, status: row.bookingStatus })),
   getCustomerById: vi.fn().mockResolvedValue({

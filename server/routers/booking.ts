@@ -40,6 +40,7 @@ import { composeAddress, plausibleVerifiedSqft, PROPERTY_TYPES } from "@shared/p
 import { sendBookingEmails } from "../emails";
 import { lookupPropertySqft } from "../property";
 import { publicOrigin } from "../publicOrigin";
+import { mintBookingRescheduleUrl } from "../rescheduleAccess";
 import { getStripe } from "../stripe";
 import { publicProcedure, router } from "../_core/trpc";
 import { bookingAddonSnapshots, loadAddonCatalog, resolveSelectedAddons } from "../addonCatalog";
@@ -743,6 +744,11 @@ export async function applyConfirmationSideEffects(
   const customer = await db.getCustomerById(booking.customerId);
   if (customer) {
     const locale = booking.locale as "en" | "es";
+    const rescheduleAccess = await mintBookingRescheduleUrl({
+      bookingId: booking.id,
+      locale,
+      origin: publicOrigin(),
+    });
     const extras: string[] = JSON.parse(booking.extras ?? "[]");
     const addonSnapshots = (await loadAddonCatalog(false)).enabled
       ? await db.listBookingAddonsByBooking(booking.id)
@@ -766,6 +772,7 @@ export async function applyConfirmationSideEffects(
       completedLink = { customerChose: chose };
     }
     await sendBookingEmails({
+      bookingId: booking.id,
       completedLink,
       reference: booking.reference,
       serviceName: SERVICE_NAMES[serviceType][locale],
@@ -784,6 +791,7 @@ export async function applyConfirmationSideEffects(
       notes: booking.notes ?? undefined,
       locale,
       bizPhone,
+      rescheduleUrl: rescheduleAccess.url,
       slotConflict,
     });
   }

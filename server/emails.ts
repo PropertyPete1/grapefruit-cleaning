@@ -39,6 +39,10 @@ export interface BookingEmailData {
   notes?: string;
   /** Live business phone from Admin → Settings; omitted when not configured. */
   bizPhone?: string;
+  /** Secure customer request link, minted server-side and never stored raw. */
+  rescheduleUrl?: string;
+  /** Durable log relation for the confirmation message. */
+  bookingId?: number;
   /**
    * True when a late (expired-recovery) payment confirmed this booking after
    * its slot was retaken — the owner notification must warn about the clash.
@@ -437,6 +441,7 @@ export function buildCustomerConfirmation(data: BookingEmailData): { subject: st
         `QUÉ SIGUE`,
         `• Le enviaremos un recordatorio 24 horas antes de su cita.`,
         `• Puede reprogramar o cancelar sin costo hasta 24 horas antes.`,
+        data.rescheduleUrl ? `• Solicite un cambio de fecha u hora: ${data.rescheduleUrl}` : ``,
         `• Su equipo de limpieza verificado llegará puntual.`,
         ``,
         data.bizPhone
@@ -478,6 +483,7 @@ export function buildCustomerConfirmation(data: BookingEmailData): { subject: st
       `WHAT'S NEXT`,
       `• We'll send you a reminder 24 hours before your appointment.`,
       `• You can reschedule or cancel free of charge up to 24 hours ahead.`,
+      data.rescheduleUrl ? `• Request a date or time change: ${data.rescheduleUrl}` : ``,
       `• Your vetted cleaning team will arrive right on time.`,
       ``,
       data.bizPhone
@@ -665,10 +671,185 @@ export async function sendBookingEmails(data: BookingEmailData): Promise<void> {
   const customerEmail = buildCustomerConfirmation(data);
   await deliverEmail(data.customerEmail, customerEmail.subject, customerEmail.body, undefined, {
     emailType: "booking_confirmation",
+    bookingId: data.bookingId ?? null,
   });
 
   const ownerNote = buildOwnerNotification(data);
   await sendOwnerAlert(ownerNote.title, ownerNote.content);
+}
+
+export interface RescheduleEmailData {
+  bookingId: number;
+  reference: string;
+  customerName: string;
+  customerEmail?: string | null;
+  locale: "en" | "es";
+  fromDate?: string | null;
+  fromTime?: string | null;
+  toDate: string;
+  toTime?: string | null;
+  note?: string | null;
+  rescheduleUrl?: string;
+  employeeName?: string | null;
+  employeeEmail?: string | null;
+}
+
+function scheduleLabel(locale: "en" | "es", date: string, time?: string | null): string {
+  if (time) return locale === "es" ? `${date} a las ${time}` : `${date} at ${time}`;
+  return locale === "es" ? `${date} — hora por definir` : `${date} — time to be decided`;
+}
+
+export function buildRescheduleConfirmation(data: RescheduleEmailData): { subject: string; body: string } {
+  const next = scheduleLabel(data.locale, data.toDate, data.toTime);
+  if (data.locale === "es") {
+    return {
+      subject: `Su limpieza fue reprogramada — ${data.reference} | Grapefruit Cleaning Co.`,
+      body: [
+        `Hola ${data.customerName},`,
+        ``,
+        data.toTime
+          ? `Confirmamos la nueva fecha y hora de su limpieza.`
+          : `Anotamos la nueva fecha de su limpieza. Le confirmaremos la hora en cuanto quede definida.`,
+        ``,
+        `NUEVO HORARIO`,
+        next,
+        data.fromDate ? `Horario anterior: ${scheduleLabel("es", data.fromDate, data.fromTime)}` : ``,
+        data.note ? `Nota: ${data.note}` : ``,
+        ``,
+        data.rescheduleUrl ? `¿Necesita solicitar otro cambio? ${data.rescheduleUrl}` : ``,
+        ``,
+        `Con aprecio,`,
+        `El equipo de Grapefruit Cleaning Co.`,
+      ].filter(Boolean).join("\n"),
+    };
+  }
+  return {
+    subject: `Your cleaning was rescheduled — ${data.reference} | Grapefruit Cleaning Co.`,
+    body: [
+      `Hi ${data.customerName},`,
+      ``,
+      data.toTime
+        ? `Your cleaning's new date and time are confirmed.`
+        : `We've noted the new date for your cleaning. We'll confirm the time as soon as it is set.`,
+      ``,
+      `NEW SCHEDULE`,
+      next,
+      data.fromDate ? `Previous schedule: ${scheduleLabel("en", data.fromDate, data.fromTime)}` : ``,
+      data.note ? `Note: ${data.note}` : ``,
+      ``,
+      data.rescheduleUrl ? `Need to request another change? ${data.rescheduleUrl}` : ``,
+      ``,
+      `Warmly,`,
+      `The Grapefruit Cleaning Co. Team`,
+    ].filter(Boolean).join("\n"),
+  };
+}
+
+export function buildCleanerRescheduleNotice(data: RescheduleEmailData): { subject: string; body: string } {
+  const locale = data.locale;
+  const next = scheduleLabel(locale, data.toDate, data.toTime);
+  if (locale === "es") {
+    return {
+      subject: `Trabajo reprogramado — ${data.reference}`,
+      body: [
+        `Hola ${data.employeeName || "equipo"},`,
+        ``,
+        `El trabajo ${data.reference} cambió de horario.`,
+        `Nuevo horario: ${next}`,
+        data.fromDate ? `Horario anterior: ${scheduleLabel("es", data.fromDate, data.fromTime)}` : ``,
+        data.note ? `Nota: ${data.note}` : ``,
+        ``,
+        `Revise su calendario de Grapefruit antes de salir.`,
+      ].filter(Boolean).join("\n"),
+    };
+  }
+  return {
+    subject: `Job rescheduled — ${data.reference}`,
+    body: [
+      `Hi ${data.employeeName || "team"},`,
+      ``,
+      `Job ${data.reference} has moved.`,
+      `New schedule: ${next}`,
+      data.fromDate ? `Previous schedule: ${scheduleLabel("en", data.fromDate, data.fromTime)}` : ``,
+      data.note ? `Note: ${data.note}` : ``,
+      ``,
+      `Please check your Grapefruit calendar before heading out.`,
+    ].filter(Boolean).join("\n"),
+  };
+}
+
+export async function sendRescheduleConfirmationEmails(data: RescheduleEmailData): Promise<{
+  customerDelivered: boolean;
+  cleanerDelivered: boolean;
+}> {
+  const customer = buildRescheduleConfirmation(data);
+  const customerDelivered = await deliverEmail(data.customerEmail, customer.subject, customer.body, undefined, {
+    emailType: "reschedule_confirmation",
+    bookingId: data.bookingId,
+  });
+  let cleanerDelivered = false;
+  if (data.employeeEmail) {
+    const cleaner = buildCleanerRescheduleNotice(data);
+    cleanerDelivered = await deliverEmail(data.employeeEmail, cleaner.subject, cleaner.body, undefined, {
+      emailType: "reschedule_cleaner",
+      bookingId: data.bookingId,
+    });
+  }
+  return { customerDelivered, cleanerDelivered };
+}
+
+export async function sendCleanerRescheduleNotice(data: RescheduleEmailData): Promise<boolean> {
+  if (!data.employeeEmail) return false;
+  const cleaner = buildCleanerRescheduleNotice(data);
+  return deliverEmail(data.employeeEmail, cleaner.subject, cleaner.body, undefined, {
+    emailType: "reschedule_cleaner",
+    bookingId: data.bookingId,
+  });
+}
+
+export async function sendRescheduleRequestReceived(data: RescheduleEmailData): Promise<void> {
+  const next = scheduleLabel(data.locale, data.toDate, data.toTime);
+  const customerSubject = data.locale === "es"
+    ? `Recibimos su solicitud — ${data.reference}`
+    : `We received your reschedule request — ${data.reference}`;
+  const customerBody = data.locale === "es"
+    ? `Hola ${data.customerName},\n\nRecibimos su propuesta para ${next}. Karyme la revisará; su cita actual no cambia hasta que reciba una confirmación.\n\nEl equipo de Grapefruit Cleaning Co.`
+    : `Hi ${data.customerName},\n\nWe received your proposal for ${next}. Karyme will review it; your current appointment does not change until you receive a confirmation.\n\nThe Grapefruit Cleaning Co. Team`;
+  await deliverEmail(data.customerEmail, customerSubject, customerBody, undefined, {
+    emailType: "reschedule_request_received",
+    bookingId: data.bookingId,
+  });
+  await sendOwnerAlert(
+    `Reschedule requested — ${data.reference}`,
+    `${data.customerName} requested ${next}.${data.note ? `\nNote: ${data.note}` : ""}\nThe current booking has not moved.`
+  );
+}
+
+export async function sendRescheduleCounterEmail(data: RescheduleEmailData): Promise<boolean> {
+  const next = scheduleLabel(data.locale, data.toDate, data.toTime);
+  const subject = data.locale === "es"
+    ? `Nueva opción para su limpieza — ${data.reference}`
+    : `A new option for your cleaning — ${data.reference}`;
+  const body = data.locale === "es"
+    ? `Hola ${data.customerName},\n\nKaryme propone ${next}. Su cita todavía no cambia. Revise y acepte la propuesta aquí:\n${data.rescheduleUrl}\n${data.note ? `\nNota: ${data.note}` : ""}`
+    : `Hi ${data.customerName},\n\nKaryme proposes ${next}. Your appointment has not changed yet. Review and accept the proposal here:\n${data.rescheduleUrl}\n${data.note ? `\nNote: ${data.note}` : ""}`;
+  return deliverEmail(data.customerEmail, subject, body, undefined, {
+    emailType: "reschedule_counter",
+    bookingId: data.bookingId,
+  });
+}
+
+export async function sendRescheduleDeclinedEmail(data: RescheduleEmailData): Promise<boolean> {
+  const subject = data.locale === "es"
+    ? `Actualización de su solicitud — ${data.reference}`
+    : `Update on your reschedule request — ${data.reference}`;
+  const body = data.locale === "es"
+    ? `Hola ${data.customerName},\n\nNo pudimos aprobar la fecha solicitada. Su cita actual no cambió.${data.note ? `\n\nNota: ${data.note}` : ""}\n\nResponda a este correo si desea revisar otra opción.`
+    : `Hi ${data.customerName},\n\nWe could not approve the requested date. Your current appointment has not changed.${data.note ? `\n\nNote: ${data.note}` : ""}\n\nReply to this email if you'd like to review another option.`;
+  return deliverEmail(data.customerEmail, subject, body, undefined, {
+    emailType: "reschedule_declined",
+    bookingId: data.bookingId,
+  });
 }
 
 export interface BalanceEmailData {

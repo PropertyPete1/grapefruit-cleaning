@@ -662,3 +662,44 @@ present, separate invoice, tip, and total-received lines. Revenue totals include
 all succeeded payments, while Admin → Statistics and Admin → Payments show Stripe
 and offline sources separately. Never create customer, booking, invoice, payment,
 or tip rows merely to represent an out-of-system cash job.
+
+## Booking rescheduling and route branding — September 1, 2026
+
+Migration 0032 adds only rescheduling metadata: hash-only customer access fields
+on `bookings`, iCal source-date provenance, a `booking_reschedule_requests`
+workflow table, and immutable `booking_schedule_events`. An admin exact move or
+date-known/time-pending move uses one database transaction that changes only the
+schedule fields, clears previously claimed reminder timestamps, resolves the
+related request when applicable, and writes the audit event. Booking identity,
+customer, assignment, service, price, deposit, add-on snapshots, invoices, and
+payments are deliberately untouched. Exact moves run the same lead-time,
+duration, 7 PM close, lunch, occupancy, expired-hold cleanup, and unique-slot
+checks as booking creation. Pending-time moves require a date on which at least
+one legal slot exists and store `scheduledTime=NULL`, releasing the old unique
+slot immediately.
+
+Customer reschedule URLs are random bearer credentials whose plaintext appears
+only in the emailed URL; the database stores a SHA-256 hash plus expiry. A
+customer proposal never changes the booking. Admin may approve the proposal,
+counter it, or decline it; a customer may accept only the currently stored admin
+counter. Each effective move rotates the customer access link, sends a bilingual
+customer confirmation, and emails the assigned cleaner when that employee has an
+address. Customer requests alert the owner. All attempts use dedicated durable
+`email_log` types. The admin Calendar, Appointments page, and staff schedule show
+date-known/time-pending work explicitly rather than rendering a fake time.
+
+Daily health reports include upcoming pending-time jobs and customer reschedule
+requests unanswered for more than 24 hours. iCal reconciliation and Brain/API
+moves use the same atomic schedule and audit foundation, while preserving their
+existing eligibility and public response contracts.
+
+The browser-tab favicon is controlled by the managed `VITE_APP_LOGO` value, not
+only by the checked-in `client/public/favicon.ico`. The September 1 incident was
+caused by that managed value pointing at a translation-glyph asset, which the
+platform served byte-for-byte at `/favicon.ico` on every host. The managed value
+now points at the existing square Grapefruit logo in production storage. Public
+routes also ship `manifest.webmanifest`, a Grapefruit Apple touch icon, and
+server-rendered localized Open Graph/Twitter metadata with an absolute Grapefruit
+social image. Admin and staff retain their route-scoped manifests and app
+identities. Future favicon incidents must check both repository files and the
+managed app-logo setting before changing assets.

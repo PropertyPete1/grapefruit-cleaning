@@ -15,11 +15,7 @@ export type AppScope = "customer" | "admin" | "staff";
 
 export interface WebAppTarget {
   scope: AppScope;
-  /**
-   * Manifest to link for this route. null on the customer site: it has never
-   * declared one, and adding one would change how phones treat "Add to Home
-   * Screen" there — explicitly out of scope.
-   */
+  /** Manifest to link for this route; every surface is explicitly branded. */
   manifestHref: string | null;
   /** iOS home-screen icon (iOS ignores manifest icons for apple-touch-icon). */
   appleTouchIcon: string | null;
@@ -31,10 +27,10 @@ export interface WebAppTarget {
 
 const CUSTOMER_TARGET: WebAppTarget = {
   scope: "customer",
-  manifestHref: null,
-  appleTouchIcon: null,
-  appleTitle: null,
-  themeColor: null,
+  manifestHref: "/manifest.webmanifest",
+  appleTouchIcon: "/manus-storage/favicon-256_0edfb26b.png",
+  appleTitle: "Grapefruit Cleaning",
+  themeColor: "#F26D5B",
 };
 
 const SCOPED_TARGETS: Record<Exclude<AppScope, "customer">, WebAppTarget> = {
@@ -96,20 +92,47 @@ const escapeAttr = (value: string) =>
  * JavaScript added after load — it just saves a plain bookmark, which is why a
  * client-only swap produced an icon that opened the customer site.
  *
- * Returns "" for customer routes, which declare no manifest at all.
+ * Includes crawler-visible social metadata because preview bots generally do
+ * not execute the client-side SEO hook.
  */
 export function webAppHeadTags(pathname: string): string {
   const target = webAppTargetForPath(pathname);
-  if (!target.manifestHref) return "";
   const owned = `${WEBAPP_TAG_ATTR}="true"`;
+  const path = pathname.split(/[?#]/)[0]!.toLowerCase();
+  const spanish = path === "/es" || path.startsWith("/es/");
+  const publicTitle = spanish
+    ? "Grapefruit Cleaning Co. | Limpieza residencial y comercial"
+    : "Grapefruit Cleaning Co. | Premium Residential & Commercial Cleaning";
+  const publicDescription = spanish
+    ? "Limpieza residencial, comercial, profunda y de Airbnb. Obtenga una cotización y reserve en línea."
+    : "Premium residential, commercial, deep, and Airbnb cleaning. Get an instant quote and book online.";
+  const title = target.scope === "admin"
+    ? "Grapefruit Team | Admin"
+    : target.scope === "staff"
+      ? "Grapefruit Staff | Schedule"
+      : publicTitle;
+  const description = target.scope === "customer"
+    ? publicDescription
+    : "Grapefruit Cleaning Co. team scheduling and operations.";
+  const image = "https://grapeclean.com/manus-storage/grapefruit-logo_9a11bb63.jpg";
   return [
-    `<link rel="manifest" href="${escapeAttr(target.manifestHref)}" ${owned}>`,
+    `<link rel="manifest" href="${escapeAttr(target.manifestHref!)}" ${owned}>`,
     `<link rel="apple-touch-icon" sizes="180x180" href="${escapeAttr(target.appleTouchIcon!)}" ${owned}>`,
     `<meta name="apple-mobile-web-app-capable" content="yes" ${owned}>`,
     `<meta name="mobile-web-app-capable" content="yes" ${owned}>`,
     `<meta name="apple-mobile-web-app-status-bar-style" content="default" ${owned}>`,
     `<meta name="apple-mobile-web-app-title" content="${escapeAttr(target.appleTitle!)}" ${owned}>`,
     `<meta name="theme-color" content="${escapeAttr(target.themeColor!)}" ${owned}>`,
+    `<meta property="og:title" content="${escapeAttr(title)}" ${owned}>`,
+    `<meta property="og:description" content="${escapeAttr(description)}" ${owned}>`,
+    `<meta property="og:type" content="website" ${owned}>`,
+    `<meta property="og:image" content="${escapeAttr(image)}" ${owned}>`,
+    `<meta property="og:site_name" content="Grapefruit Cleaning Co." ${owned}>`,
+    `<meta property="og:locale" content="${spanish ? "es_LA" : "en_US"}" ${owned}>`,
+    `<meta name="twitter:card" content="summary_large_image" ${owned}>`,
+    `<meta name="twitter:title" content="${escapeAttr(title)}" ${owned}>`,
+    `<meta name="twitter:description" content="${escapeAttr(description)}" ${owned}>`,
+    `<meta name="twitter:image" content="${escapeAttr(image)}" ${owned}>`,
   ].join("\n    ");
 }
 

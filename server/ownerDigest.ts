@@ -16,6 +16,7 @@ import * as db from "./db";
 import { listHeartbeatJobs, type HeartbeatJobInfo } from "./_core/heartbeat";
 import { sendOwnerAlert, smtpUser } from "./emails";
 import { holdMinutesFor } from "./bookingRules";
+import { todayInBookingZone } from "@shared/leadTime";
 
 // ---------------------------------------------------------------------------
 // Health check
@@ -48,6 +49,22 @@ export interface HealthFindings {
     kind: string;
     holdMinutes: number;
     minutesOverdue: number;
+  }>;
+  pendingTimeBookings: Array<{
+    id: number;
+    reference: string;
+    date: string;
+    kind: string;
+    employeeId: number | null;
+  }>;
+  staleRescheduleRequests: Array<{
+    id: number;
+    reference: string;
+    status: string;
+    customer: string;
+    proposedDate: string;
+    proposedTime: string;
+    hoursWaiting: number;
   }>;
   /** Public business mailbox compared with the transport's resolved sender. */
   smtpIdentity: {
@@ -174,13 +191,16 @@ function fmtDate(d: Date | string | null | undefined): string {
  * permanent fact of the business is how an alert channel gets ignored.
  */
 export async function runHealthCheck(now: Date = new Date()): Promise<HealthFindings> {
-  const [paid, dead, noEmail, configuredBusinessEmail, activeProperties, overdueHolds, heartbeat] = await Promise.all([
+  const requestCutoff = new Date(now.getTime() - 24 * HOUR_MS);
+  const [paid, dead, noEmail, configuredBusinessEmail, activeProperties, overdueHolds, pendingTimes, staleRequests, heartbeat] = await Promise.all([
     db.findPaidInvoicesOnOpenBookings(),
     db.findInvoicesWithDeadLinks(now),
     db.findCustomersWithoutEmail(),
     db.getSetting("business_email"),
     db.listActiveSyncProperties(),
     db.listElapsedDepositBookings(now),
+    db.listUpcomingPendingTimeBookings(todayInBookingZone(now)),
+    db.listStaleOpenRescheduleRequests(requestCutoff),
     listHeartbeatJobs("", { pageSize: 200 })
       .then(result => ({ jobs: result.jobs, error: null as string | null }))
       .catch(error => ({
@@ -248,6 +268,22 @@ export async function runHealthCheck(now: Date = new Date()): Promise<HealthFind
     staleIcalProperties,
     criticalScheduleProblems,
     overdueCheckoutHolds,
+    pendingTimeBookings: pendingTimes.map(row => ({
+      id: row.id,
+      reference: row.reference,
+      date: row.scheduledDate ?? "",
+      kind: row.kind,
+      employeeId: row.employeeId,
+    })),
+    staleRescheduleRequests: staleRequests.map(row => ({
+      id: row.id,
+      reference: row.reference,
+      status: row.status,
+      customer: `${row.customerFirstName ?? ""} ${row.customerLastName ?? ""}`.trim() || "Customer",
+      proposedDate: row.proposedDate,
+      proposedTime: row.proposedTime,
+      hoursWaiting: Math.max(24, Math.round((nowMs - row.updatedAt.getTime()) / HOUR_MS * 10) / 10),
+    })),
     smtpIdentity: {
       expected: expectedSmtpUser,
       effective: effectiveSmtpUser,
@@ -263,6 +299,8 @@ export async function runHealthCheck(now: Date = new Date()): Promise<HealthFind
     findings.staleIcalProperties.length > 0 ||
     findings.criticalScheduleProblems.length > 0 ||
     findings.overdueCheckoutHolds.length > 0 ||
+    findings.pendingTimeBookings.length > 0 ||
+    findings.staleRescheduleRequests.length > 0 ||
     findings.smtpIdentity.matches === false;
   return findings;
 }
@@ -273,6 +311,8 @@ export function healthProblemCount(findings: HealthFindings): number {
     findings.staleIcalProperties.length +
     findings.criticalScheduleProblems.length +
     findings.overdueCheckoutHolds.length +
+    findings.pendingTimeBookings.length +
+    findings.staleRescheduleRequests.length +
     (findings.smtpIdentity.matches === false ? 1 : 0);
 }
 
@@ -339,6 +379,22 @@ export function formatHealthFindings(f: HealthFindings): string {
         `  • ${hold.reference} — ${hold.date ?? "no date"} ${hold.time ?? ""} — ` +
         `${hold.minutesOverdue} minute(s) overdue (window ${hold.holdMinutes} min, ${hold.kind})`
       );
+    }
+    lines.push("");
+  }
+  if (f.pendingTimeBookings.length > 0) {
+    lines.push(`UPCOMING BOOKINGS WITH NO START TIME (${f.pendingTimeBookings.length})`);
+    lines.push("These jobs have a confirmed date but still need a start time before the crew can route the day:");
+    for (const booking of f.pendingTimeBookings) {
+      lines.push(`  • ${booking.reference} — ${booking.date} — ${booking.employeeId ? "cleaner assigned" : "unassigned"}`);
+    }
+    lines.push("");
+  }
+  if (f.staleRescheduleRequests.length > 0) {
+    lines.push(`CUSTOMER RESCHEDULE REQUESTS WAITING OVER 24 HOURS (${f.staleRescheduleRequests.length})`);
+    lines.push("Approve, counter, or decline these in Admin → Appointments:");
+    for (const request of f.staleRescheduleRequests) {
+      lines.push(`  • ${request.reference} — ${request.customer} — ${request.proposedDate} ${request.proposedTime} — ${request.hoursWaiting} hours waiting (${request.status})`);
     }
     lines.push("");
   }

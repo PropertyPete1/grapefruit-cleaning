@@ -98,7 +98,7 @@ function JobCard({ row, onStatusChange }: { row: StaffBookingRow; onStatusChange
           {/* The whole span, not just the start: this is the block of the day
               the job actually takes, and what the calendar holds for it. */}
           <p className="mt-0.5 text-xs font-semibold text-foreground">
-            {booking.scheduledTime ? formatJobSpan(booking.scheduledTime, booking.durationHours) : "—"}
+            {booking.scheduledTime ? formatJobSpan(booking.scheduledTime, booking.durationHours) : "Time to be decided — check with Karyme"}
           </p>
         </div>
         <p className="text-sm font-bold text-foreground">{money(booking.totalAmount)}</p>
@@ -332,9 +332,9 @@ function StaffCalendar() {
                       <div
                         key={j.booking.id}
                         className="truncate rounded-md bg-secondary/15 px-1.5 py-0.5 text-[10px] font-semibold text-secondary-foreground"
-                        title={`${j.booking.scheduledTime ? formatJobSpan(j.booking.scheduledTime, j.booking.durationHours) : "—"} — ${j.booking.serviceType ? (SERVICE_LABELS[j.booking.serviceType] ?? j.booking.serviceType) : "Service TBD"}${j.customer ? ` — ${j.customer.firstName} ${j.customer.lastName}` : ""}`}
+                        title={`${j.booking.scheduledTime ? formatJobSpan(j.booking.scheduledTime, j.booking.durationHours) : "Time to be decided"} — ${j.booking.serviceType ? (SERVICE_LABELS[j.booking.serviceType] ?? j.booking.serviceType) : "Service TBD"}${j.customer ? ` — ${j.customer.firstName} ${j.customer.lastName}` : ""}`}
                       >
-                        {j.booking.scheduledTime}–{j.booking.scheduledTime ? intervalEndTime(j.booking.scheduledTime, j.booking.durationHours) : ""}{" "}
+                        {j.booking.scheduledTime ? `${j.booking.scheduledTime}–${intervalEndTime(j.booking.scheduledTime, j.booking.durationHours)}` : "Time TBD"}{" "}
                         {j.booking.serviceType ? (SERVICE_LABELS[j.booking.serviceType] ?? j.booking.serviceType) : "Service TBD"}
                       </div>
                     ))}

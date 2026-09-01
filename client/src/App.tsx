@@ -27,6 +27,7 @@ import NotFound from "./pages/NotFound";
 import NoAccess from "./pages/NoAccess";
 import PayDeposit from "./pages/PayDeposit";
 import PayTip from "./pages/PayTip";
+import RescheduleRequest from "./pages/RescheduleRequest";
 import AdminRoutes from "./pages/admin/AdminRoutes";
 import StaffRoutes from "./pages/staff/StaffRoutes";
 
@@ -73,6 +74,9 @@ function LocalizedRoutes({ locale }: { locale: Locale }) {
           <Route path={s("contact")} component={Contact} />
           <Route path={s("quote")} component={Quote} />
           <Route path={s("booking")} component={Booking} />
+          <Route path={`/${locale}/${locale === "es" ? "reprogramar" : "reschedule"}/:token`}>
+            {(params: { token: string }) => <RescheduleRequest token={params.token} />}
+          </Route>
           <Route path={s("blog")} component={Blog} />
           <Route path={`${s("blog")}/:slug`}>{(params: { slug: string }) => <BlogPost slug={params.slug} />}</Route>
           <Route path={s("privacy")} component={Privacy} />

@@ -7,6 +7,7 @@ import { bookingRouter } from "./routers/booking";
 import { contactRouter } from "./routers/contact";
 import { depositLinkRouter } from "./routers/depositLink";
 import { publicContentRouter } from "./routers/publicContent";
+import { rescheduleRouter } from "./routers/reschedule";
 import { staffRouter } from "./routers/staff";
 import { tipRouter } from "./routers/tip";
 
@@ -28,6 +29,7 @@ export const appRouter = router({
   depositLink: depositLinkRouter,
   tip: tipRouter,
   contact: contactRouter,
+  reschedule: rescheduleRouter,
   content: publicContentRouter,
   admin: adminRouter,
   staff: staffRouter,

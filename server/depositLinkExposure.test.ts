@@ -26,6 +26,7 @@ vi.mock("./db", async () => ({
   // The real one: it is a pure function, and testing a copy of it would prove
   // nothing about the one the queries actually call.
   stripPayToken: (await vi.importActual<typeof import("./db")>("./db")).stripPayToken,
+  setBookingRescheduleToken: vi.fn().mockResolvedValue(undefined),
   getSetting: vi.fn().mockResolvedValue(null),
   getBookingById: (...a: unknown[]) => mockGetBookingById(...a),
   confirmUnpaidBooking: (...a: unknown[]) => mockConfirmUnpaid(...a),

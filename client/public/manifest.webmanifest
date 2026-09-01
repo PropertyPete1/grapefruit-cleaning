@@ -1,0 +1,19 @@
+{
+  "name": "Grapefruit Cleaning Co.",
+  "short_name": "Grapefruit",
+  "description": "Premium residential, commercial, deep, and Airbnb cleaning.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FDF8F3",
+  "theme_color": "#F26D5B",
+  "icons": [
+    {
+      "src": "/manus-storage/favicon-256_0edfb26b.png",
+      "sizes": "256x256",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
