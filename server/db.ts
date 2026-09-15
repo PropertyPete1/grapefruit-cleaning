@@ -1337,9 +1337,82 @@ export async function deleteEmployee(id: number) {
 }
 
 // ---------- Invoices ----------
+/**
+ * The Admin → Invoices list, with what it takes to recognise the job behind each
+ * invoice: the linked booking's property and service, its add-on snapshots, and
+ * the customer on file.
+ *
+ * Booking columns are chosen one by one, never `bookings` wholesale — a booking
+ * row carries three bearer credentials (payToken, tipToken, rescheduleTokenHash)
+ * and nothing on this page needs any of them. Add-ons arrive in one query for the
+ * whole page rather than one per invoice. The invoice row still includes its own
+ * payToken, which the router reduces to a link status before anything leaves.
+ *
+ * `booking` is null when there is no booking behind the invoice: every manual
+ * invoice raised since Aug 19, or a balance whose booking was deleted.
+ */
 export async function listInvoices() {
   const db = requireDb(await getDb());
-  return db.select().from(invoices).orderBy(desc(invoices.createdAt)).limit(300);
+  const rows = await db
+    .select({
+      invoice: invoices,
+      booking: {
+        id: bookings.id,
+        reference: bookings.reference,
+        status: bookings.status,
+        serviceType: bookings.serviceType,
+        frequency: bookings.frequency,
+        scheduledDate: bookings.scheduledDate,
+        scheduledTime: bookings.scheduledTime,
+        propertyType: bookings.propertyType,
+        addressLine: bookings.addressLine,
+        unitNumber: bookings.unitNumber,
+        city: bookings.city,
+        zip: bookings.zip,
+        sqft: bookings.sqft,
+        verifiedSqft: bookings.verifiedSqft,
+        bedrooms: bookings.bedrooms,
+        bathrooms: bookings.bathrooms,
+        extras: bookings.extras,
+        notes: bookings.notes,
+      },
+      customer: {
+        firstName: customers.firstName,
+        lastName: customers.lastName,
+        email: customers.email,
+        phone: customers.phone,
+        address: customers.address,
+        city: customers.city,
+        zip: customers.zip,
+      },
+    })
+    .from(invoices)
+    .leftJoin(bookings, eq(invoices.bookingId, bookings.id))
+    .leftJoin(customers, eq(invoices.customerId, customers.id))
+    .orderBy(desc(invoices.createdAt))
+    .limit(300);
+
+  const bookingIds = Array.from(new Set(rows.flatMap(row => (row.booking?.id != null ? [row.booking.id] : []))));
+  const addonRows =
+    bookingIds.length === 0
+      ? []
+      : await db
+          .select({ bookingId: bookingAddons.bookingId, nameEn: bookingAddons.nameEn, quantity: bookingAddons.quantity })
+          .from(bookingAddons)
+          .where(inArray(bookingAddons.bookingId, bookingIds))
+          .orderBy(asc(bookingAddons.sortOrder), asc(bookingAddons.id));
+  const addonsByBooking = new Map<number, { nameEn: string; quantity: number }[]>();
+  for (const { bookingId, ...addon } of addonRows) {
+    const list = addonsByBooking.get(bookingId) ?? [];
+    list.push(addon);
+    addonsByBooking.set(bookingId, list);
+  }
+
+  return rows.map(row => ({
+    invoice: row.invoice,
+    booking: row.booking?.id != null ? { ...row.booking, addons: addonsByBooking.get(row.booking.id) ?? [] } : null,
+    customer: row.customer?.firstName != null ? row.customer : null,
+  }));
 }
 
 export async function createInvoice(data: typeof invoices.$inferInsert) {

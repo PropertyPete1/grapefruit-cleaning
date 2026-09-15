@@ -17,6 +17,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -193,21 +194,23 @@ export default function AdminEmployees() {
                   </span>
                 </span>
               </label>
-              <Button
-                className="mt-2 w-full rounded-xl"
-                disabled={!form.firstName || !form.lastName || create.isPending}
-                onClick={() =>
-                  create.mutate({
-                    firstName: form.firstName,
-                    lastName: form.lastName,
-                    email: form.email || undefined,
-                    phone: form.phone || undefined,
-                    role: form.role || undefined,
-                  })
-                }
-              >
-                {create.isPending ? "Adding…" : "Add member"}
-              </Button>
+              <DialogFooter sticky>
+                <Button
+                  className="w-full rounded-xl"
+                  disabled={!form.firstName || !form.lastName || create.isPending}
+                  onClick={() =>
+                    create.mutate({
+                      firstName: form.firstName,
+                      lastName: form.lastName,
+                      email: form.email || undefined,
+                      phone: form.phone || undefined,
+                      role: form.role || undefined,
+                    })
+                  }
+                >
+                  {create.isPending ? "Adding…" : "Add member"}
+                </Button>
+              </DialogFooter>
             </DialogContent>
           </Dialog>
         }

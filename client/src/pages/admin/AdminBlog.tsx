@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -257,7 +258,7 @@ export default function AdminBlog() {
       )}
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
+        <DialogContent className="sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>{isEdit ? "Edit post" : "New post"}</DialogTitle>
           </DialogHeader>
@@ -417,7 +418,7 @@ export default function AdminBlog() {
               <Switch checked={form.published} onCheckedChange={(v) => setForm((f) => ({ ...f, published: v }))} />
             </div>
 
-            <div className="flex justify-end gap-2">
+            <DialogFooter sticky>
               <Button variant="outline" className="rounded-full" onClick={() => setOpen(false)}>
                 Cancel
               </Button>
@@ -428,7 +429,7 @@ export default function AdminBlog() {
               >
                 {isEdit ? "Save changes" : "Create post"}
               </Button>
-            </div>
+            </DialogFooter>
           </div>
         </DialogContent>
       </Dialog>
