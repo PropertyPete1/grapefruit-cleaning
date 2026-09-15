@@ -512,4 +512,5 @@
 - [x] Add a regression test proving a differing provider email on fresh login reuses the same row and preserves its role
 - [x] Extend the daily health check to flag case-insensitive duplicate user emails and any explicitly expected administrator who lacks the admin role
 - [x] Run focused tests, TypeScript, the complete suite, and production build; no schema migration was required
-- [ ] Deploy with a genuine production restart, prove `/api/version`, synchronize private GitHub main, and provide Karyme the logout/login `/admin` confirmation steps
+- [x] Deploy with a genuine production restart, prove `/api/version`, synchronize private GitHub main, and provide Karyme the logout/login `/admin` confirmation steps
+- [x] Karyme logs out, signs back in through `/admin`, and confirms the Admin dashboard loads instead of `/admin/no-access`
