@@ -498,6 +498,6 @@
 - [x] Pull latest GitHub `main` first and prove merged commit `1f20373` is present without overwriting concurrent project changes
 - [x] Confirm PR #17 contains the admin dialog scrolling fix, invoice-row property details, and the expected new regression coverage
 - [x] Run TypeScript, the complete Vitest suite, and a production build with no migration or environment changes
-- [ ] Save one deployment checkpoint to trigger a genuine production restart
-- [ ] Fetch production `/api/version`, prove a fresh boot timestamp, and confirm the running build contains commit `1f20373`
-- [ ] Confirm private GitHub `main`, the managed project revision, and the deployed feature revision are synchronized
+- [x] Save one deployment checkpoint to trigger a genuine production restart
+- [x] Fetch production `/api/version`, prove a fresh boot timestamp, and confirm the running build contains commit `1f20373`
+- [x] Confirm private GitHub `main`, the managed project revision, and the deployed feature revision are synchronized
