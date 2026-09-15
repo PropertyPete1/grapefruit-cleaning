@@ -493,3 +493,11 @@
 - [x] Add focused migration, authorization, atomicity, conflict, pending-time, reminder, email, staff, customer workflow, audit, icon, manifest, and metadata regression tests
 - [x] Run complete tests, TypeScript, production build, genuine restart, checkpoint, `/api/version` proof, and GitHub synchronization
 - [x] Verify live admin/customer/cleaner rescheduling behavior without altering commercial records, and fetch every deployed icon/manifest/social-preview asset from all production domains
+
+## PR #17 deployment — admin dialog scrolling and invoice property details
+- [x] Pull latest GitHub `main` first and prove merged commit `1f20373` is present without overwriting concurrent project changes
+- [x] Confirm PR #17 contains the admin dialog scrolling fix, invoice-row property details, and the expected new regression coverage
+- [x] Run TypeScript, the complete Vitest suite, and a production build with no migration or environment changes
+- [ ] Save one deployment checkpoint to trigger a genuine production restart
+- [ ] Fetch production `/api/version`, prove a fresh boot timestamp, and confirm the running build contains commit `1f20373`
+- [ ] Confirm private GitHub `main`, the managed project revision, and the deployed feature revision are synchronized
