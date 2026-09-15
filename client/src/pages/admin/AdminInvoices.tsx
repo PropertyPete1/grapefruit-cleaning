@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { AlertTriangle, Banknote, Plus, Send, ShieldCheck } from "lucide-react";
+import { Fragment, useEffect, useState } from "react";
+import { AlertTriangle, Banknote, ChevronDown, Plus, Send, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -37,6 +38,7 @@ import {
   type CustomItemRow,
 } from "./InvoiceItemsEditor";
 import { NotesBlock, PageHeader, RowCard, StatusBadge, TableOrCards, fmtDate, fmtMoney } from "./adminShared";
+import { InvoiceContextPanel } from "./InvoiceContextPanel";
 
 const INVOICE_STATUSES = ["draft", "sent", "overdue", "void"] as const;
 
@@ -68,6 +70,7 @@ type OfflineInvoice = {
   id: number;
   number: string;
   customerId: number;
+  customerName?: string | null;
   amount: number;
   amountCents: number | null;
   status: string;
@@ -178,14 +181,16 @@ function OfflinePaymentDialog({
                 <span className="block text-xs text-muted-foreground">On by default; uncheck for a paper-only cash receipt.</span>
               </span>
             </label>
-            <Button
-              className="w-full rounded-xl"
-              disabled={!valid || pending}
-              onClick={() => onSubmit({ invoiceId: invoice.id, amount: parsedAmount, method, tipAmount: parsedTip, note: note.trim() || undefined, receivedOn, emailReceipt })}
-            >
-              <Banknote className="mr-1.5 h-4 w-4" />
-              {pending ? "Recording…" : `Record ${fmtMoney(parsedAmount + parsedTip)}`}
-            </Button>
+            <DialogFooter sticky>
+              <Button
+                className="w-full rounded-xl"
+                disabled={!valid || pending}
+                onClick={() => onSubmit({ invoiceId: invoice.id, amount: parsedAmount, method, tipAmount: parsedTip, note: note.trim() || undefined, receivedOn, emailReceipt })}
+              >
+                <Banknote className="mr-1.5 h-4 w-4" />
+                {pending ? "Recording…" : `Record ${fmtMoney(parsedAmount + parsedTip)}`}
+              </Button>
+            </DialogFooter>
           </div>
         )}
       </DialogContent>
@@ -344,20 +349,22 @@ function ReviewAndSendDialog({
               Approving emails {invoice.customerEmail ?? "the customer"} a payment link valid for 7 days.
             </p>
 
-            <Button
-              className="w-full rounded-xl"
-              disabled={!valid || pending}
-              onClick={() =>
-                onApprove(
-                  invoice.id,
-                  adjusted ? Math.round(parsed) : undefined,
-                  checkedAddons,
-                  customsParsed
-                )
-              }
-            >
-              {pending ? "Sending…" : `Approve & send ${fmtMoney(valid ? grandTotal : computed)}`}
-            </Button>
+            <DialogFooter sticky>
+              <Button
+                className="w-full rounded-xl"
+                disabled={!valid || pending}
+                onClick={() =>
+                  onApprove(
+                    invoice.id,
+                    adjusted ? Math.round(parsed) : undefined,
+                    checkedAddons,
+                    customsParsed
+                  )
+                }
+              >
+                {pending ? "Sending…" : `Approve & send ${fmtMoney(valid ? grandTotal : computed)}`}
+              </Button>
+            </DialogFooter>
           </div>
         )}
       </DialogContent>
@@ -447,6 +454,11 @@ export default function AdminInvoices() {
     onError: e => toast.error(e.message || "Failed to approve balance"),
   });
   const [resendingId, setResendingId] = useState<number | null>(null);
+  // Desktop rows opened to show their property and customer details. Phone cards
+  // use RowCard's own Details toggle for the same panel.
+  const [expandedIds, setExpandedIds] = useState<number[]>([]);
+  const toggleExpanded = (id: number) =>
+    setExpandedIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
   const resend = trpc.admin.resendBalanceLink.useMutation({
     onSuccess: r => {
       utils.admin.invoices.invalidate();
@@ -561,21 +573,23 @@ export default function AdminInvoices() {
                   reminders at 3 and 7 days if it goes unpaid.
                 </p>
 
-                <Button
-                  className="w-full rounded-xl"
-                  disabled={!form.customerId || !newBaseValid || !newCustomsValid || create.isPending}
-                  onClick={() =>
-                    create.mutate({
-                      customerId: Number(form.customerId),
-                      amount: newBase,
-                      dueDate: form.dueDate || undefined,
-                      addonIds: newAddons,
-                      customItems: newCustomsParsed,
-                    })
-                  }
-                >
-                  {create.isPending ? "Sending…" : `Create & send ${fmtMoney(newTotal)}`}
-                </Button>
+                <DialogFooter sticky>
+                  <Button
+                    className="w-full rounded-xl"
+                    disabled={!form.customerId || !newBaseValid || !newCustomsValid || create.isPending}
+                    onClick={() =>
+                      create.mutate({
+                        customerId: Number(form.customerId),
+                        amount: newBase,
+                        dueDate: form.dueDate || undefined,
+                        addonIds: newAddons,
+                        customItems: newCustomsParsed,
+                      })
+                    }
+                  >
+                    {create.isPending ? "Sending…" : `Create & send ${fmtMoney(newTotal)}`}
+                  </Button>
+                </DialogFooter>
               </div>
             </DialogContent>
           </Dialog>
@@ -636,7 +650,7 @@ export default function AdminInvoices() {
 
       <OfflinePaymentDialog
         invoice={recording}
-        customer={recording ? customerName(recording.customerId) : ""}
+        customer={recording ? (recording.customerName ?? customerName(recording.customerId)) : ""}
         pending={recordOffline.isPending}
         onClose={() => setRecording(null)}
         onSubmit={input => recordOffline.mutate(input)}
@@ -667,9 +681,24 @@ export default function AdminInvoices() {
               </thead>
               <tbody>
                 {(invoices.data ?? []).map(inv => (
-                  <tr key={inv.id} className="border-b border-border/60 last:border-0 hover:bg-muted/40">
-                    <td className="px-6 py-3.5 font-mono text-xs font-semibold text-primary">{inv.number}</td>
-                    <td className="px-6 py-3.5">{customerName(inv.customerId)}</td>
+                  <Fragment key={inv.id}>
+                  <tr className="border-b border-border/60 last:border-0 hover:bg-muted/40">
+                    <td className="px-6 py-3.5">
+                      <button
+                        type="button"
+                        onClick={() => toggleExpanded(inv.id)}
+                        aria-expanded={expandedIds.includes(inv.id)}
+                        aria-controls={`invoice-details-${inv.id}`}
+                        title="Property and customer details"
+                        className="inline-flex items-center gap-1.5 font-mono text-xs font-semibold text-primary"
+                      >
+                        <ChevronDown
+                          className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${expandedIds.includes(inv.id) ? "rotate-180" : ""}`}
+                        />
+                        {inv.number}
+                      </button>
+                    </td>
+                    <td className="px-6 py-3.5">{inv.customerName ?? customerName(inv.customerId)}</td>
                     <td className="px-6 py-3.5">
                       <span className="font-semibold">{fmtMoney(invoiceAmount(inv))}</span>
                       {(() => {
@@ -755,6 +784,14 @@ export default function AdminInvoices() {
                       </div>
                     </td>
                   </tr>
+                  {expandedIds.includes(inv.id) && (
+                    <tr id={`invoice-details-${inv.id}`} className="border-b border-border/60 bg-muted/20 last:border-0">
+                      <td colSpan={6} className="px-6 pb-4 pt-1">
+                        <InvoiceContextPanel invoice={inv} />
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -763,7 +800,7 @@ export default function AdminInvoices() {
               <RowCard
                 key={inv.id}
                 title={<span className="font-mono text-xs font-semibold text-primary">{inv.number}</span>}
-                subtitle={customerName(inv.customerId)}
+                subtitle={inv.customerName ?? customerName(inv.customerId)}
                 amount={fmtMoney(invoiceAmount(inv))}
                 badge={<StatusBadge status={inv.status} />}
                 details={[
@@ -782,7 +819,18 @@ export default function AdminInvoices() {
                       ]
                     : []),
                   ...(inv.refundNeeded ? [{ label: "Action", value: "Refund needed in Stripe" }] : []),
+                  ...(() => {
+                    const items = parseLineItems(inv.lineItems);
+                    if (items.length === 0) return [];
+                    return [
+                      {
+                        label: "Items",
+                        value: items.map(i => `${lineItemName(i, "en")} ${fmtMoney(centsToDollars(lineItemAmountCents(i)))}`).join(" · "),
+                      },
+                    ];
+                  })(),
                 ]}
+                note={<InvoiceContextPanel invoice={inv} />}
                 actions={
                   <>
                     {inv.status === "paid" ? (

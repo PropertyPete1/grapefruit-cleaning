@@ -1,6 +1,7 @@
 import * as React from "react";
 import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog";
 
+import { useVisibleViewportFit } from "@/lib/dialogViewport";
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
 
@@ -44,15 +45,31 @@ function AlertDialogOverlay({
 
 function AlertDialogContent({
   className,
+  ref,
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Content>) {
+  // Same viewport fit as DialogContent (see dialog.tsx for why it is state).
+  const [contentNode, setContentNode] = React.useState<HTMLDivElement | null>(null);
+  useVisibleViewportFit(contentNode);
+  const contentRef = React.useCallback(
+    (node: HTMLDivElement | null) => {
+      setContentNode(node);
+      if (typeof ref === "function") ref(node);
+      else if (ref) ref.current = node;
+    },
+    [ref]
+  );
+
   return (
     <AlertDialogPortal>
       <AlertDialogOverlay />
       <AlertDialogPrimitive.Content
+        ref={contentRef}
         data-slot="alert-dialog-content"
         className={cn(
-          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border p-6 shadow-lg duration-200 sm:max-w-lg",
+          // Capped and scrolling exactly like DialogContent — a confirmation is
+          // short today, but it shares the geometry that trapped the invoices.
+          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[var(--dialog-viewport-center,50%)] left-[50%] z-50 grid max-h-[calc(var(--dialog-viewport-height,100dvh)-2rem)] w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto overscroll-contain rounded-lg border p-6 shadow-lg duration-200 sm:max-w-lg",
           className
         )}
         {...props}

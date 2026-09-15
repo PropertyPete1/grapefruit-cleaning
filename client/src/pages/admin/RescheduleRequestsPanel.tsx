@@ -11,6 +11,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -49,7 +50,7 @@ function CounterDialog({ row, refresh }: { row: RequestRow; refresh: () => void 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild><Button size="sm" variant="outline">Counter</Button></DialogTrigger>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Counter {row.booking.reference}</DialogTitle>
           <DialogDescription>The booking does not move until the customer accepts this option.</DialogDescription>
@@ -86,14 +87,16 @@ function CounterDialog({ row, refresh }: { row: RequestRow; refresh: () => void 
             <Label>Note (optional)</Label>
             <Textarea value={note} onChange={event => setNote(event.target.value)} maxLength={2000} className="mt-1.5 min-h-24" />
           </div>
-          <Button
-            className="w-full"
-            disabled={!date || (!pendingTime && !time) || counter.isPending}
-            onClick={() => counter.mutate({ requestId: row.request.id, date, time: pendingTime ? null : time, note: note || undefined })}
-          >
-            {counter.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Send counter
-          </Button>
+          <DialogFooter sticky>
+            <Button
+              className="w-full"
+              disabled={!date || (!pendingTime && !time) || counter.isPending}
+              onClick={() => counter.mutate({ requestId: row.request.id, date, time: pendingTime ? null : time, note: note || undefined })}
+            >
+              {counter.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Send counter
+            </Button>
+          </DialogFooter>
         </div>
       </DialogContent>
     </Dialog>

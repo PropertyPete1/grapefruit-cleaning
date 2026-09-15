@@ -10,6 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -124,22 +125,24 @@ export default function AdminCoupons() {
                   />
                 </div>
               </div>
-              <Button
-                className="mt-2 w-full rounded-xl"
-                disabled={!form.code || (!form.percentOff && !form.amountOff) || create.isPending}
-                onClick={() =>
-                  create.mutate({
-                    code: form.code,
-                    description: form.description || undefined,
-                    percentOff: form.percentOff ? Number(form.percentOff) : undefined,
-                    amountOff: form.amountOff ? Number(form.amountOff) : undefined,
-                    maxRedemptions: form.maxRedemptions ? Number(form.maxRedemptions) : undefined,
-                    expiresAt: form.expiresAt || undefined,
-                  })
-                }
-              >
-                {create.isPending ? "Creating…" : "Create coupon"}
-              </Button>
+              <DialogFooter sticky>
+                <Button
+                  className="w-full rounded-xl"
+                  disabled={!form.code || (!form.percentOff && !form.amountOff) || create.isPending}
+                  onClick={() =>
+                    create.mutate({
+                      code: form.code,
+                      description: form.description || undefined,
+                      percentOff: form.percentOff ? Number(form.percentOff) : undefined,
+                      amountOff: form.amountOff ? Number(form.amountOff) : undefined,
+                      maxRedemptions: form.maxRedemptions ? Number(form.maxRedemptions) : undefined,
+                      expiresAt: form.expiresAt || undefined,
+                    })
+                  }
+                >
+                  {create.isPending ? "Creating…" : "Create coupon"}
+                </Button>
+              </DialogFooter>
             </DialogContent>
           </Dialog>
         }

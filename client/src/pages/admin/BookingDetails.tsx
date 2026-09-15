@@ -19,6 +19,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -155,26 +156,28 @@ function EditContactDialog({ row, onClose }: { row: BookingDetailsRow; onClose: 
               <option value="es">Español</option>
             </select>
           </div>
-          <Button
-            className="w-full rounded-xl"
-            disabled={save.isPending || first.trim() === "" || (email.trim() === "" && phone.trim() === "")}
-            onClick={() =>
-              save.mutate({
-                bookingId: row.id,
-                firstName: first.trim(),
-                lastName: last.trim() || undefined,
-                email: email.trim(),
-                phone: phone.trim(),
-                locale,
-              })
-            }
-          >
-            {save.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-            Save contact
-          </Button>
           {email.trim() === "" && phone.trim() === "" && (
             <p className="text-xs text-amber-700">Keep at least one way to reach them.</p>
           )}
+          <DialogFooter sticky>
+            <Button
+              className="w-full rounded-xl"
+              disabled={save.isPending || first.trim() === "" || (email.trim() === "" && phone.trim() === "")}
+              onClick={() =>
+                save.mutate({
+                  bookingId: row.id,
+                  firstName: first.trim(),
+                  lastName: last.trim() || undefined,
+                  email: email.trim(),
+                  phone: phone.trim(),
+                  locale,
+                })
+              }
+            >
+              {save.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Save contact
+            </Button>
+          </DialogFooter>
         </div>
       </DialogContent>
     </Dialog>

@@ -229,7 +229,7 @@ export function AddonCatalogManager() {
       </div>
 
       <Dialog open={!!categoryForm} onOpenChange={open => !open && setCategoryForm(null)}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl"><DialogHeader><DialogTitle>{categoryForm?.id ? "Edit category" : "Add category"}</DialogTitle></DialogHeader>{categoryForm && <div className="grid gap-4 sm:grid-cols-2">
+        <DialogContent className="sm:max-w-2xl"><DialogHeader><DialogTitle>{categoryForm?.id ? "Edit category" : "Add category"}</DialogTitle></DialogHeader>{categoryForm && <div className="grid gap-4 sm:grid-cols-2">
           {!categoryForm.id && <Field label="Stable key"><Input value={categoryForm.key} onChange={event => setCategoryForm({ ...categoryForm, key: event.target.value })} placeholder="steam-cleaning" /></Field>}
           <Field label="Sort order"><Input type="number" value={categoryForm.sortOrder} onChange={event => setCategoryForm({ ...categoryForm, sortOrder: Number(event.target.value) })} /></Field>
           <Field label="English name"><Input value={categoryForm.nameEn} onChange={event => setCategoryForm({ ...categoryForm, nameEn: event.target.value })} /></Field>
@@ -240,11 +240,11 @@ export function AddonCatalogManager() {
           <Field label="Spanish note"><Textarea value={categoryForm.noteEs} onChange={event => setCategoryForm({ ...categoryForm, noteEs: event.target.value })} /></Field>
           <div className="flex items-center gap-3"><Switch checked={categoryForm.isEnabled} onCheckedChange={isEnabled => setCategoryForm({ ...categoryForm, isEnabled })} /><Label>Enabled</Label></div>
           <div className="flex items-center gap-3"><Switch checked={categoryForm.showPublicHeading} onCheckedChange={showPublicHeading => setCategoryForm({ ...categoryForm, showPublicHeading })} /><Label>Show public heading</Label></div>
-        </div>}<DialogFooter><Button variant="outline" onClick={() => setCategoryForm(null)}>Cancel</Button><Button onClick={submitCategory} disabled={createCategory.isPending || updateCategory.isPending}>Save category</Button></DialogFooter></DialogContent>
+        </div>}<DialogFooter sticky><Button variant="outline" onClick={() => setCategoryForm(null)}>Cancel</Button><Button onClick={submitCategory} disabled={createCategory.isPending || updateCategory.isPending}>Save category</Button></DialogFooter></DialogContent>
       </Dialog>
 
       <Dialog open={!!addonForm} onOpenChange={open => !open && setAddonForm(null)}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl"><DialogHeader><DialogTitle>{addonForm?.id ? "Edit add-on" : "Add add-on"}</DialogTitle></DialogHeader>{addonForm && <div className="grid gap-4 sm:grid-cols-2">
+        <DialogContent className="sm:max-w-3xl"><DialogHeader><DialogTitle>{addonForm?.id ? "Edit add-on" : "Add add-on"}</DialogTitle></DialogHeader>{addonForm && <div className="grid gap-4 sm:grid-cols-2">
           {!addonForm.id && <Field label="Stable key"><Input value={addonForm.key} onChange={event => setAddonForm({ ...addonForm, key: event.target.value })} placeholder="new-upgrade" /></Field>}
           <Field label="Category"><Select value={String(addonForm.categoryId || "")} onValueChange={value => setAddonForm({ ...addonForm, categoryId: Number(value) })}><SelectTrigger><SelectValue placeholder="Choose category" /></SelectTrigger><SelectContent>{categoryChoices.map(category => <SelectItem key={category.id} value={String(category.id)}>{category.label}</SelectItem>)}</SelectContent></Select></Field>
           <Field label="English name"><Input value={addonForm.nameEn} onChange={event => setAddonForm({ ...addonForm, nameEn: event.target.value })} /></Field>
@@ -260,7 +260,7 @@ export function AddonCatalogManager() {
           <Field label="Sort order"><Input type="number" value={addonForm.sortOrder} onChange={event => setAddonForm({ ...addonForm, sortOrder: Number(event.target.value) })} /></Field>
           <div className="flex items-center gap-3"><Switch checked={addonForm.mayVary} onCheckedChange={mayVary => setAddonForm({ ...addonForm, mayVary })} /><Label>Price may vary</Label></div>
           <div className="flex items-center gap-3"><Switch checked={addonForm.isEnabled} onCheckedChange={isEnabled => setAddonForm({ ...addonForm, isEnabled })} /><Label>Enabled</Label></div>
-        </div>}<DialogFooter><Button variant="outline" onClick={() => setAddonForm(null)}>Cancel</Button><Button onClick={submitAddon} disabled={createAddon.isPending || updateAddon.isPending}>Save add-on</Button></DialogFooter></DialogContent>
+        </div>}<DialogFooter sticky><Button variant="outline" onClick={() => setAddonForm(null)}>Cancel</Button><Button onClick={submitAddon} disabled={createAddon.isPending || updateAddon.isPending}>Save add-on</Button></DialogFooter></DialogContent>
       </Dialog>
     </section>
   );

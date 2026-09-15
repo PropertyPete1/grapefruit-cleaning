@@ -389,7 +389,7 @@ export default function AdminAppointments() {
 
       {detailRow && (
         <Dialog open onOpenChange={open => !open && setDetailRow(null)}>
-          <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md">
+          <DialogContent className="sm:max-w-md">
             <DialogHeader>
               <DialogTitle className="font-mono text-sm">{detailRow.reference}</DialogTitle>
             </DialogHeader>

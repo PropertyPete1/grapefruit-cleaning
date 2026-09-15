@@ -25,6 +25,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -229,7 +230,7 @@ export function NewBookingDialog() {
           <CalendarDays className="mr-2 h-4 w-4" /> New booking
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New booking</DialogTitle>
           <DialogDescription>
@@ -570,46 +571,48 @@ export function NewBookingDialog() {
               </span>
             </label>
 
-            <Button
-              className="w-full rounded-xl"
-              disabled={!valid || create.isPending}
-              onClick={() =>
-                create.mutate({
-                  firstName: firstName ?? "",
-                  lastName: restName.join(" ") || undefined,
-                  email: email.trim() || undefined,
-                  phone: phone.trim() || undefined,
-                  locale,
-                  serviceType: (serviceType || undefined) as (typeof CLEANING_TYPES)[number] | undefined,
-                  frequency: frequency as (typeof FREQUENCIES)[number],
-                  bedrooms: bedrooms.trim() ? Number(bedrooms) : undefined,
-                  bathrooms: bathrooms.trim() ? Number(bathrooms) : undefined,
-                  sqft: sqftValid ? sqftNumber : undefined,
-                  address: address.trim() || undefined,
-                  propertyType,
-                  unitNumber: propertyType === "apartment" ? unitNumber.trim() || undefined : undefined,
-                  city: city.trim() || (address.trim() ? "San Antonio" : undefined),
-                  zip: zip.trim() || undefined,
-                  date: date || undefined,
-                  time: time || undefined,
-                  notes: notes.trim() || undefined,
-                  couponCode: couponCode.trim() || undefined,
-                  overrideNotice,
-                  sendEmail: sendEmail && /.+@.+\..+/.test(email),
-                })
-              }
-            >
-              {create.isPending ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Creating…
-                </>
-              ) : (
-                "Create booking & get link"
-              )}
-            </Button>
             {!scheduleConsistent && (
               <p className="text-xs text-amber-700">Pick a time for that date — or clear the date and let them choose.</p>
             )}
+            <DialogFooter sticky>
+              <Button
+                className="w-full rounded-xl"
+                disabled={!valid || create.isPending}
+                onClick={() =>
+                  create.mutate({
+                    firstName: firstName ?? "",
+                    lastName: restName.join(" ") || undefined,
+                    email: email.trim() || undefined,
+                    phone: phone.trim() || undefined,
+                    locale,
+                    serviceType: (serviceType || undefined) as (typeof CLEANING_TYPES)[number] | undefined,
+                    frequency: frequency as (typeof FREQUENCIES)[number],
+                    bedrooms: bedrooms.trim() ? Number(bedrooms) : undefined,
+                    bathrooms: bathrooms.trim() ? Number(bathrooms) : undefined,
+                    sqft: sqftValid ? sqftNumber : undefined,
+                    address: address.trim() || undefined,
+                    propertyType,
+                    unitNumber: propertyType === "apartment" ? unitNumber.trim() || undefined : undefined,
+                    city: city.trim() || (address.trim() ? "San Antonio" : undefined),
+                    zip: zip.trim() || undefined,
+                    date: date || undefined,
+                    time: time || undefined,
+                    notes: notes.trim() || undefined,
+                    couponCode: couponCode.trim() || undefined,
+                    overrideNotice,
+                    sendEmail: sendEmail && /.+@.+\..+/.test(email),
+                  })
+                }
+              >
+                {create.isPending ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Creating…
+                  </>
+                ) : (
+                  "Create booking & get link"
+                )}
+              </Button>
+            </DialogFooter>
           </div>
         )}
       </DialogContent>

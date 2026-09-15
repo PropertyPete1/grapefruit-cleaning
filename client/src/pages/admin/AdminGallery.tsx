@@ -10,6 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -190,13 +191,15 @@ export default function AdminGallery() {
                     </SelectContent>
                   </Select>
                 </div>
-                <Button
-                  className="w-full rounded-xl"
-                  disabled={!form.url || create.isPending}
-                  onClick={() => create.mutate(form)}
-                >
-                  {create.isPending ? "Adding…" : "Add image"}
-                </Button>
+                <DialogFooter sticky>
+                  <Button
+                    className="w-full rounded-xl"
+                    disabled={!form.url || create.isPending}
+                    onClick={() => create.mutate(form)}
+                  >
+                    {create.isPending ? "Adding…" : "Add image"}
+                  </Button>
+                </DialogFooter>
               </div>
             </DialogContent>
           </Dialog>

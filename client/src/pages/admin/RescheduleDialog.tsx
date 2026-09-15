@@ -85,7 +85,7 @@ export function RescheduleDialog({ booking, compact = false }: { booking: Resche
           <CalendarClock className="mr-1 h-3.5 w-3.5" /> Reschedule
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Reschedule {booking.reference}</DialogTitle>
           <DialogDescription>
