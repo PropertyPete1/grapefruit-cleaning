@@ -115,7 +115,7 @@ export default function AdminCustomers() {
       </div>
 
       <Dialog open={selectedId !== null} onOpenChange={open => !open && setSelectedId(null)}>
-        <DialogContent className="max-w-2xl rounded-2xl">
+        <DialogContent className="rounded-2xl sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>
               {detail.data ? `${detail.data.customer.firstName} ${detail.data.customer.lastName}` : "Customer"}

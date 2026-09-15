@@ -985,13 +985,23 @@ export const adminRouter = router({
     }),
 
   // ---------- Invoices ----------
-  /** Invoice list with the payment-link state resolved server-side (the secret token is never exposed). */
+  /**
+   * Invoice list with the payment-link state resolved server-side (the secret
+   * token is never exposed), plus the booking and customer each row's details
+   * panel shows. A manual invoice has no booking behind it, so its `booking` is
+   * null and the page says so instead of expanding to blanks.
+   */
   invoices: adminProcedure.query(async () => {
     const rows = await db.listInvoices();
     const now = new Date();
-    return rows.map(({ payToken, ...invoice }) => ({
+    return rows.map(({ invoice: { payToken, ...invoice }, booking, customer }) => ({
       ...invoice,
       linkStatus: balanceLinkStatus({ status: invoice.status, payToken, linkExpiresAt: invoice.linkExpiresAt }, now),
+      // Server-side, so an invoice for an older customer isn't left as "#id" by
+      // a client lookup against the customers list and its 200-row cap.
+      customerName: customer ? `${customer.firstName} ${customer.lastName}`.trim() : null,
+      booking,
+      customer,
     }));
   }),
 

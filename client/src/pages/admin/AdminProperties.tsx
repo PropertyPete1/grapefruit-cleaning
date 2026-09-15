@@ -19,6 +19,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -120,7 +121,7 @@ function PropertyDialog({ target, onClose }: { target: EditTarget; onClose: () =
 
   return (
     <Dialog open onOpenChange={open => !open && onClose()}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{target.mode === "create" ? "Connect a property" : "Edit property"}</DialogTitle>
           <DialogDescription>
@@ -243,42 +244,44 @@ function PropertyDialog({ target, onClose }: { target: EditTarget; onClose: () =
               </span>
             </span>
           </label>
-          <Button
-            className="w-full rounded-xl"
-            disabled={!valid || pending}
-            onClick={() => {
-              const shared = {
-                label: label.trim(),
-                addressLine: addressLine.trim(),
-                unitNumber: unitNumber.trim() || undefined,
-                propertyType,
-                city: city.trim() || undefined,
-                zip: zip.trim() || undefined,
-                sqft: sqftNumber,
-                serviceType: serviceType as (typeof CLEANING_TYPES)[number],
-                icalUrl: icalUrl.trim(),
-                defaultTime,
-                autoBook,
-                perCleanEmails,
-                active,
-              };
-              if (target.mode === "create") {
-                create.mutate({ ...shared, customerId: Number(customerId) });
-              } else {
-                update.mutate({ id: target.id, ...shared });
-              }
-            }}
-          >
-            {pending ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Checking the feed…
-              </>
-            ) : target.mode === "create" ? (
-              "Validate feed & connect"
-            ) : (
-              "Save"
-            )}
-          </Button>
+          <DialogFooter sticky>
+            <Button
+              className="w-full rounded-xl"
+              disabled={!valid || pending}
+              onClick={() => {
+                const shared = {
+                  label: label.trim(),
+                  addressLine: addressLine.trim(),
+                  unitNumber: unitNumber.trim() || undefined,
+                  propertyType,
+                  city: city.trim() || undefined,
+                  zip: zip.trim() || undefined,
+                  sqft: sqftNumber,
+                  serviceType: serviceType as (typeof CLEANING_TYPES)[number],
+                  icalUrl: icalUrl.trim(),
+                  defaultTime,
+                  autoBook,
+                  perCleanEmails,
+                  active,
+                };
+                if (target.mode === "create") {
+                  create.mutate({ ...shared, customerId: Number(customerId) });
+                } else {
+                  update.mutate({ id: target.id, ...shared });
+                }
+              }}
+            >
+              {pending ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Checking the feed…
+                </>
+              ) : target.mode === "create" ? (
+                "Validate feed & connect"
+              ) : (
+                "Save"
+              )}
+            </Button>
+          </DialogFooter>
         </div>
       </DialogContent>
     </Dialog>
