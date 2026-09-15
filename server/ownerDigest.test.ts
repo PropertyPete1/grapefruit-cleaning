@@ -30,6 +30,7 @@ const mockElapsedHolds = vi.fn();
 const mockPendingTimes = vi.fn();
 const mockStaleRequests = vi.fn();
 const mockListHeartbeatJobs = vi.fn();
+const mockAccessUsers = vi.fn();
 
 vi.mock("./db", () => ({
   findPaidInvoicesOnOpenBookings: () => mockPaidOnOpen(),
@@ -44,6 +45,7 @@ vi.mock("./db", () => ({
   listElapsedDepositBookings: (...a: unknown[]) => mockElapsedHolds(...a),
   listUpcomingPendingTimeBookings: (...a: unknown[]) => mockPendingTimes(...a),
   listStaleOpenRescheduleRequests: (...a: unknown[]) => mockStaleRequests(...a),
+  listUsersForAccessHealth: () => mockAccessUsers(),
 }));
 
 vi.mock("./_core/heartbeat", () => ({
@@ -80,6 +82,20 @@ beforeEach(() => {
   mockElapsedHolds.mockResolvedValue([]);
   mockPendingTimes.mockResolvedValue([]);
   mockStaleRequests.mockResolvedValue([]);
+  mockAccessUsers.mockResolvedValue([
+    {
+      id: 1,
+      openId: process.env.OWNER_OPEN_ID || "test-owner-open-id",
+      email: "owner@example.com",
+      role: "admin",
+    },
+    {
+      id: 2,
+      openId: "karyme-current-open-id",
+      email: "grapefruitcleaningc@gmail.com",
+      role: "admin",
+    },
+  ]);
   mockListHeartbeatJobs.mockResolvedValue({
     total: 3,
     actorUserId: "owner",
@@ -207,6 +223,49 @@ describe("the daily health check", () => {
     const findings = await runHealthCheck(NOW);
     expect(findings.smtpIdentity.matches).toBe(true);
     expect(findings.hasProblems).toBe(false);
+  });
+
+  it("alerts on case-insensitive duplicate user emails", async () => {
+    mockAccessUsers.mockResolvedValue([
+      { id: 1, openId: process.env.OWNER_OPEN_ID || "test-owner-open-id", email: "owner@example.com", role: "admin" },
+      { id: 2610001, openId: "original-admin-open-id", email: "Grapefruitcleaningc@gmail.com", role: "admin" },
+      { id: 14880001, openId: "new-provider-open-id", email: "grapefruitcleaningc@gmail.com", role: "user" },
+    ]);
+
+    const findings = await runDailyHealthCheck(NOW);
+
+    expect(findings.duplicateUserEmails).toEqual([
+      expect.objectContaining({
+        email: "grapefruitcleaningc@gmail.com",
+        users: expect.arrayContaining([
+          expect.objectContaining({ id: 2610001, role: "admin" }),
+          expect.objectContaining({ id: 14880001, role: "user" }),
+        ]),
+      }),
+    ]);
+    expect(findings.hasProblems).toBe(true);
+    expect(mockOwnerAlert.mock.calls[0]![1]).toContain("DUPLICATE USER EMAIL IDENTITIES");
+    expect(mockOwnerAlert.mock.calls[0]![1]).toContain("id 14880001 (user");
+  });
+
+  it("alerts when the configured business administrator lacks the admin role", async () => {
+    mockAccessUsers.mockResolvedValue([
+      { id: 1, openId: process.env.OWNER_OPEN_ID || "test-owner-open-id", email: "owner@example.com", role: "admin" },
+      { id: 14880001, openId: "new-provider-open-id", email: "Grapefruitcleaningc@gmail.com", role: "user" },
+    ]);
+
+    const findings = await runDailyHealthCheck(NOW);
+
+    expect(findings.expectedAdminProblems).toEqual([
+      expect.objectContaining({
+        identity: "Expected admin email grapefruitcleaningc@gmail.com",
+        actualRole: "user",
+        problem: "role_mismatch",
+      }),
+    ]);
+    expect(findings.hasProblems).toBe(true);
+    expect(mockOwnerAlert.mock.calls[0]![1]).toContain("EXPECTED ADMIN ACCESS PROBLEMS");
+    expect(mockOwnerAlert.mock.calls[0]![1]).toContain("current role user");
   });
 
   it("alerts when an active property has no successful iCal sync in 24 hours", async () => {

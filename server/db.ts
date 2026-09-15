@@ -138,6 +138,23 @@ export async function getUserByOpenId(openId: string) {
   return result.length > 0 ? result[0] : undefined;
 }
 
+/**
+ * Minimal identity projection for the read-only daily access-integrity check.
+ * The health layer masks openIds before formatting them into an owner alert.
+ */
+export async function listUsersForAccessHealth() {
+  const db = requireDb(await getDb());
+  return db
+    .select({
+      id: users.id,
+      openId: users.openId,
+      email: users.email,
+      role: users.role,
+    })
+    .from(users)
+    .orderBy(asc(users.id));
+}
+
 function requireDb<T>(db: T | null): T {
   if (!db) throw new Error("Database not available");
   return db;

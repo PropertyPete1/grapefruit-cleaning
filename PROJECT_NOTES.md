@@ -65,8 +65,15 @@ handled explicitly rather than left to produce nonsense:
 - On first OAuth synchronization, a new user row is seeded with the provider email. On duplicate `openId`, the
   upsert deliberately omits email from the update set, so an operator-managed address survives later sign-ins.
   Do not “fix” this by restoring provider-email overwrite behavior.
-- Karyme’s admin row is intentionally managed as `Grapefruitcleaningc@gmail.com` while retaining the existing
-  Manus `openId`, admin role and `email` login method. She continues using the same Manus sign-in account.
+- Karyme’s canonical admin row is intentionally managed as `Grapefruitcleaningc@gmail.com`, with the original
+  `users.id`, employee link, audit history, admin role and `email` login method preserved. On 2026-09-15, a fresh
+  Manus login returned a different provider `openId` and created a second default-`user` row. After confirming
+  that duplicate had no employee, invoice, payment, reschedule or schedule-event activity, the canonical admin
+  row was rekeyed to the current provider `openId` and the duplicate was removed atomically. Do not add an email-
+  based authentication fallback or broadly grant admin: callback/session resolution remains strictly by `openId`.
+- The daily health check now alerts on case-insensitive duplicate `users.email` values, on the configured
+  `business_email` having no admin user, and on the project-owner `openId` being missing or non-admin. This turns
+  a future identity split or role loss into an owner-visible incident instead of a silent `/admin/no-access` loop.
 
 ## STANDING RULE — never touch a live scheduled job without asking
 Do NOT modify, repoint, pause, delete or otherwise alter a production cron job, heartbeat/scheduled task or

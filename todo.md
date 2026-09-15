@@ -501,3 +501,15 @@
 - [x] Save one deployment checkpoint to trigger a genuine production restart
 - [x] Fetch production `/api/version`, prove a fresh boot timestamp, and confirm the running build contains commit `1f20373`
 - [x] Confirm private GitHub `main`, the managed project revision, and the deployed feature revision are synchronized
+
+## Urgent Karyme fresh-login access incident
+- [x] Read-only audit every production user matching Karyme by known openId and all historical/current email variants, with masked identity, role, and timestamps
+- [x] Determine whether yesterday’s fresh OAuth login created a duplicate customer-role row and confirm whether that row owns any dependent activity
+- [x] Trace the exact OAuth callback and user-upsert path, including lookup key, differing-provider-email behavior, role preservation, and the row selected for yesterday’s login
+- [x] Report the complete user-row and OAuth findings to the owner before any code or production-data write
+- [x] Fix only the confirmed identity-resolution root cause so Karyme resolves to her original admin row by openId without broadening authorization
+- [x] Safely merge/remove any confirmed duplicate row only after proving it has no dependent activity; preserve the original admin identity row, role, activity links, and manually managed email while rekeying it to the current provider openId
+- [x] Add a regression test proving a differing provider email on fresh login reuses the same row and preserves its role
+- [x] Extend the daily health check to flag case-insensitive duplicate user emails and any explicitly expected administrator who lacks the admin role
+- [x] Run focused tests, TypeScript, the complete suite, and production build; no schema migration was required
+- [ ] Deploy with a genuine production restart, prove `/api/version`, synchronize private GitHub main, and provide Karyme the logout/login `/admin` confirmation steps

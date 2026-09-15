@@ -17,6 +17,7 @@ import { listHeartbeatJobs, type HeartbeatJobInfo } from "./_core/heartbeat";
 import { sendOwnerAlert, smtpUser } from "./emails";
 import { holdMinutesFor } from "./bookingRules";
 import { todayInBookingZone } from "@shared/leadTime";
+import { ENV } from "./_core/env";
 
 // ---------------------------------------------------------------------------
 // Health check
@@ -72,6 +73,17 @@ export interface HealthFindings {
     effective: string | null;
     matches: boolean | null;
   };
+  duplicateUserEmails: Array<{
+    email: string;
+    users: Array<{ id: number; role: string; maskedOpenId: string }>;
+  }>;
+  expectedAdminProblems: Array<{
+    identity: string;
+    email: string | null;
+    maskedOpenId: string | null;
+    actualRole: string | null;
+    problem: "missing" | "role_mismatch";
+  }>;
   /** True when something needs a human. Missing emails alone do NOT qualify. */
   hasProblems: boolean;
 }
@@ -79,6 +91,84 @@ export interface HealthFindings {
 const HOUR_MS = 60 * 60 * 1000;
 const ICAL_SUCCESS_MAX_AGE_MS = 24 * HOUR_MS;
 const NEXT_EXECUTION_GRACE_MS = 15 * 60 * 1000;
+
+type UserAccessRow = {
+  id: number;
+  openId: string;
+  email: string | null;
+  role: string;
+};
+
+function normalizedEmail(value: string | null | undefined): string {
+  return value?.trim().toLowerCase() ?? "";
+}
+
+function maskedOpenId(value: string | null | undefined): string | null {
+  if (!value) return null;
+  if (value.length <= 8) return `${value.slice(0, 2)}…${value.slice(-2)}`;
+  return `${value.slice(0, 4)}…${value.slice(-4)}`;
+}
+
+/** Pure access-integrity inspection used by the daily health check and tests. */
+export function inspectUserAccess(
+  rows: UserAccessRow[],
+  expected: { ownerOpenId?: string | null; adminEmails?: Array<string | null | undefined> }
+): Pick<HealthFindings, "duplicateUserEmails" | "expectedAdminProblems"> {
+  const byEmail = new Map<string, UserAccessRow[]>();
+  for (const row of rows) {
+    const email = normalizedEmail(row.email);
+    if (!email) continue;
+    byEmail.set(email, [...(byEmail.get(email) ?? []), row]);
+  }
+
+  const duplicateUserEmails = Array.from(byEmail.entries())
+    .filter(([, matches]) => matches.length > 1)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([email, matches]) => ({
+      email,
+      users: matches.map(row => ({
+        id: row.id,
+        role: row.role,
+        maskedOpenId: maskedOpenId(row.openId) ?? "(missing)",
+      })),
+    }));
+
+  const expectedAdminProblems: HealthFindings["expectedAdminProblems"] = [];
+  const ownerOpenId = expected.ownerOpenId?.trim();
+  if (ownerOpenId) {
+    const owner = rows.find(row => row.openId === ownerOpenId);
+    if (!owner || owner.role !== "admin") {
+      expectedAdminProblems.push({
+        identity: "Project owner openId",
+        email: owner?.email ?? null,
+        maskedOpenId: maskedOpenId(ownerOpenId),
+        actualRole: owner?.role ?? null,
+        problem: owner ? "role_mismatch" : "missing",
+      });
+    }
+  }
+
+  const expectedEmails = new Map<string, string>();
+  for (const candidate of expected.adminEmails ?? []) {
+    const normalized = normalizedEmail(candidate);
+    if (normalized && !expectedEmails.has(normalized)) expectedEmails.set(normalized, candidate!.trim());
+  }
+  for (const [normalized, displayEmail] of Array.from(expectedEmails.entries())) {
+    const matches = byEmail.get(normalized) ?? [];
+    if (!matches.some(row => row.role === "admin")) {
+      const account = matches[0];
+      expectedAdminProblems.push({
+        identity: `Expected admin email ${displayEmail}`,
+        email: displayEmail,
+        maskedOpenId: maskedOpenId(account?.openId),
+        actualRole: account?.role ?? null,
+        problem: account ? "role_mismatch" : "missing",
+      });
+    }
+  }
+
+  return { duplicateUserEmails, expectedAdminProblems };
+}
 
 const CRITICAL_SCHEDULES = [
   {
@@ -192,7 +282,7 @@ function fmtDate(d: Date | string | null | undefined): string {
  */
 export async function runHealthCheck(now: Date = new Date()): Promise<HealthFindings> {
   const requestCutoff = new Date(now.getTime() - 24 * HOUR_MS);
-  const [paid, dead, noEmail, configuredBusinessEmail, activeProperties, overdueHolds, pendingTimes, staleRequests, heartbeat] = await Promise.all([
+  const [paid, dead, noEmail, configuredBusinessEmail, activeProperties, overdueHolds, pendingTimes, staleRequests, accessUsers, heartbeat] = await Promise.all([
     db.findPaidInvoicesOnOpenBookings(),
     db.findInvoicesWithDeadLinks(now),
     db.findCustomersWithoutEmail(),
@@ -201,6 +291,7 @@ export async function runHealthCheck(now: Date = new Date()): Promise<HealthFind
     db.listElapsedDepositBookings(now),
     db.listUpcomingPendingTimeBookings(todayInBookingZone(now)),
     db.listStaleOpenRescheduleRequests(requestCutoff),
+    db.listUsersForAccessHealth(),
     listHeartbeatJobs("", { pageSize: 200 })
       .then(result => ({ jobs: result.jobs, error: null as string | null }))
       .catch(error => ({
@@ -210,6 +301,10 @@ export async function runHealthCheck(now: Date = new Date()): Promise<HealthFind
   ]);
   const expectedSmtpUser = configuredBusinessEmail?.trim() || null;
   const effectiveSmtpUser = smtpUser()?.trim() || null;
+  const accessIntegrity = inspectUserAccess(accessUsers, {
+    ownerOpenId: ENV.ownerOpenId,
+    adminEmails: [configuredBusinessEmail],
+  });
   const nowMs = now.getTime();
   const staleIcalProperties = activeProperties.flatMap(property => {
     const successfulAt = property.lastSuccessfulSyncAt;
@@ -291,6 +386,7 @@ export async function runHealthCheck(now: Date = new Date()): Promise<HealthFind
         ? effectiveSmtpUser?.toLowerCase() === expectedSmtpUser.toLowerCase()
         : null,
     },
+    ...accessIntegrity,
     hasProblems: false,
   };
   findings.hasProblems =
@@ -301,6 +397,8 @@ export async function runHealthCheck(now: Date = new Date()): Promise<HealthFind
     findings.overdueCheckoutHolds.length > 0 ||
     findings.pendingTimeBookings.length > 0 ||
     findings.staleRescheduleRequests.length > 0 ||
+    findings.duplicateUserEmails.length > 0 ||
+    findings.expectedAdminProblems.length > 0 ||
     findings.smtpIdentity.matches === false;
   return findings;
 }
@@ -313,6 +411,8 @@ export function healthProblemCount(findings: HealthFindings): number {
     findings.overdueCheckoutHolds.length +
     findings.pendingTimeBookings.length +
     findings.staleRescheduleRequests.length +
+    findings.duplicateUserEmails.length +
+    findings.expectedAdminProblems.length +
     (findings.smtpIdentity.matches === false ? 1 : 0);
 }
 
@@ -343,6 +443,25 @@ export function formatHealthFindings(f: HealthFindings): string {
     lines.push(`re-booking invitations:`);
     for (const c of f.customersWithoutEmail) {
       lines.push(`  • ${c.name}${c.phone ? ` — ${c.phone}` : ""}`);
+    }
+    lines.push("");
+  }
+  if (f.duplicateUserEmails.length > 0) {
+    lines.push(`DUPLICATE USER EMAIL IDENTITIES (${f.duplicateUserEmails.length})`);
+    lines.push("Multiple auth rows share the same email after case normalization. This can strand an admin role on the wrong openId:");
+    for (const duplicate of f.duplicateUserEmails) {
+      const accounts = duplicate.users.map(user => `id ${user.id} (${user.role}, ${user.maskedOpenId})`).join("; ");
+      lines.push(`  • ${duplicate.email} — ${accounts}`);
+    }
+    lines.push("");
+  }
+  if (f.expectedAdminProblems.length > 0) {
+    lines.push(`EXPECTED ADMIN ACCESS PROBLEMS (${f.expectedAdminProblems.length})`);
+    lines.push("An explicitly expected administrator is missing or no longer carries the admin role:");
+    for (const problem of f.expectedAdminProblems) {
+      const account = problem.maskedOpenId ? ` — ${problem.maskedOpenId}` : "";
+      const role = problem.actualRole ? ` — current role ${problem.actualRole}` : " — no matching user row";
+      lines.push(`  • ${problem.identity}${account}${role}`);
     }
     lines.push("");
   }
