@@ -310,6 +310,6 @@ describe("reviving a released booking into a slot that was retaken", () => {
     mockUpdateBooking.mockResolvedValue(undefined);
     await expect(
       adminRouter.createCaller(ctx("admin")).updateBookingStatus({ id: 42, status: "cancelled" })
-    ).resolves.toEqual({ success: true });
+    ).resolves.toMatchObject({ success: true });
   });
 });

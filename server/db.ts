@@ -447,7 +447,7 @@ export type MoveBookingScheduleInput = {
   toDate: string;
   toTime: string | null;
   estimatedHours: number | null;
-  icalCheckoutDate?: string | null;
+  icalSourceDate?: string | null;
   actorType: "admin" | "customer" | "staff" | "ical" | "brain" | "system";
   actorUserId?: number | null;
   actorLabel?: string | null;
@@ -481,8 +481,14 @@ export async function moveBookingSchedule(input: MoveBookingScheduleInput): Prom
         estimatedHours: input.estimatedHours,
         weekReminderSentAt: null,
         dayReminderSentAt: null,
-        ...(input.icalCheckoutDate !== undefined ? { icalCheckoutDate: input.icalCheckoutDate } : {}),
-        ...(before.kind === "ical_auto" ? { turnoverNoticeDate: input.toDate } : {}),
+        ...(input.icalSourceDate !== undefined ? { icalSourceDate: input.icalSourceDate } : {}),
+        // A hand move (admin, customer, brain) pre-claims the host notice for its
+        // date: that move sends its own reschedule confirmation, and the hourly
+        // sync's quiet retry must not announce the same date a second time. The
+        // sync's OWN moves are excluded — icalSync claims per date itself right
+        // after moving, and pre-claiming here silenced its "turnover
+        // rescheduled" notice on every genuine host date change.
+        ...(before.kind === "ical_auto" && input.actorType !== "ical" ? { turnoverNoticeDate: input.toDate } : {}),
       })
       .where(and(eq(bookings.id, input.bookingId), eq(bookings.status, "confirmed")));
     if (affectedRows(result) === 0) return { outcome: "not_eligible", status: before.status } as const;
@@ -1325,14 +1331,20 @@ export async function listBookingsForStaff(filter: { status?: string; date?: str
   return rows.map(stripJoinedPayToken);
 }
 
-/** All non-cancelled bookings within a YYYY-MM month for the staff calendar. */
+/**
+ * Bookings within a YYYY-MM month for the staff calendar.
+ *
+ * Cancelled AND expired rows are excluded: both have released their slot (the
+ * generated slotKey is NULL for either), so neither belongs on a schedule the
+ * crew reads. Same rule as holdsCalendarSlot in shared/bookingStatus.ts.
+ */
 export async function listBookingsForMonth(month: string) {
   const db = requireDb(await getDb());
   const rows = await db
     .select({ booking: bookings, customer: customers })
     .from(bookings)
     .leftJoin(customers, eq(bookings.customerId, customers.id))
-    .where(and(like(bookings.scheduledDate, `${month}%`), sql`${bookings.status} != 'cancelled'`))
+    .where(and(like(bookings.scheduledDate, `${month}%`), sql`${bookings.status} NOT IN ('cancelled', 'expired')`))
     .orderBy(bookings.scheduledDate, bookings.scheduledTime);
   return rows.map(stripJoinedPayToken);
 }
@@ -1581,6 +1593,66 @@ export async function getBalanceInvoiceForBooking(bookingId: number) {
     .orderBy(desc(invoices.id))
     .limit(1);
   return rows[0];
+}
+
+/**
+ * The latest balance invoice for each of a set of bookings, in one query —
+ * what the admin bookings list needs to derive every row's payment status
+ * without a lookup per row.
+ */
+export async function listBalanceInvoicesForBookings(bookingIds: number[]) {
+  if (bookingIds.length === 0) return [];
+  const db = requireDb(await getDb());
+  const rows = await db
+    .select({
+      id: invoices.id,
+      bookingId: invoices.bookingId,
+      status: invoices.status,
+      paidVia: invoices.paidVia,
+      amount: invoices.amount,
+      amountCents: invoices.amountCents,
+    })
+    .from(invoices)
+    .where(and(eq(invoices.kind, "balance"), inArray(invoices.bookingId, bookingIds)))
+    .orderBy(asc(invoices.id));
+  // A later invoice supersedes an earlier one for the same booking.
+  const latest = new Map<number, (typeof rows)[number]>();
+  for (const row of rows) if (row.bookingId != null) latest.set(row.bookingId, row);
+  return Array.from(latest.values());
+}
+
+/**
+ * Voids every unpaid balance invoice of a cancelled booking and returns them.
+ *
+ * A cancelled job has nothing left to bill: an invoice left at "sent" would
+ * keep reminding the customer to pay for a cleaning that is not happening, and
+ * one at "awaiting_approval" would sit in the owner's queue forever. Paid and
+ * already-voided invoices are untouched — a paid invoice on a cancelled
+ * booking is a refund question for a human, never a status flip.
+ */
+export async function voidUnpaidBalanceInvoicesForBooking(bookingId: number) {
+  const db = requireDb(await getDb());
+  const open = await db
+    .select({
+      id: invoices.id,
+      number: invoices.number,
+      status: invoices.status,
+      stripeSessionId: invoices.stripeSessionId,
+    })
+    .from(invoices)
+    .where(
+      and(
+        eq(invoices.bookingId, bookingId),
+        eq(invoices.kind, "balance"),
+        inArray(invoices.status, ["draft", "sent", "overdue", "awaiting_approval"])
+      )
+    );
+  if (open.length === 0) return [];
+  await db
+    .update(invoices)
+    .set({ status: "void" })
+    .where(inArray(invoices.id, open.map(row => row.id)));
+  return open;
 }
 
 // ---------- Payments ----------
@@ -2008,6 +2080,20 @@ export async function listConnectedProperties() {
 export async function getConnectedPropertyById(id: number) {
   const db = requireDb(await getDb());
   const rows = await db.select().from(connectedProperties).where(eq(connectedProperties.id, id)).limit(1);
+  return rows[0];
+}
+
+/**
+ * The property already connected to a feed URL, if any — the duplicate-feed
+ * guard. Two rows polling one listing would book every checkout twice.
+ */
+export async function findConnectedPropertyByIcalUrl(icalUrl: string) {
+  const db = requireDb(await getDb());
+  const rows = await db
+    .select()
+    .from(connectedProperties)
+    .where(eq(connectedProperties.icalUrl, icalUrl))
+    .limit(1);
   return rows[0];
 }
 

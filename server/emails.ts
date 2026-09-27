@@ -2361,6 +2361,159 @@ export function buildAutoCleanCancelledEmail(args: {
       };
 }
 
+// ---------- Booking cancellation (owner-initiated) ----------
+
+export interface BookingCancelledEmailData {
+  reference: string;
+  serviceName: string;
+  /** Scheduled date (YYYY-MM-DD), or null when the customer never picked one. */
+  date: string | null;
+  time: string | null;
+  customerName: string;
+  locale: "en" | "es";
+  address?: string | null;
+  /**
+   * Set for a feed-created turnover: the host is told which listing's clean
+   * came off the schedule, in the same voice as the automatic notices.
+   */
+  propertyLabel?: string | null;
+  /** A short line from the owner, quoted as written. */
+  note?: string | null;
+  bizPhone?: string;
+}
+
+/**
+ * "We've cancelled your cleaning" — the notice behind Admin → Appointments →
+ * Cancel, when the owner asks for the customer to be told.
+ *
+ * The same family as buildAutoCleanCancelledEmail, which stays the wording for
+ * a reservation that VANISHED from a host's feed. This one is the owner's
+ * decision, so it says so plainly, never blames a calendar, and — because the
+ * job is off and any unpaid balance was voided alongside — promises no charge.
+ * A deposit already collected is a human conversation, not an automatic
+ * refund, so the email only promises a follow-up about it.
+ */
+export function buildBookingCancelledEmail(data: BookingCancelledEmailData): { subject: string; body: string } {
+  const spanish = data.locale === "es";
+  const when =
+    data.date && data.time
+      ? `${data.date} · ${data.time}`
+      : (data.date ?? (spanish ? "sin fecha asignada" : "not yet scheduled"));
+  const note = data.note?.trim();
+  const phoneLine = spanish
+    ? data.bizPhone
+      ? `Si esto es inesperado, o desea reservar otro horario, responda a este correo o llámenos al ${data.bizPhone}.`
+      : `Si esto es inesperado, o desea reservar otro horario, simplemente responda a este correo.`
+    : data.bizPhone
+      ? `If this is unexpected, or you'd like to book another time, just reply to this email or call us at ${data.bizPhone}.`
+      : `If this is unexpected, or you'd like to book another time, just reply to this email.`;
+
+  if (data.propertyLabel) {
+    const label = data.propertyLabel;
+    return spanish
+      ? {
+          subject: `Limpieza cancelada — ${label} el ${data.date ?? "sin fecha"} | Grapefruit Cleaning Co.`,
+          body: [
+            `Hola ${data.customerName},`,
+            ``,
+            `Retiramos del calendario la limpieza de ${label} que estaba agendada para ${when}.`,
+            note ? `` : undefined,
+            note ? `Nota de nuestro equipo: "${note}"` : undefined,
+            ``,
+            `No se le cobrará nada por esta limpieza. Su calendario sigue conectado: las próximas salidas se agendarán automáticamente como siempre.`,
+            ``,
+            `Si aún desea que limpiemos la unidad ese día, respóndanos y lo programamos.`,
+            ``,
+            `El equipo de Grapefruit Cleaning Co.`,
+          ]
+            .filter(line => line !== undefined)
+            .join("\n"),
+        }
+      : {
+          subject: `Turnover cancelled — ${label} on ${data.date ?? "unscheduled"} | Grapefruit Cleaning Co.`,
+          body: [
+            `Hi ${data.customerName},`,
+            ``,
+            `We've taken the ${label} turnover that was scheduled for ${when} off the schedule.`,
+            note ? `` : undefined,
+            note ? `Note from our team: "${note}"` : undefined,
+            ``,
+            `You won't be charged for this clean. Your calendar feed stays connected — future checkouts will be scheduled automatically as always.`,
+            ``,
+            `If you'd still like the unit cleaned that day, just reply and we'll book it.`,
+            ``,
+            `The Grapefruit Cleaning Co. Team`,
+          ]
+            .filter(line => line !== undefined)
+            .join("\n"),
+        };
+  }
+
+  return spanish
+    ? {
+        subject: data.date
+          ? `Su limpieza del ${data.date} fue cancelada — Reserva ${data.reference} | Grapefruit Cleaning Co.`
+          : `Su reserva ${data.reference} fue cancelada | Grapefruit Cleaning Co.`,
+        body: [
+          `Hola ${data.customerName},`,
+          ``,
+          `Cancelamos su ${data.serviceName} que estaba agendada para ${when}.`,
+          ``,
+          `Referencia: ${data.reference}`,
+          data.address ? `Dirección: ${data.address}` : undefined,
+          note ? `` : undefined,
+          note ? `Nota de nuestro equipo: "${note}"` : undefined,
+          ``,
+          `No se le cobrará nada por esta limpieza. Si ya pagó un depósito, nos comunicaremos con usted directamente al respecto.`,
+          ``,
+          phoneLine,
+          `Nos encantaría volver a atenderle.`,
+          ``,
+          `Con aprecio,`,
+          `El equipo de Grapefruit Cleaning Co.`,
+        ]
+          .filter(line => line !== undefined)
+          .join("\n"),
+      }
+    : {
+        subject: data.date
+          ? `Your cleaning on ${data.date} has been cancelled — Booking ${data.reference} | Grapefruit Cleaning Co.`
+          : `Your booking ${data.reference} has been cancelled | Grapefruit Cleaning Co.`,
+        body: [
+          `Hi ${data.customerName},`,
+          ``,
+          `We've cancelled your ${data.serviceName} that was scheduled for ${when}.`,
+          ``,
+          `Reference: ${data.reference}`,
+          data.address ? `Address: ${data.address}` : undefined,
+          note ? `` : undefined,
+          note ? `Note from our team: "${note}"` : undefined,
+          ``,
+          `You won't be charged for this cleaning. If you already paid a deposit, we'll follow up with you about it directly.`,
+          ``,
+          phoneLine,
+          `We'd love to have you back.`,
+          ``,
+          `Warmly,`,
+          `The Grapefruit Cleaning Co. Team`,
+        ]
+          .filter(line => line !== undefined)
+          .join("\n"),
+      };
+}
+
+/** Sends the owner-initiated cancellation notice. Returns true when delivered. */
+export async function sendBookingCancelledEmail(
+  data: BookingCancelledEmailData & { customerEmail: string },
+  context?: Pick<EmailContext, "bookingId">
+): Promise<boolean> {
+  const { subject, body } = buildBookingCancelledEmail(data);
+  return deliverEmail(data.customerEmail, subject, body, undefined, {
+    emailType: "booking_cancelled",
+    bookingId: context?.bookingId ?? null,
+  });
+}
+
 /** The owner's side of the same event: a job left the schedule unattended. */
 export function buildAutoCleanCancelledAlert(args: {
   label: string;

@@ -20,10 +20,11 @@ import { Switch as ToggleSwitch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { formatJobSpan, intervalEndTime } from "@shared/availability";
+import { holdsCalendarSlot, isAirbnbBooking } from "@shared/bookingStatus";
 import { composeAddress } from "@shared/property";
 import { trpc } from "@/lib/trpc";
 import { ASSETS } from "@/lib/assets";
-import { PageHeader, StatusBadge, SERVICE_LABELS, fmtMoney, fmtDate } from "../admin/adminShared";
+import { AIRBNB_CHIP_CLASS, AirbnbBadge, PageHeader, StatusBadge, SERVICE_LABELS, fmtMoney, fmtDate } from "../admin/adminShared";
 import StaffJoin from "./StaffJoin";
 
 const NAV_ITEMS = [
@@ -86,11 +87,7 @@ function JobCard({ row, onStatusChange }: { row: StaffBookingRow; onStatusChange
               {booking.serviceType ? (SERVICE_LABELS[booking.serviceType] ?? booking.serviceType) : "Service TBD"}
             </p>
             <StatusBadge status={booking.status} />
-            {booking.kind === "ical_auto" && (
-              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-accent-foreground">
-                Auto · Airbnb
-              </span>
-            )}
+            {isAirbnbBooking(booking) && <AirbnbBadge auto={booking.kind === "ical_auto"} />}
           </div>
           <p className="mt-0.5 text-xs font-medium text-muted-foreground">
             {booking.reference} · {fmtDate(booking.scheduledDate)}
@@ -157,7 +154,8 @@ function StaffToday() {
   const [today] = useState(() => new Date().toISOString().slice(0, 10));
   const { data: overview } = trpc.staff.overview.useQuery();
   const { data: jobs, isLoading } = trpc.staff.bookings.useQuery({ date: today });
-  const active = (jobs ?? []).filter((j) => j.booking.status !== "cancelled");
+  // Released bookings (cancelled or expired) hold no slot and are not a day's work.
+  const active = (jobs ?? []).filter((j) => holdsCalendarSlot(j.booking.status));
   return (
     <div>
       <PageHeader
@@ -331,7 +329,7 @@ function StaffCalendar() {
                       // fill: ~9:1 in ordinary cells and in today's, both themes.
                       <div
                         key={j.booking.id}
-                        className="truncate rounded-md bg-secondary/15 px-1.5 py-0.5 text-[10px] font-semibold text-secondary-foreground"
+                        className={`truncate rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${isAirbnbBooking(j.booking) ? AIRBNB_CHIP_CLASS : "bg-secondary/15 text-secondary-foreground"}`}
                         title={`${j.booking.scheduledTime ? formatJobSpan(j.booking.scheduledTime, j.booking.durationHours) : "Time to be decided"} — ${j.booking.serviceType ? (SERVICE_LABELS[j.booking.serviceType] ?? j.booking.serviceType) : "Service TBD"}${j.customer ? ` — ${j.customer.firstName} ${j.customer.lastName}` : ""}`}
                       >
                         {j.booking.scheduledTime ? `${j.booking.scheduledTime}–${intervalEndTime(j.booking.scheduledTime, j.booking.durationHours)}` : "Time TBD"}{" "}

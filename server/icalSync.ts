@@ -11,6 +11,13 @@
  *   vanished UID     → cancel the booking, if it is still in the future
  *   unchanged        → touch nothing
  *
+ * "Moved" is judged against the checkout date the feed LAST reported
+ * (bookings.icalSourceDate), never against the date the cleaning sits on: an
+ * owner may deliberately clean the day after checkout, and a poll that only
+ * compared scheduledDate would drag the job back every hour. One unit checks
+ * out once per day, so a second reservation landing on a checkout day that
+ * already has a live turnover is the same clean seen twice and is skipped.
+ *
  * Bookings that have started or finished are never touched — the feed is the
  * source of truth for the future only. Cancelled bookings are never
  * resurrected: an owner who cancelled by hand outranks the calendar.
@@ -31,6 +38,7 @@ import { durationHoursFor } from "@shared/duration";
 import { todayInBookingZone } from "@shared/leadTime";
 import { calculateQuote, generateBookingReference } from "@shared/pricing";
 import { slotHour } from "@shared/availability";
+import { holdsCalendarSlot } from "@shared/bookingStatus";
 import type { ConnectedProperty } from "../drizzle/schema";
 import * as db from "./db";
 import {
@@ -120,6 +128,17 @@ export interface SyncSummary {
   moved: number;
   cancelled: number;
   unplaced: number;
+  /** Reservations skipped because the property already has a live turnover on that checkout day. */
+  duplicates: number;
+}
+
+/**
+ * The checkout date the feed last reported for a booking. Rows written before
+ * icalSourceDate existed fall back to their scheduled date, which is exactly
+ * what they used to be compared by.
+ */
+function feedDateOf(row: { icalSourceDate: string | null; scheduledDate: string | null }): string | null {
+  return row.icalSourceDate ?? row.scheduledDate;
 }
 
 /**
@@ -138,6 +157,7 @@ export async function syncConnectedProperty(
     moved: 0,
     cancelled: 0,
     unplaced: 0,
+    duplicates: 0,
   };
 
   const fetched = await fetchIcalFeed(property.icalUrl);
@@ -166,17 +186,54 @@ export async function syncConnectedProperty(
   summary.reservations = parsed.reservations.length;
 
   const today = todayInBookingZone(now);
-  const existing = await db.listAutoBookingsForProperty(property.id);
+  // Mutable copies: a reservation cancelled earlier in this poll must count as
+  // cancelled for the rest of it — the same-day guard below reads status.
+  const existing = (await db.listAutoBookingsForProperty(property.id)).map(row => ({ ...row }));
   const byUid = new Map(existing.map(row => [row.icalUid, row]));
   const feedUids = new Set(parsed.reservations.map(r => r.uid));
 
   if (property.autoBook) {
+    // Vanished reservations first: the guest cancelled. Cancel the cleaning —
+    // but only while it is still ahead of us, and only if no human intervened.
+    // Cancellations run before creations so a replacement reservation on the
+    // same checkout day can take the cancelled one's place within one poll.
+    for (const row of existing) {
+      if (!row.icalUid || feedUids.has(row.icalUid)) continue;
+      if (row.status !== "confirmed") continue;
+      const stillAhead = row.scheduledDate === null || row.scheduledDate >= today;
+      if (!stillAhead) continue;
+      await db.updateBooking(row.id, { status: "cancelled" });
+      row.status = "cancelled";
+      summary.cancelled += 1;
+      // Somebody has to be told. Cancelling silently leaves the host assuming a
+      // clean is booked for a unit that may now be occupied or unsold, and
+      // leaves the crew watching a job vanish from the schedule with no
+      // explanation. Both notices are best-effort: a mail failure must not stop
+      // the rest of the reconciliation.
+      await notifyTurnoverCancelled(property, row);
+    }
+
     // Only future checkouts become work; a feed shows history rolling off its
     // window, and yesterday is not schedulable.
     const future = parsed.reservations.filter(r => r.checkoutDate >= today);
     for (const reservation of future) {
       const current = byUid.get(reservation.uid);
       if (!current) {
+        // One unit checks out once per day. A second reservation UID on a
+        // checkout day that already has a live turnover is the same clean seen
+        // twice — a re-issued reservation, a cross-listed feed — never a second
+        // crew. Skipped and counted; re-evaluated every poll, so once the first
+        // booking is cancelled the newcomer takes its place.
+        const twin = existing.find(
+          row =>
+            row.icalUid !== reservation.uid &&
+            holdsCalendarSlot(row.status) &&
+            feedDateOf(row) === reservation.checkoutDate
+        );
+        if (twin) {
+          summary.duplicates += 1;
+          continue;
+        }
         const outcome = await createAutoBooking(property, reservation);
         if (outcome === "created") summary.created += 1;
         if (outcome === "unplaced") {
@@ -189,45 +246,45 @@ export async function syncConnectedProperty(
       // started/finished cleans are history, a hand-cancelled booking stays
       // cancelled.
       if (current.status !== "confirmed") continue;
-      if (current.scheduledDate === reservation.checkoutDate) {
-        // Date unchanged. If it never found a slot, keep trying — space frees
-        // up — but quietly: the owner was alerted when it first failed.
+
+      const lastSeen = feedDateOf(current);
+      if (lastSeen === reservation.checkoutDate) {
+        // The host's date is unchanged — whatever day the cleaning sits on.
+        if (current.icalSourceDate == null) {
+          // One quiet backfill for rows from before this column was written,
+          // so the next hand move of this booking is respected too.
+          await db.updateBooking(current.id, { icalSourceDate: reservation.checkoutDate });
+          current.icalSourceDate = reservation.checkoutDate;
+        }
+        // If it never found a slot, keep trying — space frees up — but quietly:
+        // the owner was alerted when it first failed. The retry lands on the
+        // booking's own date, which may be one the owner chose by hand.
         if (current.scheduledDate === null || current.scheduledTime === null) {
-          const placed = await placeBooking(property, current.id, reservation.checkoutDate, { quiet: true });
+          const placed = await placeBooking(
+            property,
+            current.id,
+            { date: current.scheduledDate ?? reservation.checkoutDate, sourceDate: reservation.checkoutDate },
+            { quiet: true }
+          );
           if (placed === "placed") summary.moved += 1;
         }
         continue;
       }
+      // The host's calendar moved the checkout: follow it.
+      const target = { date: reservation.checkoutDate, sourceDate: reservation.checkoutDate };
       if (current.scheduledDate === null) {
-        // Unplaced booking whose reservation moved: place it on the new day.
-        const placed = await placeBooking(property, current.id, reservation.checkoutDate, { quiet: true });
+        // A dateless legacy row whose reservation moved: place it on the new day.
+        const placed = await placeBooking(property, current.id, target, { quiet: true });
         if (placed === "placed") summary.moved += 1;
         else summary.unplaced += 1;
         continue;
       }
-      const moved = await placeBooking(property, current.id, reservation.checkoutDate, {
+      const moved = await placeBooking(property, current.id, target, {
         quiet: false,
         reference: current.reference,
       });
       if (moved === "placed") summary.moved += 1;
       else summary.unplaced += 1;
-    }
-
-    // Vanished reservations: the guest cancelled. Cancel the cleaning — but
-    // only while it is still ahead of us, and only if no human intervened.
-    for (const row of existing) {
-      if (!row.icalUid || feedUids.has(row.icalUid)) continue;
-      if (row.status !== "confirmed") continue;
-      const stillAhead = row.scheduledDate === null || row.scheduledDate >= today;
-      if (!stillAhead) continue;
-      await db.updateBooking(row.id, { status: "cancelled" });
-      summary.cancelled += 1;
-      // Somebody has to be told. Cancelling silently leaves the host assuming a
-      // clean is booked for a unit that may now be occupied or unsold, and
-      // leaves the crew watching a job vanish from the schedule with no
-      // explanation. Both notices are best-effort: a mail failure must not stop
-      // the rest of the reconciliation.
-      await notifyTurnoverCancelled(property, row);
     }
   }
 
@@ -280,7 +337,7 @@ async function createAutoBooking(
     customerId: property.customerId,
     propertyId: property.id,
     icalUid: reservation.uid,
-    icalCheckoutDate: reservation.checkoutDate,
+    icalSourceDate: reservation.checkoutDate,
     kind: "ical_auto" as const,
     serviceType: property.serviceType,
     frequency: "onetime" as const,
@@ -303,12 +360,12 @@ async function createAutoBooking(
     status: "confirmed" as const,
   };
 
-  const insert = async (slot: { date: string; time: string } | null) =>
-    db.createBooking(
-      slot
-        ? { ...base, scheduledDate: slot.date, scheduledTime: slot.time }
-        : { ...base, scheduledDate: null, scheduledTime: null }
-    );
+  // The checkout day is always known, even when no start time fits: an
+  // unplaced turnover is inserted date-known/time-pending, so it shows on the
+  // calendar as "time to be decided" rather than vanishing until someone
+  // places it. Holding no time, it holds no inventory (slotKey stays NULL).
+  const insert = async (slot: { date: string; time: string | null }) =>
+    db.createBooking({ ...base, scheduledDate: slot.date, scheduledTime: slot.time });
 
   let unplacedReason: string | null = null;
   if (time) {
@@ -331,7 +388,7 @@ async function createAutoBooking(
 
   let unplacedId: number;
   try {
-    unplacedId = await insert(null);
+    unplacedId = await insert({ date: reservation.checkoutDate, time: null });
   } catch (error) {
     if (db.isDuplicateUidError(error)) return "created";
     throw error;
@@ -353,13 +410,19 @@ async function createAutoBooking(
  * (Re-)place an existing auto booking on a day — the moved-reservation and
  * retry-unplaced paths. `quiet` suppresses the owner alert for the silent
  * hourly retry of an already-alerted booking.
+ *
+ * `target.date` is where the cleaning goes; `target.sourceDate` is the checkout
+ * the feed reported and is what the next poll compares against. They differ
+ * when a quiet retry places a turnover the owner moved by hand: the cleaning
+ * stays on the owner's day while the row keeps remembering the host's.
  */
 async function placeBooking(
   property: ConnectedProperty,
   bookingId: number,
-  date: string,
+  target: { date: string; sourceDate: string },
   options: { quiet: boolean; reference?: string }
 ): Promise<"placed" | "unplaced"> {
+  const { date, sourceDate } = target;
   const before = await db.getBookingById(bookingId);
   if (!before || before.status !== "confirmed") return "unplaced";
   const { schedule, lunchBreak, durations } = await loadSchedulingRules();
@@ -379,11 +442,11 @@ async function placeBooking(
         toDate: date,
         toTime: time,
         estimatedHours: jobHours,
-        icalCheckoutDate: date,
+        icalSourceDate: sourceDate,
         actorType: "ical",
         actorLabel: property.label,
         action: options.quiet ? "ical_retry_placed" : "ical_moved",
-        note: `Airbnb checkout moved to ${date}.`,
+        note: options.quiet ? `Turnover placed at ${time} on ${date}.` : `Airbnb checkout moved to ${date}.`,
       });
       if (moved.outcome !== "moved") return "unplaced";
       // `quiet` marks the hourly retry of an already-announced turnover. The
@@ -403,7 +466,7 @@ async function placeBooking(
     toDate: date,
     toTime: null,
     estimatedHours: jobHours,
-    icalCheckoutDate: date,
+    icalSourceDate: sourceDate,
     actorType: "ical",
     actorLabel: property.label,
     action: "ical_pending_time",
@@ -555,6 +618,7 @@ export async function syncAllProperties(now: Date = new Date()): Promise<SyncSum
         moved: 0,
         cancelled: 0,
         unplaced: 0,
+        duplicates: 0,
       });
     }
   }

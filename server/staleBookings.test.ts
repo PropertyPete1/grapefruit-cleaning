@@ -276,7 +276,7 @@ describe("admin cancellation releases the slot safely", () => {
       stripeSessionId: "cs_test_open",
     });
 
-    await expect(caller().updateBookingStatus({ id: 42, status: "cancelled" })).resolves.toEqual({ success: true });
+    await expect(caller().updateBookingStatus({ id: 42, status: "cancelled" })).resolves.toMatchObject({ success: true });
 
     expect(mockSessionRetrieve).toHaveBeenCalledWith("cs_test_open");
     expect(mockSessionExpire).toHaveBeenCalledWith("cs_test_open");

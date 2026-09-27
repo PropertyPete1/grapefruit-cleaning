@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { formatJobSpan } from "@shared/availability";
+import { isAirbnbBooking } from "@shared/bookingStatus";
 import { composeAddressOr } from "@shared/property";
 import { trpc } from "@/lib/trpc";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -19,7 +20,9 @@ import { SetTimeDialog } from "./SetTimeDialog";
 import { RescheduleDialog } from "./RescheduleDialog";
 import { RescheduleRequestsPanel } from "./RescheduleRequestsPanel";
 import { BookingDetails, type BookingDetailsRow } from "./BookingDetails";
+import { CancelBookingDialog, type CancelDialogBooking } from "./CancelBookingDialog";
 import {
+  AirbnbBadge,
   NotesBlock,
   PageHeader,
   RowCard,
@@ -36,6 +39,8 @@ export default function AdminAppointments() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   /** The row whose full details are open (desktop dialog). */
   const [detailRow, setDetailRow] = useState<BookingDetailsRow | null>(null);
+  /** The row the owner is about to cancel — confirmed in its own dialog, never by a stray flick of the select. */
+  const [cancelling, setCancelling] = useState<CancelDialogBooking | null>(null);
   const utils = trpc.useUtils();
   const bookings = trpc.admin.bookings.useQuery(
     statusFilter === "all" ? {} : { status: statusFilter as (typeof STATUSES)[number] }
@@ -47,18 +52,40 @@ export default function AdminAppointments() {
     (pendingApproval.data ?? []).flatMap(inv => (inv.bookingId ? [[inv.bookingId, inv.amount] as const] : []))
   );
   const updateStatus = trpc.admin.updateBookingStatus.useMutation({
-    onSuccess: (_result, variables) => {
+    onSuccess: (result, variables) => {
       utils.admin.bookings.invalidate();
       utils.admin.stats.invalidate();
+      utils.admin.invoices.invalidate();
+      utils.admin.awaitingApprovalInvoices.invalidate();
       utils.booking.availability.invalidate();
+      setCancelling(null);
+      if (variables.status === "cancelled") {
+        const voided = result.cancellation?.voidedInvoices ?? 0;
+        toast.success(
+          [
+            "Booking cancelled — the slot is available again",
+            result.cancellation?.customerNotified ? "customer emailed" : variables.notifyCustomer ? "email did not send" : null,
+            voided > 0 ? `${voided} unpaid invoice${voided === 1 ? "" : "s"} voided` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")
+        );
+        return;
+      }
       toast.success(
-        variables.status === "cancelled" || variables.status === "expired"
-          ? "Booking released — the slot is available again"
-          : "Booking status updated"
+        variables.status === "expired" ? "Booking released — the slot is available again" : "Booking status updated"
       );
     },
-    onError: () => toast.error("Failed to update status"),
+    onError: error => toast.error(error.message || "Failed to update status"),
   });
+  /** Cancelling asks first; every other status change applies at once. */
+  const changeStatus = (row: CancelDialogBooking, next: string) => {
+    if (next === "cancelled") {
+      setCancelling(row);
+      return;
+    }
+    updateStatus.mutate({ id: row.id, status: next as (typeof STATUSES)[number] });
+  };
   const assign = trpc.admin.assignEmployee.useMutation({
     onSuccess: () => {
       utils.admin.bookings.invalidate();
@@ -139,11 +166,8 @@ export default function AdminAppointments() {
                       {b.serviceType ? (SERVICE_LABELS[b.serviceType] ?? b.serviceType) : (
                         <span className="text-xs text-muted-foreground">Customer picks</span>
                       )}
-                      {b.kind === "ical_auto" ? (
-                        <span className="mt-1 block w-fit rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-accent-foreground">
-                          Auto · Airbnb
-                        </span>
-                      ) : (
+                      {isAirbnbBooking(b) && <AirbnbBadge auto={b.kind === "ical_auto"} className="mt-1 block" />}
+                      {b.kind !== "ical_auto" && (
                         <span className="block text-xs text-muted-foreground">{b.frequency}</span>
                       )}
                     </td>
@@ -267,7 +291,7 @@ export default function AdminAppointments() {
                     <td className="px-5 py-3.5">
                       <Select
                         value={b.status}
-                        onValueChange={v => updateStatus.mutate({ id: b.id, status: v as (typeof STATUSES)[number] })}
+                        onValueChange={v => changeStatus(b, v)}
                       >
                         <SelectTrigger className="h-8 w-36 rounded-lg text-xs">
                           <SelectValue>
@@ -295,11 +319,7 @@ export default function AdminAppointments() {
                   <span className="flex flex-wrap items-center gap-x-2">
                     <span className="font-mono text-xs font-semibold text-primary">{b.reference}</span>
                     <span>{b.serviceType ? (SERVICE_LABELS[b.serviceType] ?? b.serviceType) : "Customer picks service"}</span>
-                    {b.kind === "ical_auto" && (
-                      <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-accent-foreground">
-                        Auto · Airbnb
-                      </span>
-                    )}
+                    {isAirbnbBooking(b) && <AirbnbBadge auto={b.kind === "ical_auto"} />}
                   </span>
                 }
                 subtitle={
@@ -348,7 +368,7 @@ export default function AdminAppointments() {
                     {b.status === "confirmed" && <RescheduleDialog booking={b} compact />}
                     <Select
                       value={b.status}
-                      onValueChange={v => updateStatus.mutate({ id: b.id, status: v as (typeof STATUSES)[number] })}
+                      onValueChange={v => changeStatus(b, v)}
                     >
                       <SelectTrigger className="h-9 flex-1 rounded-lg text-xs">
                         <SelectValue />
@@ -386,6 +406,16 @@ export default function AdminAppointments() {
           />
         )}
       </div>
+
+      {cancelling && (
+        <CancelBookingDialog
+          booking={cancelling}
+          pendingBalance={pendingByBooking.get(cancelling.id)}
+          pending={updateStatus.isPending}
+          onClose={() => setCancelling(null)}
+          onConfirm={input => updateStatus.mutate({ id: cancelling.id, status: "cancelled", ...input })}
+        />
+      )}
 
       {detailRow && (
         <Dialog open onOpenChange={open => !open && setDetailRow(null)}>

@@ -98,11 +98,30 @@ function KnowSection({
   );
 }
 
-export function NewBookingDialog() {
+export interface NewBookingDialogProps {
+  /**
+   * Prefills the schedule with this date (YYYY-MM-DD) and opens that section
+   * — the calendar's "add a booking on this day", where re-picking the date
+   * would be the one step the owner should never have to repeat.
+   */
+  initialDate?: string;
+  /** Controlled open state. Leave it (and onOpenChange) off to let the dialog own its trigger button. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** Render the "New booking" trigger button (default true). */
+  trigger?: boolean;
+}
+
+export function NewBookingDialog({ initialDate, open: controlledOpen, onOpenChange, trigger = true }: NewBookingDialogProps = {}) {
   const utils = trpc.useUtils();
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = (next: boolean) => {
+    if (controlledOpen === undefined) setInternalOpen(next);
+    onOpenChange?.(next);
+  };
   const [result, setResult] = useState<Result | null>(null);
-  const [openSection, setOpenSection] = useState<string | null>(null);
+  const [openSection, setOpenSection] = useState<string | null>(initialDate ? "schedule" : null);
 
   // The floor: who, and how to reach them.
   const [name, setName] = useState("");
@@ -121,7 +140,7 @@ export function NewBookingDialog() {
   const [unitNumber, setUnitNumber] = useState("");
   const [city, setCity] = useState("");
   const [zip, setZip] = useState("");
-  const [date, setDate] = useState("");
+  const [date, setDate] = useState(initialDate ?? "");
   const [time, setTime] = useState("");
   const [overrideNotice, setOverrideNotice] = useState(false);
   const [notes, setNotes] = useState("");
@@ -167,7 +186,7 @@ export function NewBookingDialog() {
 
   const reset = () => {
     setResult(null);
-    setOpenSection(null);
+    setOpenSection(initialDate ? "schedule" : null);
     setName("");
     setPhone("");
     setEmail("");
@@ -180,7 +199,7 @@ export function NewBookingDialog() {
     setUnitNumber("");
     setCity("");
     setZip("");
-    setDate("");
+    setDate(initialDate ?? "");
     setTime("");
     setOverrideNotice(false);
     setNotes("");
@@ -225,11 +244,13 @@ export function NewBookingDialog() {
         if (!next) reset();
       }}
     >
-      <DialogTrigger asChild>
-        <Button className="rounded-xl">
-          <CalendarDays className="mr-2 h-4 w-4" /> New booking
-        </Button>
-      </DialogTrigger>
+      {trigger && (
+        <DialogTrigger asChild>
+          <Button className="rounded-xl">
+            <CalendarDays className="mr-2 h-4 w-4" /> New booking
+          </Button>
+        </DialogTrigger>
+      )}
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New booking</DialogTitle>
