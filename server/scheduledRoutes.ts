@@ -145,7 +145,7 @@ async function icalSyncHandler(req: Request, res: Response) {
   try {
     const summaries = await syncAllProperties();
     const line = summaries
-      .map(s => `#${s.propertyId}:${s.ok ? "ok" : "FAIL"} +${s.created} →${s.moved} ✕${s.cancelled}${s.unplaced ? ` ?${s.unplaced}` : ""}`)
+      .map(s => `#${s.propertyId}:${s.ok ? "ok" : "FAIL"} +${s.created} →${s.moved} ✕${s.cancelled}${s.unplaced ? ` ?${s.unplaced}` : ""}${s.duplicates ? ` =${s.duplicates}dup` : ""}`)
       .join(" | ");
     console.log(`[iCalSync] ${summaries.length} propert${summaries.length === 1 ? "y" : "ies"}: ${line || "none active"}`);
     return res.json({ ok: true, summaries });

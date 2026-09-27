@@ -11,6 +11,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { Loader2, Mail, Pencil, Phone } from "lucide-react";
+import type { BookingPaymentStatus } from "@shared/paymentStatus";
 import { composeAddressOr } from "@shared/property";
 import { en } from "@/i18n/translations/en";
 import { trpc } from "@/lib/trpc";
@@ -25,7 +26,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { NotesBlock, SERVICE_LABELS, fmtDate, fmtMoney } from "./adminShared";
+import { NotesBlock, PaymentStatusBadge, SERVICE_LABELS, fmtDate, fmtMoney } from "./adminShared";
 
 /** The booking-list row shape this panel reads (admin.bookings output). */
 export interface BookingDetailsRow {
@@ -49,6 +50,8 @@ export interface BookingDetailsRow {
   depositAmount: number;
   notes: string | null;
   depositLink: string;
+  /** Derived server-side from the booking and its balance invoice. */
+  paymentStatus?: BookingPaymentStatus;
   payTokenExpiresAt: Date | string | null;
   customerName: string;
   customerPhone: string | null;
@@ -290,6 +293,7 @@ export function BookingDetails({ row }: { row: BookingDetailsRow }) {
       </Section>
 
       <Section title="Money">
+        {row.paymentStatus && <Row label="Payment" value={<PaymentStatusBadge status={row.paymentStatus} />} />}
         {row.couponCode && (
           <Row label="Coupon" value={`${row.couponCode} (−${fmtMoney(row.discountApplied)})`} />
         )}

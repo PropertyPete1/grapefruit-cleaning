@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
+import { PAYMENT_STATUS_LABELS, type BookingPaymentStatus } from "@shared/paymentStatus";
 
 /** True while `ref`'s content is wider than the element itself. */
 function useHasOverflow(ref: React.RefObject<HTMLElement | null>): boolean {
@@ -213,6 +214,52 @@ export const SERVICE_LABELS: Record<string, string> = {
   deep: "Deep Clean",
   office: "Office",
 };
+
+/**
+ * Airbnb's own color, wherever an Airbnb job is drawn: calendar chips, badges,
+ * the day panel. Violet because nothing else in the dashboards is — coral is
+ * the brand, emerald means confirmed, amber means "look at this", blue means
+ * in progress — so an Airbnb turnover reads at a glance, and reads the same on
+ * the admin calendar, the staff calendar and the appointments table.
+ * violet-900 on violet-100 measures about 10:1, well past the 4.5:1 floor.
+ */
+export const AIRBNB_CHIP_CLASS = "bg-violet-100 text-violet-900";
+export const AIRBNB_BADGE_CLASS = "bg-violet-100 text-violet-900 ring-1 ring-violet-200";
+
+export function AirbnbBadge({ auto = false, className = "" }: { auto?: boolean; className?: string }) {
+  return (
+    <span
+      className={`inline-block w-fit rounded-full px-2 py-0.5 text-[10px] font-semibold ${AIRBNB_BADGE_CLASS} ${className}`}
+      title={auto ? "Booked automatically from the host's Airbnb calendar" : "Airbnb cleaning"}
+    >
+      {auto ? "Auto · Airbnb" : "Airbnb"}
+    </span>
+  );
+}
+
+/** One colour per payment position, reusing the palette the status badges already speak. */
+export const PAYMENT_STATUS_STYLES: Record<BookingPaymentStatus, string> = {
+  deposit_due: "bg-amber-100 text-amber-800",
+  deposit_paid: "bg-emerald-100 text-emerald-700",
+  pay_after_service: "bg-slate-100 text-slate-700",
+  balance_pending_approval: "bg-amber-100 text-amber-800",
+  balance_due: "bg-blue-100 text-blue-700",
+  unpaid: "bg-red-100 text-red-600",
+  paid: "bg-emerald-100 text-emerald-700",
+  paid_offline: "bg-emerald-100 text-emerald-700",
+  released: "bg-muted text-muted-foreground",
+};
+
+export function PaymentStatusBadge({ status }: { status: BookingPaymentStatus }) {
+  return (
+    <span
+      className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold ${PAYMENT_STATUS_STYLES[status] ?? "bg-muted text-muted-foreground"}`}
+      title="Payment position, from the booking and its balance invoice"
+    >
+      {PAYMENT_STATUS_LABELS[status] ?? status}
+    </span>
+  );
+}
 
 export function fmtMoney(n: number | null | undefined): string {
   return `$${Number(n ?? 0).toLocaleString()}`;

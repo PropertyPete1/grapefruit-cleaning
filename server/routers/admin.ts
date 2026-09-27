@@ -30,7 +30,10 @@ import { isSlotBookable } from "@shared/availability";
 import { durationHoursFor } from "@shared/duration";
 import { todayInBookingZone } from "@shared/leadTime";
 import { CUSTOM_ITEM_MAX, CUSTOM_ITEM_MIN } from "@shared/invoiceItems";
+import { holdsCalendarSlot } from "@shared/bookingStatus";
+import { derivePaymentStatus } from "@shared/paymentStatus";
 import { composeAddress, PROPERTY_TYPES } from "@shared/property";
+import { applyCancellationSideEffectsSafely } from "../cancellation";
 import {
   approveBalanceInvoice,
   issueBalanceSafely,
@@ -141,9 +144,26 @@ export const adminRouter = router({
 
   // ---------- Appointments ----------
   bookings: adminProcedure
-    .input(z.object({ status: bookingStatusEnum.optional(), from: z.string().optional(), to: z.string().optional() }).optional())
+    .input(
+      z
+        .object({
+          status: bookingStatusEnum.optional(),
+          from: z.string().optional(),
+          to: z.string().optional(),
+          /**
+           * Calendar views pass true: cancelled and expired bookings have
+           * released their slot and must not be drawn as if the crew were
+           * still going. The appointments table leaves it off — that is where
+           * history stays visible.
+           */
+          onCalendar: z.boolean().optional(),
+        })
+        .optional()
+    )
     .query(async ({ input }) => {
-      const rows = await withDurationHours(await db.listBookings(input));
+      const { onCalendar, ...filter } = input ?? {};
+      const listed = await withDurationHours(await db.listBookings(filter));
+      const rows = onCalendar ? listed.filter(row => holdsCalendarSlot(row.status)) : listed;
       const now = new Date();
       // The owner's Details panel needs who to call — name, phone, email,
       // language — so the customer rides along, fetched in one batch. Flat
@@ -152,6 +172,11 @@ export const adminRouter = router({
       const customerIds = Array.from(new Set(rows.map(row => row.customerId)));
       const customerById = new Map(
         (await db.getCustomersByIds(customerIds)).map(customer => [customer.id, customer])
+      );
+      // The payment position of each job, derived from its balance invoice in
+      // one query for the whole page — what the calendar's day panel shows.
+      const invoiceByBooking = new Map(
+        (await db.listBalanceInvoicesForBookings(rows.map(row => row.id))).map(invoice => [invoice.bookingId, invoice])
       );
       // Derived, never the token itself: db.listBookings strips payToken, and
       // the owner fetches the actual URL through depositLink below when they
@@ -162,6 +187,13 @@ export const adminRouter = router({
         return {
           ...row,
           depositLink: depositLinkStatus(row, now),
+          paymentStatus: derivePaymentStatus({
+            status: row.status,
+            depositAmount: row.depositAmount,
+            depositAmountCents: row.depositAmountCents,
+            stripePaymentIntentId: row.stripePaymentIntentId,
+            invoice: invoiceByBooking.get(row.id) ?? null,
+          }),
           customerName: customer ? `${customer.firstName} ${customer.lastName}`.trim() : "",
           customerPhone: customer?.phone ?? null,
           customerEmail: customer?.email ?? null,
@@ -419,7 +451,16 @@ export const adminRouter = router({
       return { payUrl, expiresAt, emailSent };
     }),
   updateBookingStatus: adminProcedure
-    .input(z.object({ id: z.number().int(), status: bookingStatusEnum }))
+    .input(
+      z.object({
+        id: z.number().int(),
+        status: bookingStatusEnum,
+        /** Cancelling only: email the customer (or host) that the booking is off. */
+        notifyCustomer: z.boolean().optional(),
+        /** Cancelling only: a short line from the owner, quoted in that email. */
+        note: z.string().trim().max(500).optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       // Read first: only an actual confirmed → in progress move is a job
       // starting, and that is what the customer gets told about.
@@ -478,6 +519,17 @@ export const adminRouter = router({
         }
         throw error;
       }
+      // Cancelling releases the slot on the write above (the generated slotKey
+      // goes NULL with the status). What else was riding on the job is cleared
+      // best-effort: unpaid balance invoices are voided so nobody is chased for
+      // a cleaning that is not happening, and the customer is told when asked.
+      let cancellation: { voidedInvoices: number; customerNotified: boolean } | undefined;
+      if (input.status === "cancelled" && before?.status !== "cancelled") {
+        cancellation = await applyCancellationSideEffectsSafely(input.id, {
+          notifyCustomer: input.notifyCustomer ?? false,
+          note: input.note,
+        });
+      }
       // Completing a job files its remaining balance for admin approval —
       // nothing reaches the customer until it is reviewed. Best-effort: never
       // fails the status update.
@@ -489,7 +541,7 @@ export const adminRouter = router({
       if (input.status === "in_progress" && before?.status === "confirmed") {
         await sendJobStartedEmailSafely(input.id);
       }
-      return { success: true } as const;
+      return { success: true, cancellation } as const;
     }),
   assignEmployee: adminProcedure
     .input(z.object({ bookingId: z.number().int(), employeeId: z.number().int().nullable() }))
@@ -692,11 +744,22 @@ export const adminRouter = router({
     .mutation(async ({ input }) => {
       const customer = await db.getCustomerById(input.customerId);
       if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Customer not found" });
+      // One listing, one row. A second property polling the same feed would
+      // book every checkout twice — the duplicate the owner would then have to
+      // cancel by hand each time.
+      const icalUrl = input.icalUrl.trim();
+      const duplicate = await db.findConnectedPropertyByIcalUrl(icalUrl);
+      if (duplicate) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `This calendar feed is already connected as "${duplicate.label}". Each Airbnb listing connects once — edit that property instead of adding it again.`,
+        });
+      }
       // Validate the feed at save time: a typo'd or revoked URL should bounce
       // here with a readable message, not fail silently every hour.
       let feed: { reservationCount: number; eventCount: number };
       try {
-        feed = await validateIcalFeed(input.icalUrl);
+        feed = await validateIcalFeed(icalUrl);
       } catch (error) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -705,6 +768,7 @@ export const adminRouter = router({
       }
       const id = await db.createConnectedProperty({
         ...input,
+        icalUrl,
         lastSyncAt: new Date(),
         lastSyncStatus: "ok",
         reservationCount: feed.reservationCount,
@@ -754,6 +818,14 @@ export const adminRouter = router({
       if (!property) throw new TRPCError({ code: "NOT_FOUND", message: "Property not found" });
       let reservationsFound: number | undefined;
       if (patch.icalUrl && patch.icalUrl !== property.icalUrl) {
+        patch.icalUrl = patch.icalUrl.trim();
+        const duplicate = await db.findConnectedPropertyByIcalUrl(patch.icalUrl);
+        if (duplicate && duplicate.id !== id) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `This calendar feed is already connected as "${duplicate.label}". Each Airbnb listing connects once.`,
+          });
+        }
         try {
           const feed = await validateIcalFeed(patch.icalUrl);
           reservationsFound = feed.reservationCount;

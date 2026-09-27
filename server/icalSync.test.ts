@@ -134,6 +134,9 @@ const autoRow = (overrides: Record<string, unknown> = {}) => ({
   estimatedHours: 2,
   scheduledDate: MONDAY,
   scheduledTime: "11:00",
+  // The checkout the feed last reported — written on every insert and move
+  // since the icalSourceDate fix, so a post-fix row always carries it.
+  icalSourceDate: MONDAY,
   status: "confirmed",
   totalAmount: 90,
   depositAmount: 0,
@@ -517,7 +520,10 @@ describe("conflict fallback", () => {
     ]);
     const summary = await syncConnectedProperty(property());
     expect(summary).toMatchObject({ created: 1, unplaced: 1 });
-    expect(written()).toMatchObject({ scheduledDate: null, scheduledTime: null, status: "confirmed" });
+    // Date known, time pending: the checkout day is never in doubt, so the
+    // turnover shows on the calendar as "time to be decided" instead of
+    // vanishing until someone places it. No time means no inventory held.
+    expect(written()).toMatchObject({ scheduledDate: MONDAY, scheduledTime: null, status: "confirmed" });
     const alerts = ownerAlerts();
     expect(alerts.some(t => t.includes("[ACTION NEEDED]"))).toBe(true);
     // The turnover exists either way — never silently dropped.
