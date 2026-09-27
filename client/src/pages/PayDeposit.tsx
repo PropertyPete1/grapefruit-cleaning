@@ -25,6 +25,7 @@ import {
   calculateQuote,
   CLEANING_TYPES,
   depositFor,
+  depositRateFor,
   EXTRA_IDS,
   type CleaningType,
   type ExtraId,
@@ -94,6 +95,9 @@ const COPY = {
     finishSteps: "Finish the steps above to unlock the deposit button.",
     finishStepsConfirm: "Finish the steps above to unlock the confirm button.",
     depositNote: "Your deposit secures your slot and comes off your final total. The rest is due after your cleaning.",
+    cashButton: "Pay with cash instead — no deposit",
+    cashNote: "Choose cash and we take no deposit: your time is reserved now, and you pay the full amount at your cleaning.",
+    cashFailed: "We couldn't save your cash choice. Please try again, or give us a call.",
     heldUntil: (d: string) => `This link is good through ${d}.`,
     loadFailed: "We couldn't load your booking. Please refresh, or give us a call.",
     payFailed: "We couldn't open the payment page. Please try again, or give us a call.",
@@ -156,6 +160,9 @@ const COPY = {
     finishSteps: "Complete los pasos anteriores para activar el botón de depósito.",
     finishStepsConfirm: "Complete los pasos anteriores para activar el botón de confirmación.",
     depositNote: "Su depósito aparta su horario y se descuenta de su total final. El resto se paga después de su limpieza.",
+    cashButton: "Prefiero pagar en efectivo — sin depósito",
+    cashNote: "Si elige efectivo no cobramos depósito: su horario queda apartado ahora y paga el total el día de su limpieza.",
+    cashFailed: "No pudimos guardar su elección de efectivo. Inténtelo de nuevo o llámenos.",
     heldUntil: (d: string) => `Este enlace está disponible hasta el ${d}.`,
     loadFailed: "No pudimos cargar su reserva. Actualice la página o llámenos.",
     payFailed: "No pudimos abrir la página de pago. Inténtelo de nuevo o llámenos.",
@@ -278,6 +285,11 @@ export default function PayDeposit() {
   const confirm = trpc.depositLink.confirm.useMutation({
     onSuccess: result => setConfirmedRef(result.reference),
   });
+  // PAY WITH CASH: no deposit, the booking confirms now, the whole amount is
+  // paid at the cleaning. Same server-side recompute as the pay path.
+  const chooseCash = trpc.depositLink.chooseCash.useMutation({
+    onSuccess: result => setConfirmedRef(result.reference),
+  });
 
   const data = link.data;
   const booking = data?.booking ?? null;
@@ -326,7 +338,8 @@ export default function PayDeposit() {
         base: quote.base,
         extrasTotal: quote.extrasTotal,
         total: centsToDollars(totalCents),
-        deposit: centsToDollars(depositCents(totalCents, booking.pricing.depositRate)),
+        // The per-type rate, exactly as the server prices it: Airbnb never deposits.
+        deposit: centsToDollars(depositCents(totalCents, depositRateFor(booking.quote.type, booking.pricing))),
       };
     }
     const quote = calculateQuote(
@@ -345,7 +358,7 @@ export default function PayDeposit() {
       base: quote.base,
       extrasTotal: quote.extrasTotal,
       total: withCoupon.total,
-      deposit: depositFor(withCoupon.total, booking.pricing.depositRate),
+      deposit: depositFor(withCoupon.total, depositRateFor(booking.quote.type, booking.pricing)),
     };
   }, [booking, chosen, catalog]);
 
@@ -818,7 +831,7 @@ export default function PayDeposit() {
 
         <Button
           className="mt-5 h-12 w-full rounded-xl bg-[#F26D5B] text-base font-bold hover:bg-[#e05c4a]"
-          disabled={pay.isPending || confirm.isPending || !complete}
+          disabled={pay.isPending || confirm.isPending || chooseCash.isPending || !complete}
           onClick={() => {
             // Selections only. Every figure above is a preview; the server
             // recomputes the price — and decides for itself whether a deposit
@@ -846,6 +859,33 @@ export default function PayDeposit() {
             c.payButton
           )}
         </Button>
+        {/* PAY WITH CASH sits under the card button whenever a deposit would be
+            taken. With no deposit owed anyway (Airbnb, or the dial at 0) the
+            confirm button already means "nothing today". */}
+        {!zeroDeposit && (
+          <>
+            <Button
+              variant="outline"
+              className="mt-2 h-12 w-full rounded-xl border-2 border-[#F26D5B] text-base font-bold text-[#F26D5B] hover:bg-[#FFF3F0]"
+              disabled={pay.isPending || confirm.isPending || chooseCash.isPending || !complete}
+              onClick={() =>
+                chooseCash.mutate(
+                  { token, extras: chosen, notes: noteText },
+                  { onError: error => toast.error(error.message || c.cashFailed) }
+                )
+              }
+            >
+              {chooseCash.isPending ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> {c.processing}
+                </>
+              ) : (
+                c.cashButton
+              )}
+            </Button>
+            {complete && <p className="mt-2 text-center text-xs text-[#9b918a]">{c.cashNote}</p>}
+          </>
+        )}
         {!complete && (
           <p className="mt-2 text-center text-xs text-[#9b918a]">
             {zeroDeposit ? c.finishStepsConfirm : c.finishSteps}

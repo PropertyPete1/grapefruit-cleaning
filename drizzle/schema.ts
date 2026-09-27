@@ -136,6 +136,17 @@ export const bookings = mysqlTable("bookings", {
   discountAppliedCents: int("discountAppliedCents"),
   stripeSessionId: varchar("stripeSessionId", { length: 255 }),
   stripePaymentIntentId: varchar("stripePaymentIntentId", { length: 255 }),
+  /**
+   * How the customer said they want to pay, when they said anything:
+   * "online" (card, the default when NULL) or "cash". Choosing cash at
+   * booking waives the deposit — depositAmount is written as 0 — and marks
+   * the job "cash pending" until the owner records the money as Paid in
+   * Cash. It is a stated preference, never a lock: the online link keeps
+   * working for a customer who changes their mind.
+   */
+  paymentPreference: mysqlEnum("paymentPreference", ["online", "cash"]),
+  /** When the customer chose cash (null = never chose). */
+  cashChosenAt: timestamp("cashChosenAt"),
   /** Timestamp when the 7-days-before reminder email was sent (null = not sent yet). */
   weekReminderSentAt: timestamp("weekReminderSentAt"),
   /** Timestamp when the 1-day-before reminder email was sent (null = not sent yet). */
@@ -571,6 +582,23 @@ export const invoices = mysqlTable("invoices", {
    */
   kind: mysqlEnum("kind", ["manual", "balance"]).default("manual").notNull(),
   /**
+   * What the customer sees this invoice called: "Service Type — Service
+   * Date", never the number above. A balance invoice snapshots both from its
+   * booking at creation; a manual invoice carries whatever the owner entered
+   * (either may be NULL, and the emails then say "Cleaning services" and drop
+   * the date). The number stays internal — admin pages and owner alerts.
+   */
+  serviceType: varchar("serviceType", { length: 20 }),
+  serviceDate: varchar("serviceDate", { length: 10 }),
+  /**
+   * The customer's declared way of paying THIS invoice: "cash" once they tap
+   * PAY WITH CASH on the payment email (or booked with cash), which stops the
+   * automatic card reminders and shows "Cash pending" in admin until the owner
+   * records the money. NULL/"online" = the card link is the expected route.
+   */
+  paymentPreference: mysqlEnum("paymentPreference", ["online", "cash"]),
+  cashChosenAt: timestamp("cashChosenAt"),
+  /**
    * Secret token behind the emailed payment link (/api/pay/balance/:token).
    * The route mints a fresh Stripe Checkout Session on each visit, so the
    * customer-facing link stays valid for the whole linkExpiresAt window even
@@ -594,6 +622,13 @@ export const invoices = mysqlTable("invoices", {
   lineItems: text("lineItems"),
   /** How the invoice was settled — null for zero-balance invoices covered by the deposit. */
   paidVia: mysqlEnum("paidVia", ["stripe", "manual"]),
+  /**
+   * The instrument behind paidVia, for the status the owner reads: "card" for
+   * Stripe, or the offline method recorded (cash, venmo, zelle, check, other).
+   * "cash" is what makes an invoice show as Paid in Cash. NULL on invoices
+   * settled before this column existed and on zero-balance auto-settlements.
+   */
+  paidMethod: varchar("paidMethod", { length: 40 }),
   /**
    * Automatic follow-ups sent for an unpaid balance link (0–2). The count is
    * the claim: each reminder's conditional UPDATE requires the expected count,

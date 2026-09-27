@@ -1465,7 +1465,7 @@ export async function updateInvoice(id: number, data: Partial<typeof invoices.$i
  */
 export async function settleUnpaidInvoice(
   id: number,
-  data: { paidAt: Date; paidVia: "stripe"; stripePaymentIntentId?: string }
+  data: { paidAt: Date; paidVia: "stripe"; paidMethod?: string; stripePaymentIntentId?: string }
 ): Promise<boolean> {
   const db = requireDb(await getDb());
   const result = await db
@@ -1609,6 +1609,8 @@ export async function listBalanceInvoicesForBookings(bookingIds: number[]) {
       bookingId: invoices.bookingId,
       status: invoices.status,
       paidVia: invoices.paidVia,
+      paidMethod: invoices.paidMethod,
+      paymentPreference: invoices.paymentPreference,
       amount: invoices.amount,
       amountCents: invoices.amountCents,
     })
@@ -1619,6 +1621,31 @@ export async function listBalanceInvoicesForBookings(bookingIds: number[]) {
   const latest = new Map<number, (typeof rows)[number]>();
   for (const row of rows) if (row.bookingId != null) latest.set(row.bookingId, row);
   return Array.from(latest.values());
+}
+
+/**
+ * Records that the customer tapped PAY WITH CASH on an invoice's payment
+ * email, at most once and only while the invoice is still open.
+ *
+ * A paid or voided invoice has nothing left to choose about, so the WHERE
+ * excludes both — the customer sees the "already paid" notice instead of a
+ * preference being written over a settled bill. Returns true for the tap that
+ * actually made the change; a second tap on the same link is a quiet no-op,
+ * so the owner is alerted once, not on every reload.
+ */
+export async function claimInvoiceCashPreference(id: number, now: Date = new Date()): Promise<boolean> {
+  const db = requireDb(await getDb());
+  const result = await db
+    .update(invoices)
+    .set({ paymentPreference: "cash", cashChosenAt: now })
+    .where(
+      and(
+        eq(invoices.id, id),
+        notInArray(invoices.status, ["paid", "void"]),
+        or(isNull(invoices.paymentPreference), ne(invoices.paymentPreference, "cash"))
+      )
+    );
+  return affectedRows(result) > 0;
 }
 
 /**
@@ -1715,6 +1742,13 @@ export async function recordOfflineInvoicePayment(args: {
   receivedOn: string;
   recordedByUserId: number;
   recordedAt?: Date;
+  /**
+   * "full" when this money is the whole job — no deposit was ever captured
+   * (an Airbnb turnover, or a customer who booked with cash) — so the ledger
+   * shows one full payment rather than a "balance" with no deposit before it.
+   * Defaults to the historical rule: balance on a booking, full without one.
+   */
+  paymentKind?: "balance" | "full";
 }): Promise<OfflineInvoicePaymentOutcome> {
   const db = requireDb(await getDb());
   const recordedAt = args.recordedAt ?? new Date();
@@ -1741,6 +1775,8 @@ export async function recordOfflineInvoicePayment(args: {
           status: "paid",
           paidAt,
           paidVia: "manual",
+          // The instrument, so "Paid in Cash" can be told from a Zelle transfer.
+          paidMethod: args.method,
           ...(invoice.status === "awaiting_approval"
             ? { approvedAt: recordedAt, approvedByUserId: args.recordedByUserId }
             : {}),
@@ -1756,7 +1792,7 @@ export async function recordOfflineInvoicePayment(args: {
           invoiceId: invoice.id,
           customerId: invoice.customerId,
           amountCents: args.amountCents,
-          kind: invoice.bookingId ? "balance" : "full",
+          kind: args.paymentKind ?? (invoice.bookingId ? "balance" : "full"),
           method: args.method,
           source: "offline",
           receivedOn: args.receivedOn,
@@ -1817,7 +1853,7 @@ export async function recordOfflineInvoicePayment(args: {
 
       return {
         outcome: "recorded",
-        invoice: { ...invoice, status: "paid", paidAt, paidVia: "manual" },
+        invoice: { ...invoice, status: "paid", paidAt, paidVia: "manual", paidMethod: args.method },
         paymentId,
         tipPaymentId,
         bookingCompleted,

@@ -65,7 +65,9 @@ describe("the payment receipt", () => {
   it("shows the deposit credit on a booking-backed balance", () => {
     const { body } = buildPaymentReceiptEmail(BASE);
     expect(body).toContain("Reference: GFC-ABC123");
-    expect(body).toContain("Service date: 2026-08-18");
+    // The customer's name for the bill, never the invoice number (spec: "Service Type — Date").
+    expect(body).toContain("Service: Residential Cleaning — August 18, 2026");
+    expect(body).not.toContain("INV-TEST-0001");
     expect(body).toContain("Deposit paid earlier: $34");
     expect(body).toContain("Service total: $170");
   });

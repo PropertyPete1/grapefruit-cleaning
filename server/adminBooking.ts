@@ -27,6 +27,7 @@ import {
   applyCouponToTotal,
   calculateQuote,
   depositFor,
+  depositRateFor,
   generateBookingReference,
   type PricingConfig,
 } from "@shared/pricing";
@@ -325,7 +326,8 @@ export async function createAdminBooking(
       )
     : null;
   const coupon = breakdown ? await applyCoupon(breakdown.total, input.couponCode) : null;
-  const deposit = coupon ? depositFor(coupon.total, pricing.depositRate) : null;
+  // Per-type rate: an Airbnb turnover prices its deposit at 0 whatever the dial says.
+  const deposit = coupon ? depositFor(coupon.total, depositRateFor(input.serviceType, pricing)) : null;
 
   const holdMinutes = adminHoldMinutes(await db.getSetting(ADMIN_HOLD_SETTING_KEY));
   const reference = generateBookingReference();

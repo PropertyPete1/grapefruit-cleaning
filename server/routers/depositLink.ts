@@ -27,7 +27,7 @@ import { z } from "zod";
 import { durationHoursFor } from "@shared/duration";
 import { fitsBeforeClose, isSlotBookable, overlapsAny } from "@shared/availability";
 import { ADMIN_HOLD_SETTING_KEY, adminHoldMinutes } from "@shared/holdWindow";
-import { calculateCatalogQuote, CLEANING_TYPES, depositFor, EXTRA_IDS, type ExtraId } from "@shared/pricing";
+import { calculateCatalogQuote, CLEANING_TYPES, depositFor, depositRateFor, EXTRA_IDS, isDepositFree, type ExtraId } from "@shared/pricing";
 import { centsToDollars, depositCents, dollarsToCents, legacyWholeDollars } from "@shared/money";
 import * as db from "../db";
 import { applyCoupon, computeBasePrice, resolveEffectiveSqft, usableCoupon } from "../adminBooking";
@@ -172,7 +172,8 @@ async function priceWithExtras(
     if (coupon?.percentOff) discountAppliedCents = Math.round((breakdown.totalCents * coupon.percentOff) / 100);
     else if (coupon?.amountOff) discountAppliedCents = Math.min(coupon.amountOff * 100, breakdown.totalCents - 100);
     const totalCents = Math.max(100, breakdown.totalCents - discountAppliedCents);
-    const exactDepositCents = depositCents(totalCents, pricing.depositRate);
+    // Per-type rate: an Airbnb turnover takes no deposit whatever the dial says.
+    const exactDepositCents = depositCents(totalCents, depositRateFor(booking.serviceType, pricing));
     return {
       pricing,
       catalog,
@@ -203,7 +204,7 @@ async function priceWithExtras(
   );
   const coupon = await applyCoupon(breakdown.total, booking.couponCode);
   const totalCents = dollarsToCents(coupon.total);
-  const legacyDeposit = depositFor(coupon.total, pricing.depositRate);
+  const legacyDeposit = depositFor(coupon.total, depositRateFor(booking.serviceType, pricing));
   return {
     pricing,
     catalog,
@@ -331,6 +332,9 @@ export const depositLinkRouter = router({
           basePrice: money.breakdown?.base ?? null,
           total: money.total,
           deposit: money.deposit,
+          /** Airbnb: one full payment after the cleaning, so the page never offers a deposit. */
+          depositFree: isDepositFree(booking.serviceType),
+          paymentPreference: booking.paymentPreference ?? null,
           expiresAt: booking.payTokenExpiresAt,
         },
       };
@@ -782,5 +786,78 @@ export const depositLinkRouter = router({
       await finalizeBooking(booking.id, null);
 
       return { confirmed: true as const, reference: booking.reference };
+    }),
+
+  /**
+   * PAY WITH CASH: the customer confirms the booking with no deposit and a
+   * stated intention to pay the whole amount in cash after the cleaning.
+   *
+   * The same recompute-and-guard run as the pay path — completeness, the
+   * duration ladder, the live price — but the deposit is written as 0 whatever
+   * the dial says, the preference lands on the row, and the booking confirms
+   * through the same finalizeBooking claim (once, with the owner's
+   * "your link was completed" email, which now says they chose cash).
+   */
+  chooseCash: publicProcedure
+    .input(
+      z.object({
+        token: z.string().min(1).max(128),
+        extras: extrasInput,
+        notes: z.string().max(1000).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      assertRateLimit("depositLinkPay", clientIp(ctx), 10, 60_000);
+      const { booking, locale } = await openLinkBooking(input.token);
+      if (!isBookingComplete(booking)) {
+        refuse(
+          locale,
+          "A few details are still missing — finish the steps above and the cash option will unlock.",
+          "Aún faltan algunos detalles — complete los pasos anteriores y la opción de efectivo se activará."
+        );
+      }
+
+      const { schedule, durations } = await loadSchedulingRules();
+      const estimatedHours = durationHoursFor(booking.serviceType, booking.sqft, durations);
+      if (!fitsBeforeClose(booking.scheduledTime!, estimatedHours, booking.scheduledDate!, schedule)) {
+        refuse(
+          locale,
+          "Your service now takes longer than the time left that day. Give us a call and we'll find you another time.",
+          "Su servicio ahora toma más tiempo del que queda ese día. Llámenos y con gusto le buscamos otro horario."
+        );
+      }
+
+      const money = await priceWithExtras(booking, input.extras);
+      if (money.total == null) {
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Pricing failed" });
+      }
+
+      const bookingPatch = {
+        extras: JSON.stringify(input.extras),
+        totalAmount: money.total,
+        totalAmountCents: money.totalCents,
+        // Cash means no deposit — the whole amount is collected at the cleaning.
+        depositAmount: 0,
+        depositAmountCents: 0,
+        discountApplied: money.discountApplied,
+        discountAppliedCents: money.discountAppliedCents,
+        estimatedHours,
+        paymentPreference: "cash" as const,
+        cashChosenAt: new Date(),
+        ...(input.notes !== undefined ? { notes: mergeCustomerNotes(booking.notes, input.notes) } : {}),
+      };
+      if (money.selectedCatalog) {
+        await db.updateBookingWithAddons(
+          booking.id,
+          bookingPatch,
+          bookingAddonSnapshots(money.selectedCatalog.addons, money.selectedCatalog.catalog)
+        );
+      } else {
+        await db.updateBooking(booking.id, bookingPatch);
+      }
+
+      await finalizeBooking(booking.id, null);
+
+      return { confirmed: true as const, reference: booking.reference, paymentPreference: "cash" as const };
     }),
 });

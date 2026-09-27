@@ -145,6 +145,27 @@ export function depositFor(total: number, depositRate: number): number {
   return Math.max(1, Math.round(total * depositRate));
 }
 
+/**
+ * The deposit rate that applies to ONE service type.
+ *
+ * Airbnb cleanings never take a deposit: a turnover is one payment for the
+ * full amount, collected after the cleaning through the balance invoice
+ * (online or in cash) — there is no "deposit → remaining balance" split. Every
+ * other service follows the admin's deposit dial. Every quote, booking,
+ * deposit link and admin-created booking prices its deposit through this one
+ * function, so the rule cannot be applied in one entry point and forgotten in
+ * another.
+ */
+export function depositRateFor(type: CleaningType | string | null | undefined, config: PricingConfig): number {
+  if (type === "airbnb") return 0;
+  return config.depositRate;
+}
+
+/** True when this service type never takes a deposit (Airbnb). */
+export function isDepositFree(type: CleaningType | string | null | undefined): boolean {
+  return type === "airbnb";
+}
+
 /** Setting key under which the pricing override JSON is stored. */
 export const PRICING_SETTING_KEY = "pricing_config";
 
@@ -579,7 +600,7 @@ export function calculateCatalogQuote(
   const discountRate = config.frequencyDiscounts[input.frequency] ?? 0;
   const discountCents = Math.round(subtotalCents * discountRate);
   const totalCents = subtotalCents - discountCents;
-  const exactDepositCents = depositCents(totalCents, config.depositRate);
+  const exactDepositCents = depositCents(totalCents, depositRateFor(input.type, config));
   return {
     base: centsToDollars(baseCents),
     rooms: 0,
@@ -635,7 +656,8 @@ export function calculateQuote(input: QuoteInput, config: PricingConfig = DEFAUL
   const discountRate = config.frequencyDiscounts[input.frequency] ?? 0;
   const discount = round2(subtotal * discountRate);
   const total = round2(subtotal - discount);
-  const deposit = round2(total * config.depositRate);
+  // Airbnb prices its deposit at 0 whatever the dial says — see depositRateFor.
+  const deposit = round2(total * depositRateFor(input.type, config));
   return { base, rooms, sqftCharge, extrasTotal, subtotal, discount, total, deposit, startingAt, customQuote };
 }
 

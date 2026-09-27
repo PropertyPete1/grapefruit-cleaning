@@ -100,8 +100,8 @@ describe("payment status, derived from the booking and its balance invoice", () 
 
   it("every status has a label the badge can show", () => {
     const statuses: BookingPaymentStatus[] = [
-      "deposit_due", "deposit_paid", "pay_after_service", "balance_pending_approval",
-      "balance_due", "unpaid", "paid", "paid_offline", "released",
+      "deposit_due", "deposit_paid", "pay_after_service", "cash_pending", "balance_pending_approval",
+      "balance_due", "unpaid", "paid", "paid_cash", "paid_offline", "released",
     ];
     for (const status of statuses) expect(PAYMENT_STATUS_LABELS[status], status).toBeTruthy();
   });
@@ -117,7 +117,8 @@ describe("payment status, derived from the booking and its balance invoice", () 
       { id: 502, bookingId: 2, status: "sent", paidVia: null, amount: 120, amountCents: 12000 },
     ]);
     const rows = await adminCaller().bookings({ onCalendar: true });
-    expect(rows.map(r => r.paymentStatus)).toEqual(["paid_offline", "balance_due", "pay_after_service"]);
+    // The Airbnb turnover reads Unpaid until its one payment lands — never "pay after cleaning".
+    expect(rows.map(r => r.paymentStatus)).toEqual(["paid_offline", "balance_due", "unpaid"]);
     expect(mockListBalanceInvoices).toHaveBeenCalledTimes(1);
     expect(mockListBalanceInvoices).toHaveBeenCalledWith([1, 2, 3]);
   });

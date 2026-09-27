@@ -27,6 +27,7 @@ import type { AddonCatalogPayload } from "@shared/addonCatalog";
 import { lineItemAmountCents, lineItemName, parseLineItems } from "@shared/invoiceItems";
 import { centsToDollars } from "@shared/money";
 import { OFFLINE_PAYMENT_METHODS, type OfflinePaymentMethod } from "@shared/payments";
+import { CLEANING_TYPES } from "@shared/pricing";
 import { usePricing } from "@/hooks/usePricing";
 import { en } from "@/i18n/translations/en";
 import {
@@ -37,7 +38,17 @@ import {
   parseCustomItems,
   type CustomItemRow,
 } from "./InvoiceItemsEditor";
-import { NotesBlock, PageHeader, RowCard, StatusBadge, TableOrCards, fmtDate, fmtMoney } from "./adminShared";
+import {
+  InvoicePaymentBadge,
+  NotesBlock,
+  PageHeader,
+  RowCard,
+  SERVICE_LABELS,
+  StatusBadge,
+  TableOrCards,
+  fmtDate,
+  fmtMoney,
+} from "./adminShared";
 import { InvoiceContextPanel } from "./InvoiceContextPanel";
 
 const INVOICE_STATUSES = ["draft", "sent", "overdue", "void"] as const;
@@ -69,6 +80,8 @@ type PendingInvoice = {
 type OfflineInvoice = {
   id: number;
   number: string;
+  /** "Service Type — Date": what the customer calls this bill. */
+  serviceReference?: string;
   customerId: number;
   customerName?: string | null;
   amount: number;
@@ -143,8 +156,11 @@ function OfflinePaymentDialog({
         {invoice && (
           <div className="space-y-4">
             <div className="rounded-xl bg-muted/60 p-3 text-sm">
-              <p className="font-semibold">{invoice.number}</p>
-              <p className="text-muted-foreground">{customer} · balance {fmtMoney(invoiceAmount(invoice))}</p>
+              <p className="font-semibold">{invoice.serviceReference ?? invoice.number}</p>
+              <p className="text-muted-foreground">
+                {customer} · balance {fmtMoney(invoiceAmount(invoice))}
+                {invoice.serviceReference && <span className="ml-1 font-mono text-[10px]">{invoice.number}</span>}
+              </p>
             </div>
             <div>
               <Label htmlFor="offline-amount">Amount received</Label>
@@ -378,7 +394,7 @@ export default function AdminInvoices() {
   const customers = trpc.admin.customers.useQuery({});
   const addonCatalog = trpc.booking.addonCatalog.useQuery();
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ customerId: "", amount: "", dueDate: "" });
+  const [form, setForm] = useState({ customerId: "", amount: "", dueDate: "", serviceType: "", serviceDate: "" });
   const [newAddons, setNewAddons] = useState<string[]>([]);
   const [newCustoms, setNewCustoms] = useState<CustomItemRow[]>([]);
   const pricing = usePricing();
@@ -398,7 +414,7 @@ export default function AdminInvoices() {
     onSuccess: r => {
       utils.admin.invoices.invalidate();
       setOpen(false);
-      setForm({ customerId: "", amount: "", dueDate: "" });
+      setForm({ customerId: "", amount: "", dueDate: "", serviceType: "", serviceDate: "" });
       setNewAddons([]);
       setNewCustoms([]);
       // A manual invoice now bills the customer, so what matters is whether the
@@ -517,6 +533,38 @@ export default function AdminInvoices() {
                     </SelectContent>
                   </Select>
                 </div>
+                {/* What the customer will see the bill called — "Deep Cleaning —
+                    September 28, 2026". The invoice number stays internal. */}
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <Label>Service</Label>
+                    <Select value={form.serviceType} onValueChange={v => setForm(f => ({ ...f, serviceType: v }))}>
+                      <SelectTrigger className="mt-1.5 rounded-xl" aria-label="Service type">
+                        <SelectValue placeholder="Cleaning services" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {CLEANING_TYPES.map(type => (
+                          <SelectItem key={type} value={type}>
+                            {SERVICE_LABELS[type] ?? type}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label htmlFor="inv-service-date">Service date</Label>
+                    <Input
+                      id="inv-service-date"
+                      type="date"
+                      className="mt-1.5 rounded-xl"
+                      value={form.serviceDate}
+                      onChange={e => setForm(f => ({ ...f, serviceDate: e.target.value }))}
+                    />
+                  </div>
+                </div>
+                <p className="-mt-2 text-xs text-muted-foreground">
+                  The customer's emails call this invoice by service and date, never by its number.
+                </p>
                 <div>
                   <Label htmlFor="inv-amount">Amount (USD)</Label>
                   <Input
@@ -582,6 +630,8 @@ export default function AdminInvoices() {
                         customerId: Number(form.customerId),
                         amount: newBase,
                         dueDate: form.dueDate || undefined,
+                        serviceType: (form.serviceType || undefined) as (typeof CLEANING_TYPES)[number] | undefined,
+                        serviceDate: form.serviceDate || undefined,
                         addonIds: newAddons,
                         customItems: newCustomsParsed,
                       })
@@ -672,6 +722,7 @@ export default function AdminInvoices() {
               <thead>
                 <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted-foreground">
                   <th className="px-6 py-3 font-medium">Number</th>
+                  <th className="px-6 py-3 font-medium">Service</th>
                   <th className="px-6 py-3 font-medium">Customer</th>
                   <th className="px-6 py-3 font-medium">Amount</th>
                   <th className="px-6 py-3 font-medium">Due date</th>
@@ -698,6 +749,8 @@ export default function AdminInvoices() {
                         {inv.number}
                       </button>
                     </td>
+                    {/* The customer's name for this bill — what their emails say. */}
+                    <td className="px-6 py-3.5 text-sm font-medium text-foreground">{inv.serviceReference}</td>
                     <td className="px-6 py-3.5">{inv.customerName ?? customerName(inv.customerId)}</td>
                     <td className="px-6 py-3.5">
                       <span className="font-semibold">{fmtMoney(invoiceAmount(inv))}</span>
@@ -760,15 +813,16 @@ export default function AdminInvoices() {
                       )}
                     </td>
                     <td className="px-6 py-3.5">
-                      <div className="flex items-center gap-2">
-                        {inv.status === "paid" ? (
-                          <StatusBadge status={inv.status} />
-                        ) : (
+                      <div className="flex flex-wrap items-center gap-2">
+                        {/* Where the money stands, in the words the booking badge uses:
+                            Paid online / Paid in Cash / Cash pending / Unpaid. */}
+                        <InvoicePaymentBadge status={inv.paymentStatus} />
+                        {inv.status !== "paid" && (
                           <Select
                             value={inv.status}
                             onValueChange={v => updateStatus.mutate({ id: inv.id, status: v as (typeof INVOICE_STATUSES)[number] })}
                           >
-                            <SelectTrigger className="h-8 w-32 rounded-lg text-xs">
+                            <SelectTrigger className="h-8 w-32 rounded-lg text-xs" aria-label="Invoice status">
                               <SelectValue><StatusBadge status={inv.status} /></SelectValue>
                             </SelectTrigger>
                             <SelectContent>
@@ -786,7 +840,7 @@ export default function AdminInvoices() {
                   </tr>
                   {expandedIds.includes(inv.id) && (
                     <tr id={`invoice-details-${inv.id}`} className="border-b border-border/60 bg-muted/20 last:border-0">
-                      <td colSpan={6} className="px-6 pb-4 pt-1">
+                      <td colSpan={7} className="px-6 pb-4 pt-1">
                         <InvoiceContextPanel invoice={inv} />
                       </td>
                     </tr>
@@ -799,10 +853,15 @@ export default function AdminInvoices() {
             cards={(invoices.data ?? []).map(inv => (
               <RowCard
                 key={inv.id}
-                title={<span className="font-mono text-xs font-semibold text-primary">{inv.number}</span>}
-                subtitle={inv.customerName ?? customerName(inv.customerId)}
+                title={<span>{inv.serviceReference}</span>}
+                subtitle={
+                  <>
+                    {inv.customerName ?? customerName(inv.customerId)}
+                    <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">{inv.number}</span>
+                  </>
+                }
                 amount={fmtMoney(invoiceAmount(inv))}
-                badge={<StatusBadge status={inv.status} />}
+                badge={<InvoicePaymentBadge status={inv.paymentStatus} />}
                 details={[
                   { label: "Due date", value: inv.dueDate ? fmtDate(inv.dueDate) : "—" },
                   {
@@ -833,14 +892,12 @@ export default function AdminInvoices() {
                 note={<InvoiceContextPanel invoice={inv} />}
                 actions={
                   <>
-                    {inv.status === "paid" ? (
-                      <StatusBadge status={inv.status} />
-                    ) : (
+                    {inv.status !== "paid" && (
                       <Select
                         value={inv.status}
                         onValueChange={v => updateStatus.mutate({ id: inv.id, status: v as (typeof INVOICE_STATUSES)[number] })}
                       >
-                        <SelectTrigger className="h-9 flex-1 rounded-lg text-xs"><SelectValue /></SelectTrigger>
+                        <SelectTrigger className="h-9 min-w-24 flex-1 rounded-lg text-xs" aria-label="Invoice status"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           {INVOICE_STATUSES.map(st => <SelectItem key={st} value={st} className="capitalize">{st}</SelectItem>)}
                         </SelectContent>

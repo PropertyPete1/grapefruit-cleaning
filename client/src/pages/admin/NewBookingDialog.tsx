@@ -267,8 +267,11 @@ export function NewBookingDialog({ initialDate, open: controlledOpen, onOpenChan
               </p>
               {result.basePrice != null && result.deposit != null ? (
                 <p className="mt-1 text-xs text-emerald-800">
-                  Base price {`$${result.basePrice}`} · deposit {`$${result.deposit}`}. Both go up if they add
-                  extras — the link recalculates before they pay.
+                  {result.deposit > 0
+                    ? `Base price $${result.basePrice} · deposit $${result.deposit}. Both go up if they add extras — the link recalculates before they pay.`
+                    : serviceType === "airbnb"
+                      ? `Base price $${result.basePrice} · no deposit — Airbnb is one full payment after the cleaning. The price goes up if they add extras.`
+                      : `Base price $${result.basePrice} · no deposit — they confirm on the link and pay after the cleaning. The price goes up if they add extras.`}
                 </p>
               ) : (
                 <p className="mt-1 text-xs text-emerald-800">

@@ -4,6 +4,7 @@ import {
   calculateCatalogQuote,
   calculateQuote,
   depositFor,
+  depositRateFor,
   EXTRA_IDS,
   generateBookingReference,
   parsePricingConfig,
@@ -37,6 +38,7 @@ import {
 } from "../bookingRules";
 import { parseAdminProvided } from "../depositLinkRules";
 import { composeAddress, plausibleVerifiedSqft, PROPERTY_TYPES } from "@shared/property";
+import { PAYMENT_PREFERENCES } from "@shared/paymentPreference";
 import { sendBookingEmails } from "../emails";
 import { lookupPropertySqft } from "../property";
 import { publicOrigin } from "../publicOrigin";
@@ -292,6 +294,12 @@ export const bookingRouter = router({
         notes: z.string().max(2000).optional(),
         locale: z.enum(["en", "es"]),
         couponCode: z.string().max(40).optional(),
+        /**
+         * PAY ONLINE (default) or PAY WITH CASH. Cash waives the deposit: the
+         * booking confirms on submit with no Stripe step and carries "cash
+         * pending" until the owner records the money after the cleaning.
+         */
+        paymentPreference: z.enum(PAYMENT_PREFERENCES).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -400,9 +408,12 @@ export const bookingRouter = router({
         }
       }
 
-      // Zero when the deposit dial is at 0 — the mode where checkout skips
-      // Stripe entirely and the booking confirms on submit.
-      const exactDepositCents = depositCents(totalCents, pricing.depositRate);
+      // Zero when the deposit dial is at 0, for an Airbnb turnover (one full
+      // payment after the cleaning — never a deposit), or when the customer
+      // chose to pay in cash. Each is the mode where checkout skips Stripe
+      // entirely and the booking confirms on submit.
+      const payingCash = input.paymentPreference === "cash";
+      const exactDepositCents = payingCash ? 0 : depositCents(totalCents, depositRateFor(input.quote.type, pricing));
       const total = centsToDollars(totalCents);
       const deposit = centsToDollars(exactDepositCents);
       const discountApplied = legacyWholeDollars(discountAppliedCents);
@@ -473,6 +484,10 @@ export const bookingRouter = router({
           addonsAmountCents,
           totalAmountCents: totalCents,
           depositAmountCents: exactDepositCents,
+          // What the customer said about paying, kept as they said it: the
+          // preference travels onto the balance invoice and the admin badges.
+          paymentPreference: input.paymentPreference ?? null,
+          cashChosenAt: payingCash ? new Date() : null,
           // With no deposit to collect there is nothing to be pending about:
           // the booking is confirmed by the insert itself. No Stripe session
           // ever exists for it, so no stale-hold clock and no expiry either.
@@ -520,6 +535,7 @@ export const bookingRouter = router({
             time: input.time,
             total,
             deposit: 0,
+            paymentPreference: input.paymentPreference ?? null,
             customerFirstName: input.firstName,
           },
         };
@@ -609,6 +625,7 @@ export const bookingRouter = router({
           time: updated.scheduledTime ?? "",
           total: updated.totalAmount,
           deposit: updated.depositAmount,
+          paymentPreference: updated.paymentPreference ?? null,
           customerFirstName: customer?.firstName ?? "",
           email: customer?.email ?? "",
         },
@@ -627,6 +644,7 @@ export const bookingRouter = router({
       time: booking.scheduledTime,
       total: booking.totalAmount,
       deposit: booking.depositAmount,
+      paymentPreference: booking.paymentPreference ?? null,
     };
   }),
 });
@@ -793,6 +811,7 @@ export async function applyConfirmationSideEffects(
       bizPhone,
       rescheduleUrl: rescheduleAccess.url,
       slotConflict,
+      paymentPreference: booking.paymentPreference ?? null,
     });
   }
 }

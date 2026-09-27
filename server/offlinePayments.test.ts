@@ -120,7 +120,8 @@ describe("recordOfflineInvoicePayment transaction", () => {
       tipPaymentId: 72,
       bookingCompleted: true,
     });
-    expect(harness.state.invoice).toMatchObject({ status: "paid", paidVia: "manual" });
+    // The instrument rides on the invoice too, so "Paid in Cash" can be told from a Zelle transfer.
+    expect(harness.state.invoice).toMatchObject({ status: "paid", paidVia: "manual", paidMethod: "cash" });
     expect(harness.state.booking).toMatchObject({ status: "completed", tipAmount: 20, tipAmountCents: 2000 });
     expect(harness.state.inserts).toEqual([
       expect.objectContaining({
@@ -149,6 +150,12 @@ describe("recordOfflineInvoicePayment transaction", () => {
     ]);
 
     expect(balanceReminderAction(result.outcome === "recorded" ? result.invoice : never, new Date("2026-09-30"))).toBeNull();
+  });
+
+  it("books the money as one full payment when told no deposit preceded it", async () => {
+    const result = await recordOfflineInvoicePayment({ ...INPUT, tipAmountCents: 0, paymentKind: "full" });
+    expect(result).toMatchObject({ outcome: "recorded" });
+    expect(harness.state.inserts).toEqual([expect.objectContaining({ kind: "full", method: "cash", source: "offline" })]);
   });
 
   it("rejects a different amount before any write", async () => {
