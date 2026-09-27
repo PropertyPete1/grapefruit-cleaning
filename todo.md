@@ -520,6 +520,6 @@
 - [x] Confirm the release covers cancelled-booking calendar removal, day-click panel, unified Airbnb color, iCal feed-date synchronization, and duplicate-feed protection
 - [x] Confirm the pulled range contains no database migration or environment-variable changes
 - [x] Run TypeScript, the complete Vitest suite, production build, and non-mutating preview smoke checks
-- [ ] Save a deployment checkpoint and publish it with a genuine production restart
-- [ ] Fetch production `/api/version`, prove a fresh boot timestamp, and confirm the running build contains PR #18
-- [ ] Verify the production calendar/Airbnb release non-destructively and confirm managed source remains aligned with private GitHub `main`
+- [x] Save a deployment checkpoint and publish it with a genuine production restart
+- [x] Fetch production `/api/version`, prove a fresh boot timestamp, and confirm the running build contains PR #18
+- [x] Verify the production calendar/Airbnb release non-destructively and confirm managed source remains aligned with private GitHub `main`
