@@ -514,3 +514,12 @@
 - [x] Run focused tests, TypeScript, the complete suite, and production build; no schema migration was required
 - [x] Deploy with a genuine production restart, prove `/api/version`, synchronize private GitHub main, and provide Karyme the logout/login `/admin` confirmation steps
 - [x] Karyme logs out, signs back in through `/admin`, and confirms the Admin dashboard loads instead of `/admin/no-access`
+
+## PR #18 deployment — calendar and Airbnb fixes
+- [x] Pull latest GitHub `main` first and prove merged PR #18 commit `ffae63f` is present
+- [x] Confirm the release covers cancelled-booking calendar removal, day-click panel, unified Airbnb color, iCal feed-date synchronization, and duplicate-feed protection
+- [x] Confirm the pulled range contains no database migration or environment-variable changes
+- [x] Run TypeScript, the complete Vitest suite, production build, and non-mutating preview smoke checks
+- [ ] Save a deployment checkpoint and publish it with a genuine production restart
+- [ ] Fetch production `/api/version`, prove a fresh boot timestamp, and confirm the running build contains PR #18
+- [ ] Verify the production calendar/Airbnb release non-destructively and confirm managed source remains aligned with private GitHub `main`
