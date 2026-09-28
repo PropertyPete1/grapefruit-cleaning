@@ -529,7 +529,7 @@
 - [x] Inspect migration 0033 and verify its seven additive nullable columns before applying it
 - [x] Apply migration 0033 only, then prove the applied journal record exists in `__drizzle_migrations`
 - [x] Run TypeScript, focused release regressions, the complete Vitest suite, and a production build
-- [ ] Save a release checkpoint and publish with a genuine production restart; do not change any environment values
-- [ ] Fetch production `/api/version` and prove the fresh running build contains the merged release
-- [ ] Fetch live EN and ES pricing pages and prove Residential opens at $79.99 below 600 sq ft, not $67.99
-- [ ] Confirm private GitHub, managed source, and the production-tracked release are synchronized
+- [x] Save a release checkpoint and publish with a genuine production restart; do not change any environment values
+- [x] Fetch production `/api/version` and prove the fresh running build contains the merged release
+- [x] Fetch live EN and ES pricing pages and prove Residential opens at $79.99 below 600 sq ft, not $67.99
+- [x] Confirm private GitHub, managed source, and the production-tracked release are synchronized
