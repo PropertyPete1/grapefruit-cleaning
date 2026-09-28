@@ -31,17 +31,20 @@ import { durationHoursFor } from "@shared/duration";
 import { todayInBookingZone } from "@shared/leadTime";
 import { CUSTOM_ITEM_MAX, CUSTOM_ITEM_MIN } from "@shared/invoiceItems";
 import { holdsCalendarSlot } from "@shared/bookingStatus";
-import { derivePaymentStatus } from "@shared/paymentStatus";
+import { deriveInvoicePaymentStatus, derivePaymentStatus } from "@shared/paymentStatus";
+import { serviceReference } from "@shared/invoiceReference";
 import { composeAddress, PROPERTY_TYPES } from "@shared/property";
 import { applyCancellationSideEffectsSafely } from "../cancellation";
 import {
   approveBalanceInvoice,
+  balanceDueForBooking,
   issueBalanceSafely,
   issueManualInvoice,
   originFromRequest,
   resendBalanceLink,
-  sendPaymentReceiptSafely,
 } from "../balance";
+import { settlementKind } from "../balanceRules";
+import { finishOfflineSettlement, payBookingInCash } from "../cashPayment";
 import { healthProblemCount, sendWeeklyDigest } from "../ownerDigest";
 import { balanceLinkStatus } from "../balanceRules";
 import {
@@ -64,7 +67,6 @@ import {
   withDurationHours,
 } from "./booking";
 import { sendJobStartedEmailSafely } from "../statusEmails";
-import { sendTipRequestEmailSafely } from "../tip";
 import { storagePut } from "../storage";
 import { getStripe } from "../stripe";
 import { protectedProcedure, router } from "../_core/trpc";
@@ -135,6 +137,22 @@ function assertValidDurationConfig(raw: string): DurationConfig {
 
 const bookingStatusEnum = z.enum(["pending_deposit", "confirmed", "in_progress", "completed", "cancelled", "expired"]);
 
+/**
+ * An invoice's customer-facing name for the admin pages — the same "Service
+ * Type — Date" the customer's emails say, so owner and customer never have to
+ * translate between an invoice number and a cleaning. A balance invoice is
+ * named by its snapshot, older rows by their booking, a manual invoice by
+ * whatever the owner entered, and a bare one "Cleaning services".
+ */
+function adminServiceReference(
+  invoice: { serviceType?: string | null; serviceDate?: string | null },
+  booking: { serviceType?: string | null; scheduledDate?: string | null } | null | undefined
+): string {
+  const type = invoice.serviceType ?? booking?.serviceType ?? null;
+  const name = (type && SERVICE_NAMES[type]?.en) || "Cleaning services";
+  return serviceReference(name, invoice.serviceDate ?? booking?.scheduledDate ?? null, "en");
+}
+
 export const adminRouter = router({
   addonCatalog: addonCatalogAdminRouter,
   // ---------- Dashboard & statistics ----------
@@ -184,6 +202,7 @@ export const adminRouter = router({
       // browser tab, every log, every screenshot of the appointments table.
       return rows.map(row => {
         const customer = customerById.get(row.customerId);
+        const invoice = invoiceByBooking.get(row.id) ?? null;
         return {
           ...row,
           depositLink: depositLinkStatus(row, now),
@@ -192,8 +211,21 @@ export const adminRouter = router({
             depositAmount: row.depositAmount,
             depositAmountCents: row.depositAmountCents,
             stripePaymentIntentId: row.stripePaymentIntentId,
-            invoice: invoiceByBooking.get(row.id) ?? null,
+            serviceType: row.serviceType,
+            kind: row.kind,
+            paymentPreference: row.paymentPreference,
+            invoice,
           }),
+          // What Paid in Cash would collect: the open invoice's exact amount,
+          // or — for a finished job that was never invoiced — the balance the
+          // completion would compute. Null while nothing is collectable yet.
+          balanceDue: invoice
+            ? invoice.status === "paid" || invoice.status === "void"
+              ? 0
+              : centsToDollars(invoice.amountCents ?? dollarsToCents(invoice.amount))
+            : row.status === "completed"
+              ? balanceDueForBooking(row)
+              : null,
           customerName: customer ? `${customer.firstName} ${customer.lastName}`.trim() : "",
           customerPhone: customer?.phone ?? null,
           customerEmail: customer?.email ?? null,
@@ -542,6 +574,68 @@ export const adminRouter = router({
         await sendJobStartedEmailSafely(input.id);
       }
       return { success: true, cancellation } as const;
+    }),
+  /**
+   * Paid in Cash — the owner's one tap on a completed booking that was paid in
+   * person. Not a second payment system: it finds (or first issues) the job's
+   * balance invoice and settles it through the same atomic offline path Record
+   * offline payment uses, with method "cash" and the invoice's exact amount.
+   * See cashPayment.ts.
+   */
+  markPaidInCash: adminProcedure
+    .input(
+      z.object({
+        bookingId: z.number().int(),
+        tipAmount: z.number().min(0).multipleOf(0.01).default(0),
+        /** Business-local date the cash changed hands; today when omitted. */
+        receivedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        note: z.string().trim().max(1000).optional(),
+        emailReceipt: z.boolean().default(true),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const result = await payBookingInCash({
+        bookingId: input.bookingId,
+        tipAmount: input.tipAmount,
+        receivedOn: input.receivedOn,
+        note: input.note,
+        emailReceipt: input.emailReceipt,
+        recordedByUserId: ctx.user.id,
+        origin: originFromRequest(ctx.req),
+      });
+      switch (result.outcome) {
+        case "booking_not_found":
+          throw new TRPCError({ code: "NOT_FOUND", message: "Booking not found." });
+        case "not_completed":
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Mark the cleaning completed first — Paid in Cash settles a finished job, and this one is ${result.status.replace(/_/g, " ")}.`,
+          });
+        case "already_settled":
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              result.status === "void"
+                ? "This booking's invoice was voided — nothing is owed on it."
+                : `This booking is already paid${result.paidMethod === "cash" ? " in cash" : ""}.`,
+          });
+        case "tip_already_recorded":
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "A tip is already recorded for this booking. Record the cash payment with a $0 tip.",
+          });
+        case "nothing_due":
+          return { success: true as const, nothingDue: true as const, amount: 0, tipAmount: 0, receiptSent: false };
+        case "paid":
+          return {
+            success: true as const,
+            nothingDue: false as const,
+            amount: result.amount,
+            tipAmount: result.tipAmount,
+            invoiceNumber: result.invoiceNumber,
+            receiptSent: result.receiptSent,
+          };
+      }
     }),
   assignEmployee: adminProcedure
     .input(z.object({ bookingId: z.number().int(), employeeId: z.number().int().nullable() }))
@@ -1069,6 +1163,10 @@ export const adminRouter = router({
     return rows.map(({ invoice: { payToken, ...invoice }, booking, customer }) => ({
       ...invoice,
       linkStatus: balanceLinkStatus({ status: invoice.status, payToken, linkExpiresAt: invoice.linkExpiresAt }, now),
+      // The customer's name for this bill — what every email to them says —
+      // so the owner and the customer are talking about the same thing.
+      serviceReference: adminServiceReference(invoice, booking),
+      paymentStatus: deriveInvoicePaymentStatus(invoice),
       // Server-side, so an invoice for an older customer isn't left as "#id" by
       // a client lookup against the customers list and its 200-row cap.
       customerName: customer ? `${customer.firstName} ${customer.lastName}`.trim() : null,
@@ -1119,6 +1217,13 @@ export const adminRouter = router({
         amount: z.number().min(1).multipleOf(0.01),
         dueDate: z.string().optional(),
         /**
+         * What the customer will see the bill called — "Deep Cleaning —
+         * September 28, 2026". Both optional; a bare invoice reads
+         * "Cleaning services" with no date rather than a made-up one.
+         */
+        serviceType: z.enum(CLEANING_TYPES).optional(),
+        serviceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        /**
          * Same itemization the approval flow takes, deliberately the same
          * shape: ids only for catalog add-ons (the server prices them from the
          * live catalog, so a stale client cannot dictate dollars), and named
@@ -1159,6 +1264,8 @@ export const adminRouter = router({
         dueDate: input.dueDate,
         addonIds: input.addonIds,
         customItems: input.customItems,
+        serviceType: input.serviceType,
+        serviceDate: input.serviceDate,
         origin: originFromRequest(ctx.req),
       });
       switch (result.outcome) {
@@ -1209,6 +1316,10 @@ export const adminRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // How this money is booked: the balance of a captured deposit, or one
+      // full payment when there never was one (Airbnb, cash, manual invoice).
+      const invoiceRow = await db.getInvoiceById(input.invoiceId);
+      const paidBooking = invoiceRow?.bookingId ? await db.getBookingById(invoiceRow.bookingId) : undefined;
       const result = await db.recordOfflineInvoicePayment({
         invoiceId: input.invoiceId,
         amountCents: dollarsToCents(input.amount),
@@ -1217,6 +1328,7 @@ export const adminRouter = router({
         note: input.note,
         receivedOn: input.receivedOn,
         recordedByUserId: ctx.user.id,
+        paymentKind: invoiceRow?.bookingId ? settlementKind(paidBooking) : "full",
       });
 
       switch (result.outcome) {
@@ -1236,27 +1348,17 @@ export const adminRouter = router({
           });
       }
 
-      // Best-effort after the financial transaction: invoice status already
-      // blocks the public route, and a genuinely late Stripe settlement is
-      // still caught by the existing refund-needed guard.
-      if (result.invoice.stripeSessionId) {
-        try {
-          await getStripe().checkout.sessions.expire(result.invoice.stripeSessionId);
-        } catch (error) {
-          console.warn(`[OfflinePayment] Could not expire session for invoice ${input.invoiceId}:`, error);
-        }
-      }
-
-      if (input.emailReceipt) {
-        await sendPaymentReceiptSafely(
-          { ...result.invoice, paidAt: result.paidAt },
-          input.method,
-          input.tipAmount
-        );
-      }
-      if (input.tipAmount === 0 && result.invoice.kind === "balance" && result.invoice.bookingId) {
-        await sendTipRequestEmailSafely(result.invoice.bookingId, originFromRequest(ctx.req));
-      }
+      // Everything after the money — closing the open Checkout, the receipt,
+      // the tip ask — is shared with the booking's Paid in Cash, so the two
+      // ways of recording cash behave identically (cashPayment.ts).
+      await finishOfflineSettlement({
+        invoice: result.invoice,
+        paidAt: result.paidAt,
+        method: input.method,
+        tipAmount: input.tipAmount,
+        emailReceipt: input.emailReceipt,
+        origin: originFromRequest(ctx.req),
+      });
 
       return {
         success: true as const,

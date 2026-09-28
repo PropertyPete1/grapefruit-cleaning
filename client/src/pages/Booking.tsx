@@ -42,6 +42,7 @@ import {
   type CleaningType,
   type ExtraId,
   type Frequency,
+  isDepositFree,
 } from "@shared/pricing";
 import { AddonCatalogPicker, CatalogAddonsSummary, selectedCatalogAddons } from "@/components/AddonCatalogPicker";
 import { usePricing } from "@/hooks/usePricing";
@@ -166,8 +167,16 @@ export default function Booking() {
     time: string;
     total: number;
     deposit: number;
+    paymentPreference?: "online" | "cash" | null;
     customerFirstName: string;
   }>(null);
+  /**
+   * PAY ONLINE (the card deposit, or a card payment after the cleaning when no
+   * deposit applies) or PAY WITH CASH (no deposit; the whole amount at the
+   * cleaning). The server takes the choice, not the money: it decides for
+   * itself whether a deposit is owed and confirms a cash booking on submit.
+   */
+  const [paymentMethod, setPaymentMethod] = useState<"online" | "cash">("online");
   const [confirming, setConfirming] = useState(Boolean(sessionId && refParam));
 
   // Verify sqft against county property records once an address is typed.
@@ -222,10 +231,15 @@ export default function Booking() {
     }
     return { breakdown: entered, sqftAdjusted: false };
   }, [type, bedrooms, bathrooms, sqft, extras, frequency, verifiedSqft, pricing, catalog]);
-  // 0 when the admin has turned deposits off — the booking then confirms on
-  // submit with no Stripe step at all.
+  // 0 when the admin has turned deposits off, and always 0 for Airbnb (one
+  // payment for the full amount after the cleaning — never a deposit); the
+  // booking then confirms on submit with no Stripe step at all. Choosing cash
+  // is the same day-of-booking story: nothing is charged today.
   const deposit = breakdown.deposit;
   const zeroDeposit = deposit === 0;
+  const depositFree = isDepositFree(type);
+  const payingCash = paymentMethod === "cash";
+  const noPaymentToday = zeroDeposit || payingCash;
 
   const dateString = date ? toDateString(date) : null;
   // Service type and size go with the date: they decide how long the job runs,
@@ -259,6 +273,7 @@ export default function Booking() {
               time: result.booking.time,
               total: result.booking.total,
               deposit: result.booking.deposit,
+              paymentPreference: result.booking.paymentPreference,
               customerFirstName: result.booking.customerFirstName,
             });
           } else {
@@ -350,6 +365,7 @@ export default function Booking() {
         zip: form.zip.trim(),
         notes: form.notes.trim() || undefined,
         locale,
+        paymentPreference: paymentMethod,
       });
       if (result.checkoutUrl) {
         toast.success(locale === "es" ? "Redirigiendo al pago seguro…" : "Redirecting to secure checkout…");
@@ -455,7 +471,9 @@ export default function Booking() {
                 ) : (
                   <>
                     <p className="text-xs text-muted-foreground">{t.booking.paymentLabel}</p>
-                    <p className="mt-1 font-semibold text-secondary">{t.booking.dueAtCompletion}</p>
+                    <p className="mt-1 font-semibold text-secondary">
+                      {confirmed.paymentPreference === "cash" ? t.booking.paymentCash : t.booking.dueAtCompletion}
+                    </p>
                   </>
                 )}
               </div>
@@ -996,6 +1014,42 @@ export default function Booking() {
                       </div>
                     </div>
 
+                    {/* PAY ONLINE or PAY WITH CASH — the customer's choice, sent
+                        to the server as a preference and never as an amount. */}
+                    <div className="rounded-2xl border border-border p-4" data-testid="payment-method">
+                      <p className="text-xs text-muted-foreground">{t.booking.paymentMethod}</p>
+                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                        {(["online", "cash"] as const).map(option => {
+                          const active = paymentMethod === option;
+                          return (
+                            <button
+                              key={option}
+                              type="button"
+                              aria-pressed={active}
+                              onClick={() => setPaymentMethod(option)}
+                              className={`rounded-xl border-2 p-3 text-left transition-colors ${
+                                active ? "border-primary bg-primary/5" : "border-border bg-background hover:border-primary/40"
+                              }`}
+                            >
+                              <span className="block text-sm font-semibold text-foreground">
+                                {option === "online" ? t.booking.payOnline : t.booking.payWithCash}
+                              </span>
+                              <span className="mt-0.5 block text-xs text-muted-foreground">
+                                {option === "online"
+                                  ? zeroDeposit
+                                    ? t.booking.payOnlineNoDepositHint
+                                    : t.booking.payOnlineHint
+                                  : t.booking.payWithCashHint}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {depositFree && (
+                        <p className="mt-2 text-xs text-muted-foreground">{t.booking.airbnbNoDeposit}</p>
+                      )}
+                    </div>
+
                     <div className="rounded-2xl bg-muted/60 p-6">
                       {sqftAdjusted && verifiedSqft && (
                         <div className="mb-4 flex items-start gap-2 rounded-xl bg-primary/10 p-3 text-xs leading-relaxed text-foreground">
@@ -1011,8 +1065,8 @@ export default function Booking() {
                         <span className="text-muted-foreground">{t.booking.estimatedTotal}</span>
                         <span className="font-display text-xl font-bold text-foreground">${formatPrice(breakdown.total)}</span>
                       </div>
-                      {/* Deposit line hides entirely when the dial is at 0. */}
-                      {!zeroDeposit && (
+                      {/* Deposit line hides entirely when nothing is charged today. */}
+                      {!noPaymentToday && (
                         <div className="mt-2 flex items-center justify-between">
                           {/* Rate comes from the live pricing config — the admin can change it. */}
                           <span className="font-semibold text-foreground">
@@ -1023,7 +1077,7 @@ export default function Booking() {
                       )}
                       <p className="mt-4 flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
                         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-secondary" />
-                        {zeroDeposit ? t.booking.noDepositNote : t.booking.depositNote}
+                        {payingCash ? t.booking.cashChosenNote : zeroDeposit ? t.booking.noDepositNote : t.booking.depositNote}
                       </p>
                     </div>
 
@@ -1037,7 +1091,7 @@ export default function Booking() {
                         <>
                           <Loader2 className="mr-2 h-5 w-5 animate-spin" /> {t.booking.processing}
                         </>
-                      ) : zeroDeposit ? (
+                      ) : noPaymentToday ? (
                         <>{t.booking.confirmBooking}</>
                       ) : (
                         <>
@@ -1046,13 +1100,15 @@ export default function Booking() {
                       )}
                     </Button>
                     <p className="text-center text-xs text-muted-foreground">
-                      {zeroDeposit
-                        ? locale === "es"
-                          ? "Sin pago hoy. El total se paga al completar su limpieza."
-                          : "No payment today. Your total is due when your cleaning is complete."
-                        : locale === "es"
-                          ? "Pago seguro procesado por Stripe. No almacenamos los datos de su tarjeta."
-                          : "Secure payment processed by Stripe. We never store your card details."}
+                      {payingCash
+                        ? t.booking.cashNoPaymentToday
+                        : zeroDeposit
+                          ? locale === "es"
+                            ? "Sin pago hoy. El total se paga al completar su limpieza."
+                            : "No payment today. Your total is due when your cleaning is complete."
+                          : locale === "es"
+                            ? "Pago seguro procesado por Stripe. No almacenamos los datos de su tarjeta."
+                            : "Secure payment processed by Stripe. We never store your card details."}
                     </p>
                   </div>
                 </motion.div>
@@ -1108,7 +1164,7 @@ export default function Booking() {
                     <span className="font-medium">{extras.length}</span>
                   </div>
                 )}
-                {!zeroDeposit && (
+                {!noPaymentToday && (
                   <div className="flex justify-between border-t border-background/15 pt-2.5">
                     <span className="text-background/60">{t.booking.depositDue}</span>
                     <span className="font-bold text-primary-foreground">${formatPrice(deposit)}</span>

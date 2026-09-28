@@ -670,6 +670,38 @@ all succeeded payments, while Admin → Statistics and Admin → Payments show S
 and offline sources separately. Never create customer, booking, invoice, payment,
 or tip rows merely to represent an out-of-system cash job.
 
+## Cash payments, Airbnb one-payment rule, customer-facing invoice reference — Sep 27, 2026
+
+Migration 0033 adds nullable columns only: `bookings.paymentPreference` / `cashChosenAt`,
+`invoices.paymentPreference` / `cashChosenAt` / `serviceType` / `serviceDate` / `paidMethod`. Nothing
+existing changes meaning; every pre-feature row reads as before.
+
+- **PAY ONLINE / PAY WITH CASH.** The customer chooses on the public review step, on the deposit link
+  (`depositLink.chooseCash`), and on every balance email (`/api/pay/balance/:token/cash`, GET asks, POST
+  records). Cash at booking waives the deposit — `depositAmount` is written as 0, the booking confirms on
+  submit, and it reads "Cash pending" until the owner records the money. A cash choice on an invoice pauses
+  the automatic card reminders (`sendDueBalanceReminders` skips it) and alerts the owner once
+  (`claimInvoiceCashPreference` is the once-only claim). A preference is never a lock: the card link keeps
+  working, and a card payment landing anyway settles through the usual path.
+- **Paid in Cash is one door onto the existing offline settlement, not a second system.**
+  `admin.markPaidInCash` → `cashPayment.payBookingInCash`: finds the completed job's balance invoice, issues it
+  quietly first if the completion never filed one (`issueBalanceForCompletedBooking(..., { notifyOwner: false })`),
+  then settles it through `db.recordOfflineInvoicePayment` at the invoice's exact amount with method cash.
+  `finishOfflineSettlement` (close the open Checkout, receipt, tip ask) is shared with Record offline
+  payment on the invoice page. Only a `completed` booking qualifies; the UI offers the button only there.
+- **Airbnb never takes a deposit.** `depositRateFor(type, config)` in `shared/pricing.ts` is the one rule
+  every quote path reads (calculateQuote, calculateCatalogQuote, booking.create, deposit link, admin
+  booking, and the deposit-link page's preview). An Airbnb booking confirms on submit with no Stripe step
+  and bills its full amount once after the cleaning through the ordinary balance invoice (approved
+  default). Its position reads Unpaid → Paid / Paid in Cash. Settlements are booked as kind `full` when no
+  deposit was captured (`settlementKind`), `balance` otherwise — for card and cash alike.
+- **Customers see "Service Type — Month D, YYYY", never INV-…** (`shared/invoiceReference.ts`). Balance
+  invoices snapshot `serviceType`/`serviceDate` from the booking at creation; manual invoices take what the
+  owner entered on the create form and otherwise read "Cleaning services" with no date (never an invented
+  one). The number stays on the admin pages, in Stripe metadata, and in the owner's alerts. Do not put it
+  back into a customer email, a reminder, a receipt, the pay pages, or a Stripe line.
+- Never touch the live scheduled jobs for any of this — the reminder sweep's skip is inside the job.
+
 ## Booking rescheduling and route branding — September 1, 2026
 
 Migration 0032 adds only rescheduling metadata: hash-only customer access fields

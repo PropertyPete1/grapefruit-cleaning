@@ -10,8 +10,9 @@
  */
 import { useState } from "react";
 import { toast } from "sonner";
-import { Loader2, Mail, Pencil, Phone } from "lucide-react";
-import type { BookingPaymentStatus } from "@shared/paymentStatus";
+import { Banknote, Loader2, Mail, Pencil, Phone } from "lucide-react";
+import { isAirbnbBooking } from "@shared/bookingStatus";
+import { canMarkPaidInCash, type BookingPaymentStatus } from "@shared/paymentStatus";
 import { composeAddressOr } from "@shared/property";
 import { en } from "@/i18n/translations/en";
 import { trpc } from "@/lib/trpc";
@@ -27,6 +28,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NotesBlock, PaymentStatusBadge, SERVICE_LABELS, fmtDate, fmtMoney } from "./adminShared";
+import { PaidInCashDialog } from "./PaidInCashDialog";
 
 /** The booking-list row shape this panel reads (admin.bookings output). */
 export interface BookingDetailsRow {
@@ -52,6 +54,10 @@ export interface BookingDetailsRow {
   depositLink: string;
   /** Derived server-side from the booking and its balance invoice. */
   paymentStatus?: BookingPaymentStatus;
+  /** "cash" when the customer chose to pay in person. */
+  paymentPreference?: string | null;
+  /** What Paid in Cash would collect, from the server; null when nothing is collectable yet. */
+  balanceDue?: number | null;
   payTokenExpiresAt: Date | string | null;
   customerName: string;
   customerPhone: string | null;
@@ -189,6 +195,9 @@ function EditContactDialog({ row, onClose }: { row: BookingDetailsRow; onClose: 
 
 export function BookingDetails({ row }: { row: BookingDetailsRow }) {
   const [editing, setEditing] = useState(false);
+  const [payingCash, setPayingCash] = useState(false);
+  const airbnb = isAirbnbBooking(row);
+  const chosenCash = row.paymentPreference === "cash";
   const extras: string[] = (() => {
     try {
       return JSON.parse(row.extras ?? "[]");
@@ -294,20 +303,47 @@ export function BookingDetails({ row }: { row: BookingDetailsRow }) {
 
       <Section title="Money">
         {row.paymentStatus && <Row label="Payment" value={<PaymentStatusBadge status={row.paymentStatus} />} />}
+        {chosenCash && <Row label="Customer chose" value="Cash — collect in person" />}
         {row.couponCode && (
           <Row label="Coupon" value={`${row.couponCode} (−${fmtMoney(row.discountApplied)})`} />
         )}
         <Row label="Total" value={fmtMoney(row.totalAmount)} />
-        <Row
-          label="Deposit"
-          value={`${fmtMoney(row.depositAmount)}${row.status === "pending_deposit" ? " — not paid yet" : ""}`}
-        />
-        <Row label="Balance after deposit" value={fmtMoney(row.totalAmount - row.depositAmount)} />
+        {row.depositAmount > 0 ? (
+          <>
+            <Row
+              label="Deposit"
+              value={`${fmtMoney(row.depositAmount)}${row.status === "pending_deposit" ? " — not paid yet" : ""}`}
+            />
+            <Row label="Balance after deposit" value={fmtMoney(row.totalAmount - row.depositAmount)} />
+          </>
+        ) : (
+          <>
+            {/* No deposit was ever part of this job: say why, not "$0". */}
+            <Row
+              label="Deposit"
+              value={airbnb ? "None — Airbnb pays in full after the cleaning" : chosenCash ? "None — paying in cash" : "None"}
+            />
+            <Row label="Due after cleaning" value={fmtMoney(row.totalAmount)} />
+          </>
+        )}
+        {canMarkPaidInCash(row) && (
+          <Button
+            type="button"
+            size="sm"
+            className="mt-2 w-full rounded-xl"
+            onClick={() => setPayingCash(true)}
+            data-testid="paid-in-cash-button"
+          >
+            <Banknote className="mr-1.5 h-4 w-4" />
+            Paid in cash{row.balanceDue != null && row.balanceDue > 0 ? ` — ${fmtMoney(row.balanceDue)}` : ""}
+          </Button>
+        )}
       </Section>
 
       {row.notes && <NotesBlock notes={row.notes} />}
 
       {editing && <EditContactDialog row={row} onClose={() => setEditing(false)} />}
+      {payingCash && <PaidInCashDialog booking={row} onClose={() => setPayingCash(false)} />}
     </div>
   );
 }

@@ -3,8 +3,11 @@ import { Link } from "wouter";
 import { toast } from "sonner";
 import { formatJobSpan } from "@shared/availability";
 import { isAirbnbBooking } from "@shared/bookingStatus";
+import { canMarkPaidInCash } from "@shared/paymentStatus";
 import { composeAddressOr } from "@shared/property";
+import { Banknote } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { NewBookingDialog } from "./NewBookingDialog";
@@ -21,10 +24,12 @@ import { RescheduleDialog } from "./RescheduleDialog";
 import { RescheduleRequestsPanel } from "./RescheduleRequestsPanel";
 import { BookingDetails, type BookingDetailsRow } from "./BookingDetails";
 import { CancelBookingDialog, type CancelDialogBooking } from "./CancelBookingDialog";
+import { PaidInCashDialog, type PaidInCashBooking } from "./PaidInCashDialog";
 import {
   AirbnbBadge,
   NotesBlock,
   PageHeader,
+  PaymentStatusBadge,
   RowCard,
   SERVICE_LABELS,
   StatusBadge,
@@ -41,6 +46,8 @@ export default function AdminAppointments() {
   const [detailRow, setDetailRow] = useState<BookingDetailsRow | null>(null);
   /** The row the owner is about to cancel — confirmed in its own dialog, never by a stray flick of the select. */
   const [cancelling, setCancelling] = useState<CancelDialogBooking | null>(null);
+  /** The completed row the owner is recording as paid in cash. */
+  const [payingCash, setPayingCash] = useState<PaidInCashBooking | null>(null);
   const utils = trpc.useUtils();
   const bookings = trpc.admin.bookings.useQuery(
     statusFilter === "all" ? {} : { status: statusFilter as (typeof STATUSES)[number] }
@@ -252,8 +259,33 @@ export default function AdminAppointments() {
                       ) : (
                         <>
                           <span className="font-semibold">{fmtMoney(b.totalAmount)}</span>
-                          <span className="block text-xs text-muted-foreground">dep. {fmtMoney(b.depositAmount)}</span>
+                          <span className="block text-xs text-muted-foreground">
+                            {b.depositAmount > 0
+                              ? `dep. ${fmtMoney(b.depositAmount)}`
+                              : b.paymentPreference === "cash"
+                                ? "cash · no deposit"
+                                : isAirbnbBooking(b)
+                                  ? "no deposit · one payment"
+                                  : "no deposit"}
+                          </span>
                         </>
+                      )}
+                      {b.paymentStatus && b.paymentStatus !== "released" && (
+                        <span className="mt-1 block">
+                          <PaymentStatusBadge status={b.paymentStatus} />
+                        </span>
+                      )}
+                      {canMarkPaidInCash(b) && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="mt-1.5 h-7 rounded-lg px-2 text-xs"
+                          onClick={() => setPayingCash(b)}
+                        >
+                          <Banknote className="mr-1 h-3 w-3" /> Paid in cash
+                          {b.balanceDue != null && b.balanceDue > 0 ? ` — ${fmtMoney(b.balanceDue)}` : ""}
+                        </Button>
                       )}
                       {pendingByBooking.get(b.id) !== undefined && (
                         <Link
@@ -332,6 +364,9 @@ export default function AdminAppointments() {
                 amount={b.depositLink === "incomplete" ? "—" : fmtMoney(b.totalAmount)}
                 badge={<StatusBadge status={b.status} />}
                 details={[
+                  ...(b.paymentStatus && b.paymentStatus !== "released"
+                    ? [{ label: "Payment", value: <PaymentStatusBadge status={b.paymentStatus} /> }]
+                    : []),
                   ...(b.slotConflict ? [{ label: "Warning", value: "Slot conflict" }] : []),
                   ...(pendingByBooking.get(b.id) !== undefined
                     ? [
@@ -366,6 +401,17 @@ export default function AdminAppointments() {
                       </div>
                     )}
                     {b.status === "confirmed" && <RescheduleDialog booking={b} compact />}
+                    {canMarkPaidInCash(b) && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="h-9 w-full rounded-lg text-xs"
+                        onClick={() => setPayingCash(b)}
+                      >
+                        <Banknote className="mr-1 h-3.5 w-3.5" /> Paid in cash
+                        {b.balanceDue != null && b.balanceDue > 0 ? ` — ${fmtMoney(b.balanceDue)}` : ""}
+                      </Button>
+                    )}
                     <Select
                       value={b.status}
                       onValueChange={v => changeStatus(b, v)}
@@ -406,6 +452,8 @@ export default function AdminAppointments() {
           />
         )}
       </div>
+
+      {payingCash && <PaidInCashDialog booking={payingCash} onClose={() => setPayingCash(null)} />}
 
       {cancelling && (
         <CancelBookingDialog

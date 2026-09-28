@@ -13,6 +13,7 @@
  * mints a fresh session per visit for the whole BALANCE_LINK_DAYS window.
  */
 import { composeAddress } from "@shared/property";
+import { serviceReference } from "@shared/invoiceReference";
 import { randomBytes } from "node:crypto";
 import type { Stripe } from "stripe";
 import type { Booking, Customer, Invoice } from "../drizzle/schema";
@@ -20,6 +21,8 @@ import {
   balanceLinkExpiresAt,
   balanceReminderAction,
   computeBalanceDue,
+  depositCaptured,
+  settlementKind,
   stripeSessionExpiresAt,
 } from "./balanceRules";
 import * as db from "./db";
@@ -37,6 +40,7 @@ import {
   type ReceiptPaymentMethod,
 } from "./emails";
 import { EXTRA_NAMES, loadPricingConfig, SERVICE_NAMES } from "./routers/booking";
+import type { CleaningType } from "@shared/pricing";
 import { getStripe } from "./stripe";
 import { sendTipRequestEmailSafely } from "./tip";
 import {
@@ -72,6 +76,50 @@ export function balancePayUrl(origin: string, token: string): string {
 }
 
 /**
+ * Where the customer says "I'll pay in cash": the pay link plus /cash. Only
+ * ever built from a real, absolute pay link — a receipt or an owner alert
+ * passes an empty link and gets no cash link either.
+ */
+export function cashChoiceUrl(payUrl: string): string | undefined {
+  return payUrl && payUrl.startsWith("http") ? `${payUrl}/cash` : undefined;
+}
+
+/**
+ * The invoice facts every customer-facing email reads: the number (for the
+ * owner's alerts — customers see the service reference), the money, the
+ * items, and the three columns behind the customer-facing wording: their
+ * payment preference and the service type and date the bill is named after.
+ */
+export type InvoiceEmailFacts = Pick<Invoice, "number" | "amount"> & {
+  amountCents?: number | null;
+  items?: InvoiceLineItem[];
+  paymentPreference?: string | null;
+  serviceType?: string | null;
+  serviceDate?: string | null;
+};
+
+/** The facts off a stored invoice row, items parsed. */
+export function invoiceFacts(
+  invoice: Pick<Invoice, "number" | "amount" | "amountCents" | "lineItems" | "paymentPreference" | "serviceType" | "serviceDate">
+): InvoiceEmailFacts {
+  return {
+    number: invoice.number,
+    amount: invoice.amount,
+    amountCents: invoice.amountCents,
+    items: parseLineItems(invoice.lineItems),
+    paymentPreference: invoice.paymentPreference,
+    serviceType: invoice.serviceType,
+    serviceDate: invoice.serviceDate,
+  };
+}
+
+/** A manual invoice's service, from what the owner entered, or generic cleaning services. */
+function manualServiceName(serviceType: string | null | undefined, locale: "en" | "es"): string {
+  const named = serviceType ? SERVICE_NAMES[serviceType]?.[locale] : undefined;
+  return named ?? (locale === "es" ? "Servicios de limpieza" : "Cleaning services");
+}
+
+/**
  * Origin to build customer-facing links from, taken off the admin/staff request
  * that approved the balance (same approach as the deposit checkout). Internal
  * callers without a real request fall back to PUBLIC_BASE_URL.
@@ -99,12 +147,13 @@ export function balanceDueForBooking(
 function toBalanceEmailData(
   booking: Booking,
   customer: Customer,
-  invoice: Pick<Invoice, "number" | "amount"> & { amountCents?: number | null; items?: InvoiceLineItem[] },
+  invoice: InvoiceEmailFacts,
   payUrl: string,
   expiresOn: Date,
   bizPhone?: string
 ): BalanceEmailData {
   const locale = booking.locale as "en" | "es";
+  const serviceName = SERVICE_NAMES[booking.serviceType ?? "residential"][locale];
   const invoiceAmount = centsToDollars(invoice.amountCents ?? dollarsToCents(invoice.amount));
   const bookingTotal = centsToDollars(booking.totalAmountCents ?? dollarsToCents(booking.totalAmount));
   const bookingDeposit = booking.stripePaymentIntentId
@@ -115,8 +164,14 @@ function toBalanceEmailData(
   return {
     reference: booking.reference,
     invoiceNumber: invoice.number,
-    serviceName: SERVICE_NAMES[booking.serviceType ?? "residential"][locale],
+    serviceName,
     date: booking.scheduledDate ?? "",
+    // What the customer sees this bill called: "Deep Cleaning — September 28, 2026".
+    serviceReference: serviceReference(serviceName, booking.scheduledDate, locale),
+    // The invoice's own record of the choice wins; the booking's is where it
+    // started (a customer who booked with cash carries it onto the balance).
+    paymentPreference: (invoice.paymentPreference ?? booking.paymentPreference ?? null) as "online" | "cash" | null,
+    cashUrl: cashChoiceUrl(payUrl),
     total: bookingTotal,
     deposit: bookingDeposit,
     balance: invoiceAmount,
@@ -156,7 +211,7 @@ function toBalanceEmailData(
  */
 function toManualEmailData(
   customer: Customer,
-  invoice: Pick<Invoice, "number" | "amount"> & { amountCents?: number | null; items?: InvoiceLineItem[] },
+  invoice: InvoiceEmailFacts,
   payUrl: string,
   expiresOn: Date,
   bizPhone?: string
@@ -164,11 +219,17 @@ function toManualEmailData(
   const locale = (customer.preferredLocale as "en" | "es") ?? "en";
   const items = invoice.items ?? [];
   const invoiceAmount = centsToDollars(invoice.amountCents ?? dollarsToCents(invoice.amount));
+  // The owner may have named the service and its date on a manual invoice;
+  // without them the bill is "Cleaning services" with no date — never a made-up one.
+  const serviceName = manualServiceName(invoice.serviceType, locale);
   return {
     reference: "",
     invoiceNumber: invoice.number,
-    serviceName: locale === "es" ? "Servicios de limpieza" : "Cleaning services",
-    date: "",
+    serviceName,
+    date: invoice.serviceDate ?? "",
+    serviceReference: serviceReference(serviceName, invoice.serviceDate, locale),
+    paymentPreference: (invoice.paymentPreference ?? null) as "online" | "cash" | null,
+    cashUrl: cashChoiceUrl(payUrl),
     total: invoiceAmount,
     deposit: 0,
     balance: invoiceAmount,
@@ -193,7 +254,7 @@ function toManualEmailData(
 export function toInvoiceEmailData(
   booking: Booking | undefined,
   customer: Customer,
-  invoice: Pick<Invoice, "number" | "amount"> & { amountCents?: number | null; items?: InvoiceLineItem[] },
+  invoice: InvoiceEmailFacts,
   payUrl: string,
   expiresOn: Date,
   bizPhone?: string
@@ -216,6 +277,12 @@ export function buildStripeLineItems(args: {
   serviceName: string;
   locale: "en" | "es";
   description: string;
+  /**
+   * True when this payment is the whole job — no deposit was captured (an
+   * Airbnb turnover, a cash booking, a manual invoice). The line is then the
+   * service itself, not a "remaining balance" that implies a deposit before it.
+   */
+  fullPayment?: boolean;
 }): Stripe.Checkout.SessionCreateParams.LineItem[] {
   const { amount, items, serviceName, locale, description } = args;
   const totalCents = args.amountCents ?? dollarsToCents(amount);
@@ -227,7 +294,11 @@ export function buildStripeLineItems(args: {
         currency: "usd",
         unit_amount: baseCents,
         product_data: {
-          name: locale === "es" ? `Saldo restante — ${serviceName}` : `Remaining balance — ${serviceName}`,
+          name: args.fullPayment
+            ? serviceName
+            : locale === "es"
+              ? `Saldo restante — ${serviceName}`
+              : `Remaining balance — ${serviceName}`,
           description,
         },
       },
@@ -304,9 +375,15 @@ export async function resolveLineItems(
 
 /** Creates a Checkout Session for an outstanding balance invoice. */
 export async function createBalanceCheckoutSession(args: {
-  invoice: Pick<Invoice, "id" | "number" | "amount" | "payToken"> & { amountCents?: number | null; items?: InvoiceLineItem[] };
+  invoice: Pick<Invoice, "id" | "number" | "amount" | "payToken"> & {
+    amountCents?: number | null;
+    items?: InvoiceLineItem[];
+    serviceType?: string | null;
+    serviceDate?: string | null;
+  };
   /** Absent for a manual invoice, which has no job behind it. */
-  booking?: Pick<Booking, "id" | "reference" | "serviceType" | "locale" | "scheduledDate">;
+  booking?: Pick<Booking, "id" | "reference" | "serviceType" | "locale" | "scheduledDate"> &
+    Partial<Pick<Booking, "depositAmount" | "depositAmountCents" | "stripePaymentIntentId">>;
   customerEmail: string;
   origin: string;
   now?: Date;
@@ -318,12 +395,20 @@ export async function createBalanceCheckoutSession(args: {
   const locale = (booking?.locale as "en" | "es") ?? args.locale ?? "en";
   // Balance work happens on completed jobs, which paid their way past the
   // completeness gate — the fallback is for the type system. A manual invoice
-  // bills generic cleaning services, since no job defines the service.
+  // bills what the owner named, or generic cleaning services.
   const serviceName = booking
     ? SERVICE_NAMES[booking.serviceType ?? "residential"][locale]
-    : locale === "es"
-      ? "Servicios de limpieza"
-      : "Cleaning services";
+    : manualServiceName(invoice.serviceType, locale);
+  // The customer's name for the bill on the Stripe page too — never the
+  // invoice number, which rides only in the session metadata.
+  const reference = serviceReference(serviceName, booking ? booking.scheduledDate : invoice.serviceDate, locale);
+  // One payment for the whole job when no deposit was captured: an Airbnb
+  // turnover, a cash booking, or any manual invoice.
+  const fullPayment = !booking || booking.depositAmount === undefined || !depositCaptured({
+    depositAmount: booking.depositAmount,
+    depositAmountCents: booking.depositAmountCents,
+    stripePaymentIntentId: booking.stripePaymentIntentId,
+  });
   const payUrl = balancePayUrl(origin, invoice.payToken ?? "");
 
   return getStripe().checkout.sessions.create({
@@ -345,13 +430,12 @@ export async function createBalanceCheckoutSession(args: {
       items: invoice.items ?? [],
       serviceName,
       locale,
+      fullPayment,
       description: booking
         ? locale === "es"
-          ? `Reserva ${booking.reference} · Servicio del ${booking.scheduledDate} · Factura ${invoice.number}`
-          : `Booking ${booking.reference} · Service on ${booking.scheduledDate} · Invoice ${invoice.number}`
-        : locale === "es"
-          ? `Factura ${invoice.number}`
-          : `Invoice ${invoice.number}`,
+          ? `${reference} · Reserva ${booking.reference}`
+          : `${reference} · Booking ${booking.reference}`
+        : reference,
     }),
     // payment_type stays "balance" for both kinds: it is what the webhook
     // switches on to route the settlement, and a manual invoice settles
@@ -389,7 +473,19 @@ export type CompletionOutcome =
  * A zero balance (100% coupon, or a deposit that covered the total) still
  * auto-settles — there is nothing to review or collect.
  */
-export async function issueBalanceForCompletedBooking(bookingId: number, origin: string): Promise<CompletionOutcome> {
+export async function issueBalanceForCompletedBooking(
+  bookingId: number,
+  origin: string,
+  options: {
+    /**
+     * False when the owner is the one acting (Paid in Cash issues the balance
+     * and settles it in one tap): an "approve this balance" alert about money
+     * already in hand is noise. Default true — the crew's completion tap
+     * must still tell the owner there is a bill to review.
+     */
+    notifyOwner?: boolean;
+  } = {}
+): Promise<CompletionOutcome> {
   const booking = await db.getBookingById(bookingId);
   if (!booking) return { outcome: "booking_not_found" };
   if (booking.status !== "completed") return { outcome: "not_completed" };
@@ -400,6 +496,15 @@ export async function issueBalanceForCompletedBooking(bookingId: number, origin:
   const amount = balanceDueForBooking(booking);
   const amountCents = dollarsToCents(amount);
   const now = new Date();
+  // What the customer will see this bill called, pinned now: a later edit to
+  // the booking cannot rename an invoice already sent. The cash choice a
+  // customer made at booking travels onto the bill too.
+  const snapshot = {
+    serviceType: booking.serviceType ?? null,
+    serviceDate: booking.scheduledDate ?? null,
+    paymentPreference: booking.paymentPreference ?? null,
+    cashChosenAt: booking.cashChosenAt ?? null,
+  };
 
   if (amount <= 0) {
     // Nothing left to collect — record a settled invoice so the job still shows
@@ -415,6 +520,7 @@ export async function issueBalanceForCompletedBooking(bookingId: number, origin:
       kind: "balance",
       status: "paid",
       paidAt: now,
+      ...snapshot,
     });
     return { outcome: "zero_balance", invoiceId };
   }
@@ -429,10 +535,11 @@ export async function issueBalanceForCompletedBooking(bookingId: number, origin:
     computedAmountCents: amountCents,
     kind: "balance",
     status: "awaiting_approval",
+    ...snapshot,
   });
 
   // Tell the owner there is money waiting on them, so it can't sit forgotten.
-  await notifyApprovalNeeded(invoiceId, booking, amount, amountCents);
+  if (options.notifyOwner !== false) await notifyApprovalNeeded(invoiceId, booking, amount, amountCents);
 
   return { outcome: "awaiting_approval", invoiceId, amount };
 }
@@ -444,7 +551,7 @@ async function notifyApprovalNeeded(invoiceId: number, booking: Booking, amount:
     const invoice = await db.getInvoiceById(invoiceId);
     if (!customer || !invoice) return;
     await sendBalanceApprovalNeededAlert(
-      toBalanceEmailData(booking, customer, { number: invoice.number, amount, amountCents }, "", new Date())
+      toBalanceEmailData(booking, customer, { ...invoiceFacts(invoice), amount, amountCents }, "", new Date())
     );
   } catch (error) {
     console.error(`[Balance] Failed to send approval alert for invoice ${invoiceId}:`, error);
@@ -554,6 +661,7 @@ export async function approveBalanceInvoice(args: {
     now,
   });
 
+
   await db.updateInvoice(invoiceId, {
     amount,
     amountCents,
@@ -573,7 +681,7 @@ export async function approveBalanceInvoice(args: {
     toBalanceEmailData(
       booking,
       customer,
-      { number: invoice.number, amount, items },
+      { ...invoiceFacts(invoice), amount, amountCents, items },
       balancePayUrl(origin, payToken),
       expiresAt,
       bizPhone
@@ -625,7 +733,7 @@ export async function resendBalanceLink(invoiceId: number, origin: string): Prom
   // approved, whatever the catalog says today.
   const items = parseLineItems(invoice.lineItems);
   const session = await createBalanceCheckoutSession({
-    invoice: { id: invoice.id, number: invoice.number, amount: invoice.amount, amountCents: invoice.amountCents, payToken, items },
+    invoice: { ...invoiceFacts(invoice), id: invoice.id, payToken, items },
     booking,
     customerEmail: customer.email ?? "",
     origin,
@@ -651,14 +759,7 @@ export async function resendBalanceLink(invoiceId: number, origin: string): Prom
   const bizPhone = (await db.getSetting("business_phone"))?.trim() || undefined;
   const payUrl = balancePayUrl(origin, payToken);
   const emailed = await sendBalanceDueEmail(
-    toInvoiceEmailData(
-      booking,
-      customer,
-      { number: invoice.number, amount: invoice.amount, amountCents: invoice.amountCents, items: parseLineItems(invoice.lineItems) },
-      payUrl,
-      expiresAt,
-      bizPhone
-    ),
+    toInvoiceEmailData(booking, customer, invoiceFacts(invoice), payUrl, expiresAt, bizPhone),
     { invoiceId: invoice.id, bookingId: booking?.id }
   );
 
@@ -704,15 +805,20 @@ export async function applyBalancePayment(
     const claimed = await db.settleUnpaidInvoice(invoiceId, {
       paidAt: new Date(),
       paidVia: "stripe",
+      paidMethod: "card",
       stripePaymentIntentId: paymentIntentId ?? undefined,
     });
     if (claimed) {
+      // One full payment when no deposit was captured (an Airbnb turnover, a
+      // manual invoice); the balance of a deposit otherwise.
+      const paidBooking = invoice.bookingId ? await db.getBookingById(invoice.bookingId) : undefined;
       await db.createPayment({
         bookingId: invoice.bookingId,
         invoiceId,
         customerId: invoice.customerId,
         amount: invoice.amount,
-        kind: "balance",
+        amountCents: invoice.amountCents ?? undefined,
+        kind: settlementKind(paidBooking),
         method: "card",
         source: "stripe",
         stripePaymentIntentId: paymentIntentId ?? undefined,
@@ -806,6 +912,13 @@ export async function sendDueBalanceReminders(
   const bizPhone = (await db.getSetting("business_phone"))?.trim() || undefined;
 
   for (const invoice of open) {
+    // A customer who said they will pay in cash is not chased for a card
+    // payment: the owner collects and records it. (A payment landing online
+    // anyway still settles the invoice through the usual path.)
+    if (invoice.paymentPreference === "cash") {
+      details.push(`${invoice.number}: skipped — customer chose to pay in cash`);
+      continue;
+    }
     const due = balanceReminderAction(invoice, now);
     if (!due) continue;
     // A manual invoice has no booking by design; a balance invoice missing its
@@ -821,7 +934,7 @@ export async function sendDueBalanceReminders(
         toInvoiceEmailData(
           booking,
           customer,
-          { number: invoice.number, amount: invoice.amount, amountCents: invoice.amountCents, items: parseLineItems(invoice.lineItems) },
+          invoiceFacts(invoice),
           balancePayUrl(origin, invoice.payToken ?? ""),
           invoice.linkExpiresAt ? new Date(invoice.linkExpiresAt) : now,
           bizPhone
@@ -854,7 +967,7 @@ export async function sendDueBalanceReminders(
       toInvoiceEmailData(
         booking,
         customer,
-        { number: invoice.number, amount: invoice.amount, amountCents: invoice.amountCents, items: parseLineItems(invoice.lineItems) },
+        invoiceFacts(invoice),
         balancePayUrl(origin, invoice.payToken ?? ""),
         expiresAt,
         bizPhone
@@ -890,7 +1003,7 @@ async function notifyOwnerOfBalance(
       toInvoiceEmailData(
         booking,
         customer,
-        { number: invoice.number, amount: invoice.amount, amountCents: invoice.amountCents, items: parseLineItems(invoice.lineItems) },
+        invoiceFacts(invoice),
         balancePayUrl("", invoice.payToken ?? ""),
         invoice.linkExpiresAt ? new Date(invoice.linkExpiresAt) : new Date()
       )
@@ -921,7 +1034,7 @@ export async function sendPaymentReceiptSafely(
     const data = toInvoiceEmailData(
       booking,
       customer,
-      { number: invoice.number, amount: invoice.amount, amountCents: invoice.amountCents, items: parseLineItems(invoice.lineItems) },
+      invoiceFacts(invoice),
       // A receipt carries no payment link: the invoice is settled, and a live
       // "pay now" URL on a receipt invites a second payment.
       "",
@@ -974,6 +1087,9 @@ export async function issueManualInvoice(args: {
   dueDate?: string;
   addonIds?: string[];
   customItems?: { name: string; amount: number }[];
+  /** What the customer will see the bill called: "Deep Cleaning — September 28, 2026". Either may be left out. */
+  serviceType?: CleaningType;
+  serviceDate?: string;
   origin: string;
   now?: Date;
 }): Promise<ManualInvoiceOutcome> {
@@ -1005,10 +1121,20 @@ export async function issueManualInvoice(args: {
     payToken,
     linkSentAt: now,
     linkExpiresAt: expiresAt,
+    serviceType: args.serviceType ?? null,
+    serviceDate: args.serviceDate ?? null,
   });
 
+  const facts: InvoiceEmailFacts = {
+    number,
+    amount,
+    amountCents,
+    items,
+    serviceType: args.serviceType ?? null,
+    serviceDate: args.serviceDate ?? null,
+  };
   const session = await createBalanceCheckoutSession({
-    invoice: { id: invoiceId, number, amount, amountCents, payToken, items },
+    invoice: { ...facts, id: invoiceId, payToken },
     customerEmail: customer.email,
     origin: args.origin,
     now,
@@ -1018,14 +1144,7 @@ export async function issueManualInvoice(args: {
 
   const bizPhone = (await db.getSetting("business_phone"))?.trim() || undefined;
   const emailed = await sendBalanceDueEmail(
-    toInvoiceEmailData(
-      undefined,
-      customer,
-      { number, amount, amountCents, items },
-      balancePayUrl(args.origin, payToken),
-      expiresAt,
-      bizPhone
-    ),
+    toInvoiceEmailData(undefined, customer, facts, balancePayUrl(args.origin, payToken), expiresAt, bizPhone),
     { invoiceId }
   );
 

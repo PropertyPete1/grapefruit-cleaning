@@ -13,8 +13,9 @@
  * property is worth showing whatever created the invoice.
  */
 import { composeAddress } from "@shared/property";
+import { deriveInvoicePaymentStatus, INVOICE_PAYMENT_STATUS_LABELS } from "@shared/paymentStatus";
 import { en } from "@/i18n/translations/en";
-import { SERVICE_LABELS, fmtDate } from "./adminShared";
+import { SERVICE_LABELS, fmtDate, fmtMoney } from "./adminShared";
 
 export type InvoiceBookingContext = {
   id: number;
@@ -57,6 +58,8 @@ export type InvoiceContextView =
       property: ContextRow[];
       service: ContextRow[];
       customer: ContextRow[];
+      /** The money: what the customer calls it, the amount, and where the payment stands. */
+      payment: ContextRow[];
       notes: string | null;
     }
   | {
@@ -64,13 +67,75 @@ export type InvoiceContextView =
       heading: string;
       explanation: string;
       customer: ContextRow[];
+      payment: ContextRow[];
     };
 
-export type InvoiceContextInput = {
+/** The payment facts an invoice row carries; every one optional so older callers still work. */
+export type InvoicePaymentContext = {
+  serviceReference?: string;
+  amount?: number;
+  amountCents?: number | null;
+  status?: string;
+  paidVia?: string | null;
+  paidMethod?: string | null;
+  paidAt?: Date | string | null;
+  paymentPreference?: string | null;
+  dueDate?: string | null;
+};
+
+export type InvoiceContextInput = InvoicePaymentContext & {
   kind: string;
   booking: InvoiceBookingContext | null;
   customer: InvoiceCustomerContext | null;
 };
+
+const METHOD_LABELS: Record<string, string> = {
+  card: "Card (online)",
+  cash: "Cash",
+  venmo: "Venmo",
+  zelle: "Zelle",
+  check: "Check",
+  other: "Other offline payment",
+};
+
+/**
+ * The payment rows: the customer-facing name of the bill first (so owner and
+ * customer are talking about the same thing), then the amount and where it
+ * stands — how it was paid and when, or what the customer said about paying.
+ */
+function paymentRows(invoice: InvoicePaymentContext): ContextRow[] {
+  const rows: ContextRow[] = [];
+  if (invoice.serviceReference) rows.push({ label: "Customer sees", value: invoice.serviceReference });
+  if (invoice.amount != null) {
+    rows.push({ label: "Amount", value: fmtMoney(invoice.amountCents != null ? invoice.amountCents / 100 : invoice.amount) });
+  }
+  if (invoice.status) {
+    const position = deriveInvoicePaymentStatus({
+      status: invoice.status,
+      paidVia: invoice.paidVia,
+      paidMethod: invoice.paidMethod,
+      paymentPreference: invoice.paymentPreference,
+    });
+    rows.push({ label: "Status", value: INVOICE_PAYMENT_STATUS_LABELS[position] });
+    if (invoice.status === "paid") {
+      rows.push({
+        label: "Paid via",
+        value: invoice.paidMethod
+          ? METHOD_LABELS[invoice.paidMethod] ?? invoice.paidMethod
+          : invoice.paidVia === "manual"
+            ? "Recorded by our team"
+            : invoice.paidVia === "stripe"
+              ? "Card (online)"
+              : "Covered by the deposit",
+      });
+      if (invoice.paidAt) rows.push({ label: "Paid on", value: fmtDate(invoice.paidAt) });
+    } else {
+      if (invoice.paymentPreference === "cash") rows.push({ label: "Customer chose", value: "Cash — collect in person" });
+      if (invoice.dueDate && invoice.status !== "void") rows.push({ label: "Due", value: fmtDate(invoice.dueDate) });
+    }
+  }
+  return rows;
+}
 
 const NOT_ON_FILE = "Not on file";
 
@@ -136,6 +201,7 @@ export function describeInvoiceContext(invoice: InvoiceContextInput): InvoiceCon
         : "The booking behind this balance invoice is no longer in the system, so its house and service details can't be shown. The customer on file is below.",
       // With no booking, the customer's own address is the only location there is.
       customer: customerRows(customer, true),
+      payment: paymentRows(invoice),
     };
   }
 
@@ -165,6 +231,7 @@ export function describeInvoiceContext(invoice: InvoiceContextInput): InvoiceCon
       { label: "Booking", value: `${booking.reference} · ${booking.status.replace(/_/g, " ")}` },
     ],
     customer: customerRows(customer, false),
+    payment: paymentRows(invoice),
     notes: booking.notes?.trim() ? booking.notes : null,
   };
 }

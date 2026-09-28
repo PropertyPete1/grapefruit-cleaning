@@ -12,6 +12,7 @@ import nodemailer, { type Transporter } from "nodemailer";
 import { notifyOwner } from "./_core/notification";
 import { logEmailAttempt } from "./emailLog";
 import { renderBrandedEmail, renderBrandedEmailText, type BrandedEmail } from "./emailShell";
+import { serviceReference } from "@shared/invoiceReference";
 
 export interface BookingEmailData {
   /**
@@ -48,6 +49,12 @@ export interface BookingEmailData {
    * its slot was retaken — the owner notification must warn about the clash.
    */
   slotConflict?: boolean;
+  /**
+   * "cash" when the customer chose PAY WITH CASH: no deposit was taken and the
+   * whole amount is collected at the cleaning. Every booking email says so
+   * instead of talking about a deposit or a card balance.
+   */
+  paymentPreference?: "online" | "cash" | null;
 }
 
 const fmtUsd = (n: number) => `$${n.toFixed(0)} USD`;
@@ -410,8 +417,10 @@ export async function deliverEmail(
 
 export function buildCustomerConfirmation(data: BookingEmailData): { subject: string; body: string } {
   // Zero-deposit mode: nothing was paid today, so there is no "deposit paid"
-  // line to show — the payment story is simply "due at completion".
+  // line to show — the payment story is simply "due at completion". A cash
+  // choice is the same money story with the customer's own words on it.
   const noDeposit = data.deposit <= 0;
+  const payingCash = data.paymentPreference === "cash";
   if (data.locale === "es") {
     return {
       subject: `Su limpieza está confirmada — Reserva ${data.reference} | Grapefruit Cleaning Co.`,
@@ -431,12 +440,14 @@ export function buildCustomerConfirmation(data: BookingEmailData): { subject: st
         ``,
         `RESUMEN DE PAGO`,
         `Total estimado: ${fmtUsd(data.total)}`,
-        ...(noDeposit
-          ? [`No se requiere depósito — el pago se realiza al completar el servicio.`]
-          : [
-              `Depósito pagado hoy: ${fmtUsd(data.deposit)}`,
-              `Saldo restante (se paga al completar el servicio): ${fmtUsd(data.total - data.deposit)}`,
-            ]),
+        ...(payingCash
+          ? [`Eligió pagar en efectivo: ${fmtUsd(data.total)} se paga el día de su limpieza. No se cobró ningún depósito.`]
+          : noDeposit
+            ? [`No se requiere depósito — el pago se realiza al completar el servicio.`]
+            : [
+                `Depósito pagado hoy: ${fmtUsd(data.deposit)}`,
+                `Saldo restante (se paga al completar el servicio): ${fmtUsd(data.total - data.deposit)}`,
+              ]),
         ``,
         `QUÉ SIGUE`,
         `• Le enviaremos un recordatorio 24 horas antes de su cita.`,
@@ -473,12 +484,14 @@ export function buildCustomerConfirmation(data: BookingEmailData): { subject: st
       ``,
       `PAYMENT SUMMARY`,
       `Estimated total: ${fmtUsd(data.total)}`,
-      ...(noDeposit
-        ? [`No deposit required — payment is due at completion.`]
-        : [
-            `Deposit paid today: ${fmtUsd(data.deposit)}`,
-            `Remaining balance (due on completion): ${fmtUsd(data.total - data.deposit)}`,
-          ]),
+      ...(payingCash
+        ? [`You chose to pay in cash: ${fmtUsd(data.total)} is due at your cleaning. No deposit was charged.`]
+        : noDeposit
+          ? [`No deposit required — payment is due at completion.`]
+          : [
+              `Deposit paid today: ${fmtUsd(data.deposit)}`,
+              `Remaining balance (due on completion): ${fmtUsd(data.total - data.deposit)}`,
+            ]),
       ``,
       `WHAT'S NEXT`,
       `• We'll send you a reminder 24 hours before your appointment.`,
@@ -529,7 +542,11 @@ export function buildReminderEmail(
         `• Asegure el acceso a su hogar (llave, código o alguien presente).`,
         `• Si tiene mascotas, considere ubicarlas en un área cómoda y segura.`,
         ``,
-        `Saldo restante a pagar al completar el servicio: ${fmtUsd(data.total - data.deposit)}`,
+        data.paymentPreference === "cash"
+          ? `Pago en efectivo: ${fmtUsd(data.total)} se paga al completar el servicio.`
+          : data.deposit > 0
+            ? `Saldo restante a pagar al completar el servicio: ${fmtUsd(data.total - data.deposit)}`
+            : `Total a pagar al completar el servicio: ${fmtUsd(data.total)}`,
         ``,
         `¿Necesita reprogramar? ${data.bizPhone ? `Responda a este correo o llámenos al ${data.bizPhone}` : `Responda a este correo`}${kind === "week" ? " — sin costo hasta 24 horas antes de su cita" : ""}.`,
         ``,
@@ -564,7 +581,11 @@ export function buildReminderEmail(
       `• Make sure we can access your home (key, code, or someone present).`,
       `• If you have pets, consider settling them in a comfortable, safe area.`,
       ``,
-      `Remaining balance due on completion: ${fmtUsd(data.total - data.deposit)}`,
+      data.paymentPreference === "cash"
+        ? `Paying in cash: ${fmtUsd(data.total)} is due when your cleaning is complete.`
+        : data.deposit > 0
+          ? `Remaining balance due on completion: ${fmtUsd(data.total - data.deposit)}`
+          : `Total due on completion: ${fmtUsd(data.total)}`,
       ``,
       `Need to reschedule? ${data.bizPhone ? `Reply to this email or call us at ${data.bizPhone}` : `Just reply to this email`}${kind === "week" ? " — free of charge up to 24 hours before your appointment" : ""}.`,
       ``,
@@ -578,6 +599,7 @@ export function buildReminderEmail(
 
 export function buildOwnerNotification(data: BookingEmailData): { title: string; content: string } {
   const noDeposit = data.deposit <= 0;
+  const payingCash = data.paymentPreference === "cash";
   const headline = data.completedLink
     ? `${noDeposit ? "Booking link completed" : "Deposit link completed"} ${data.reference} — ${data.serviceName} on ${data.date} at ${data.time}`
     : `New booking ${data.reference} — ${data.serviceName} on ${data.date} at ${data.time}`;
@@ -592,18 +614,22 @@ export function buildOwnerNotification(data: BookingEmailData): { title: string;
         : []),
       ...(data.completedLink
         ? [
-            noDeposit
-              ? `${data.customerName} finished the booking link you sent and confirmed their booking (no deposit required).`
-              : `${data.customerName} finished the booking link you sent and paid their deposit.`,
+            payingCash
+              ? `${data.customerName} finished the booking link you sent and chose to PAY IN CASH (no deposit taken).`
+              : noDeposit
+                ? `${data.customerName} finished the booking link you sent and confirmed their booking (no deposit required).`
+                : `${data.customerName} finished the booking link you sent and paid their deposit.`,
             ...(data.completedLink.customerChose.length > 0
               ? [`They chose: ${data.completedLink.customerChose.join(", ")}.`]
               : []),
             ``,
           ]
         : []),
-      noDeposit
-        ? `A new booking was confirmed. No deposit was required — the full amount is due at completion.`
-        : `A new booking was confirmed with a paid deposit.`,
+      payingCash
+        ? `A new booking was confirmed. The customer chose to PAY IN CASH — no deposit was taken. Collect ${fmtUsd(data.total)} at the cleaning and tap Paid in Cash on the booking.`
+        : noDeposit
+          ? `A new booking was confirmed. No deposit was required — the full amount is due at completion.`
+          : `A new booking was confirmed with a paid deposit.`,
       ``,
       `Reference: ${data.reference}`,
       `Service: ${data.serviceName}`,
@@ -619,9 +645,11 @@ export function buildOwnerNotification(data: BookingEmailData): { title: string;
       // on the crew's job card.
       ...(data.notes ? [``, `CUSTOMER NOTES`, data.notes] : []),
       ``,
-      noDeposit
-        ? `Total: ${fmtUsd(data.total)} | No deposit — full amount due at completion`
-        : `Total: ${fmtUsd(data.total)} | Deposit paid: ${fmtUsd(data.deposit)} | Balance due: ${fmtUsd(data.total - data.deposit)}`,
+      payingCash
+        ? `Total: ${fmtUsd(data.total)} | PAYING IN CASH — nothing collected yet`
+        : noDeposit
+          ? `Total: ${fmtUsd(data.total)} | No deposit — full amount due at completion`
+          : `Total: ${fmtUsd(data.total)} | Deposit paid: ${fmtUsd(data.deposit)} | Balance due: ${fmtUsd(data.total - data.deposit)}`,
     ]
       .filter(line => line !== undefined)
       .join("\n"),
@@ -879,6 +907,91 @@ export interface BalanceEmailData {
   expiresOn: string;
   locale: "en" | "es";
   bizPhone?: string;
+  /**
+   * What the customer sees this bill called — "Deep Cleaning — September 28,
+   * 2026". Built from serviceName and date when the caller leaves it out. The
+   * invoice number above never reaches a customer; it is for the admin pages
+   * and the owner's own alerts.
+   */
+  serviceReference?: string;
+  /** Where the customer says "I'll pay in cash": the pay link plus /cash. Absent on receipts and owner alerts. */
+  cashUrl?: string;
+  /** "cash" once the customer chose to pay in person — the email then says so instead of asking. */
+  paymentPreference?: "online" | "cash" | null;
+}
+
+/** The customer's name for a bill, from the caller or built from service and date. */
+function referenceOf(data: Pick<BalanceEmailData, "serviceReference" | "serviceName" | "date" | "locale">): string {
+  return data.serviceReference ?? serviceReference(data.serviceName, data.date, data.locale);
+}
+
+/**
+ * The two ways to pay, as the customer reads them: PAY ONLINE with the card
+ * link, PAY WITH CASH with the link that tells us to expect cash. Once they
+ * have chosen cash the section says so and keeps the card link as a way back.
+ */
+function payOptionsLines(data: BalanceEmailData, locale: "en" | "es", variant: "invoice" | "reminder"): string[] {
+  const cash = data.paymentPreference === "cash";
+  if (locale === "es") {
+    if (cash) {
+      return [
+        `PAGO EN EFECTIVO`,
+        `Usted eligió pagar en efectivo — ¡gracias! Recibiremos ${fmtUsd(data.balance)} en persona; no tiene que hacer nada en línea.`,
+        `¿Cambió de opinión? Puede pagar con tarjeta en cualquier momento desde este enlace:`,
+        `${data.payUrl}`,
+        ``,
+        `El enlace estará disponible hasta el ${data.expiresOn}.`,
+      ];
+    }
+    return [
+      `¿CÓMO PREFIERE PAGAR?`,
+      ``,
+      `PAGAR EN LÍNEA`,
+      `Pague de forma segura con tarjeta desde este enlace:`,
+      `${data.payUrl}`,
+      ``,
+      ...(data.cashUrl
+        ? [
+            `PAGAR EN EFECTIVO`,
+            `¿Prefiere pagarnos en efectivo, en persona? Avísenos aquí para que lo tengamos en cuenta — no se cobra nada en línea:`,
+            `${data.cashUrl}`,
+            ``,
+          ]
+        : []),
+      variant === "reminder"
+        ? `El enlace estará disponible hasta el ${data.expiresOn}. Si ya realizó el pago, ignore este mensaje; si tiene alguna duda, responda a este correo y con gusto lo coordinamos.`
+        : `El enlace estará disponible hasta el ${data.expiresOn}. Si tiene alguna duda sobre el pago, responda a este correo y con gusto lo coordinamos.`,
+    ];
+  }
+  if (cash) {
+    return [
+      `PAYING IN CASH`,
+      `You chose to pay in cash — thank you! We'll collect ${fmtUsd(data.balance)} in person, and there's nothing for you to do online.`,
+      `Changed your mind? You can pay by card any time using this link:`,
+      `${data.payUrl}`,
+      ``,
+      `The link stays available through ${data.expiresOn}.`,
+    ];
+  }
+  return [
+    `HOW WOULD YOU LIKE TO PAY?`,
+    ``,
+    `PAY ONLINE`,
+    `Pay securely by card using this link:`,
+    `${data.payUrl}`,
+    ``,
+    ...(data.cashUrl
+      ? [
+          `PAY WITH CASH`,
+          `Rather pay our team in cash, in person? Let us know here so we can expect it — nothing is charged online:`,
+          `${data.cashUrl}`,
+          ``,
+        ]
+      : []),
+    variant === "reminder"
+      ? `The link stays available through ${data.expiresOn}. If you've already paid, just ignore this note; otherwise reply to this email with any questions and we'll sort it out.`
+      : `The link stays available through ${data.expiresOn}. Questions about paying? Just reply to this email and we'll sort it out.`,
+  ];
 }
 
 /**
@@ -909,30 +1022,35 @@ function balanceChargeLines(data: BalanceEmailData, locale: "en" | "es"): string
 
 export function buildBalanceDueEmail(data: BalanceEmailData): { subject: string; body: string } {
   // A manual invoice has no job behind it: no booking reference, no service
-  // date, and — crucially — no deposit. Those lines are dropped rather than
-  // printed empty, and the deposit block is suppressed instead of claiming a
-  // "$0 deposit already paid", which would read as a credit the customer never
-  // made. `line === ""` is a deliberate blank line, so omitted lines use
-  // undefined and are filtered out below.
+  // date on the booking, and no deposit. Those lines are dropped rather than
+  // printed empty. `line === ""` is a deliberate blank line, so omitted lines
+  // use undefined and are filtered out below.
   const jobless = data.reference === "";
-  const showDeposit = !jobless || data.deposit > 0;
+  // A deposit line only when one was actually taken. On an Airbnb turnover
+  // (one payment, never a deposit), a cash booking, a zero-deposit booking or
+  // a manual invoice there was none, and "Deposit already paid: $0" would read
+  // as a credit the customer never made — the bill is simply the total.
+  const showDeposit = data.deposit > 0;
+  const ref = referenceOf(data);
   if (data.locale === "es") {
     return {
       subject: jobless
-        ? `Su factura de Grapefruit Cleaning Co. — ${data.invoiceNumber}`
-        : `Su limpieza está completa — pague su saldo restante | Grapefruit Cleaning Co.`,
+        ? `Su factura de Grapefruit Cleaning Co. — ${ref}`
+        : showDeposit
+          ? `Su limpieza está completa — pague su saldo restante | Grapefruit Cleaning Co.`
+          : `Su limpieza está completa — pago de ${ref} | Grapefruit Cleaning Co.`,
       body: [
         `Hola ${data.customerName},`,
         ``,
         jobless
           ? `Gracias por confiar en Grapefruit Cleaning Co. Aquí tiene su factura con el detalle de los cargos.`
-          : `¡Su limpieza está completa! Gracias por confiar en Grapefruit Cleaning Co. Solo queda pagar el saldo restante.`,
+          : showDeposit
+            ? `¡Su limpieza está completa! Gracias por confiar en Grapefruit Cleaning Co. Solo queda pagar el saldo restante.`
+            : `¡Su limpieza está completa! Gracias por confiar en Grapefruit Cleaning Co. Solo queda realizar su pago.`,
         ``,
         jobless ? `RESUMEN` : `RESUMEN DEL SERVICIO`,
+        `Servicio: ${ref}`,
         jobless ? undefined : `Referencia: ${data.reference}`,
-        `Factura: ${data.invoiceNumber}`,
-        `Servicio: ${data.serviceName}`,
-        jobless ? undefined : `Fecha del servicio: ${data.date}`,
         data.address ? `Dirección: ${data.address}` : ``,
         ``,
         `RESUMEN DE PAGO`,
@@ -941,11 +1059,7 @@ export function buildBalanceDueEmail(data: BalanceEmailData): { subject: string;
         showDeposit ? `Depósito ya pagado: ${fmtUsd(data.deposit)}` : undefined,
         showDeposit ? `Saldo restante a pagar: ${fmtUsd(data.balance)}` : `Total a pagar: ${fmtUsd(data.balance)}`,
         ``,
-        `PAGUE EN LÍNEA`,
-        `Puede pagar de forma segura con tarjeta desde este enlace:`,
-        `${data.payUrl}`,
-        ``,
-        `El enlace estará disponible hasta el ${data.expiresOn}. Si prefiere pagar en persona, con gusto lo coordinamos — avísenos y ajustaremos su factura.`,
+        ...payOptionsLines(data, "es", "invoice"),
         ``,
         data.bizPhone
           ? `¿Preguntas? Responda a este correo o llámenos al ${data.bizPhone}.`
@@ -960,20 +1074,22 @@ export function buildBalanceDueEmail(data: BalanceEmailData): { subject: string;
   }
   return {
     subject: jobless
-      ? `Your invoice from Grapefruit Cleaning Co. — ${data.invoiceNumber}`
-      : `Your cleaning is complete — pay your remaining balance | Grapefruit Cleaning Co.`,
+      ? `Your invoice from Grapefruit Cleaning Co. — ${ref}`
+      : showDeposit
+        ? `Your cleaning is complete — pay your remaining balance | Grapefruit Cleaning Co.`
+        : `Your cleaning is complete — payment for ${ref} | Grapefruit Cleaning Co.`,
     body: [
       `Hi ${data.customerName},`,
       ``,
       jobless
         ? `Thank you for trusting Grapefruit Cleaning Co. Here's your invoice, itemized below.`
-        : `Your cleaning is complete! Thank you for trusting Grapefruit Cleaning Co. All that's left is your remaining balance.`,
+        : showDeposit
+          ? `Your cleaning is complete! Thank you for trusting Grapefruit Cleaning Co. All that's left is your remaining balance.`
+          : `Your cleaning is complete! Thank you for trusting Grapefruit Cleaning Co. All that's left is your payment.`,
       ``,
       jobless ? `SUMMARY` : `SERVICE SUMMARY`,
+      `Service: ${ref}`,
       jobless ? undefined : `Reference: ${data.reference}`,
-      `Invoice: ${data.invoiceNumber}`,
-      `Service: ${data.serviceName}`,
-      jobless ? undefined : `Service date: ${data.date}`,
       data.address ? `Address: ${data.address}` : ``,
       ``,
       `PAYMENT SUMMARY`,
@@ -982,11 +1098,7 @@ export function buildBalanceDueEmail(data: BalanceEmailData): { subject: string;
       showDeposit ? `Deposit already paid: ${fmtUsd(data.deposit)}` : undefined,
       showDeposit ? `Remaining balance due: ${fmtUsd(data.balance)}` : `Total due: ${fmtUsd(data.balance)}`,
       ``,
-      `PAY ONLINE`,
-      `You can pay securely by card using this link:`,
-      `${data.payUrl}`,
-      ``,
-      `The link stays available through ${data.expiresOn}. If you'd rather pay in person, just let us know and we'll settle your invoice that way.`,
+      ...payOptionsLines(data, "en", "invoice"),
       ``,
       data.bizPhone
         ? `Questions? Reply to this email or call us at ${data.bizPhone}.`
@@ -1038,6 +1150,7 @@ export function buildPaymentReceiptEmail(
   };
   const method = methods[data.paidVia];
   const tipAmount = data.tipAmount ?? 0;
+  const ref = referenceOf(data);
   // A deposit line only makes sense when one was actually taken; on a manual
   // invoice, or in zero-deposit mode, printing "$0 deposit" invents a credit.
   const showDeposit = data.deposit > 0;
@@ -1051,10 +1164,8 @@ export function buildPaymentReceiptEmail(
         `Recibimos su pago de ${fmtUsd(data.balance)}. ¡Muchas gracias!`,
         ``,
         `COMPROBANTE DE PAGO`,
-        `Factura: ${data.invoiceNumber}`,
+        `Servicio: ${ref}`,
         jobless ? undefined : `Referencia: ${data.reference}`,
-        `Servicio: ${data.serviceName}`,
-        jobless ? undefined : `Fecha del servicio: ${data.date}`,
         data.address ? `Dirección: ${data.address}` : undefined,
         `Fecha de pago: ${data.paidOn}`,
         `Método de pago: ${method.es}`,
@@ -1089,10 +1200,8 @@ export function buildPaymentReceiptEmail(
       `We've received your payment of ${fmtUsd(data.balance)}. Thank you!`,
       ``,
       `PAYMENT RECEIPT`,
-      `Invoice: ${data.invoiceNumber}`,
+      `Service: ${ref}`,
       jobless ? undefined : `Reference: ${data.reference}`,
-      `Service: ${data.serviceName}`,
-      jobless ? undefined : `Service date: ${data.date}`,
       data.address ? `Address: ${data.address}` : undefined,
       `Payment date: ${data.paidOn}`,
       `Payment method: ${method.en}`,
@@ -1255,14 +1364,15 @@ export function buildBalanceReminderEmail(
   // Same rule as the original send: without a booking there is no reference to
   // print and nothing to call "your cleaning".
   const jobless = data.reference === "";
+  const ref = referenceOf(data);
   if (data.locale === "es") {
     return {
       subject: lastCall
         ? jobless
-          ? `Recordatorio final — factura ${data.invoiceNumber} pendiente | Grapefruit Cleaning Co.`
+          ? `Recordatorio final — ${ref} pendiente de pago | Grapefruit Cleaning Co.`
           : `Recordatorio final — saldo pendiente de su limpieza | Grapefruit Cleaning Co.`
         : jobless
-          ? `Recordatorio amistoso — factura ${data.invoiceNumber} pendiente | Grapefruit Cleaning Co.`
+          ? `Recordatorio amistoso — ${ref} pendiente de pago | Grapefruit Cleaning Co.`
           : `Recordatorio amistoso — saldo pendiente de su limpieza | Grapefruit Cleaning Co.`,
       body: [
         `Hola ${data.customerName},`,
@@ -1276,17 +1386,12 @@ export function buildBalanceReminderEmail(
             : `Esperamos que esté disfrutando su hogar recién limpio. Solo un recordatorio amistoso: el saldo de su limpieza sigue pendiente.`,
         ``,
         `RESUMEN`,
+        `Servicio: ${ref}`,
         ...(jobless ? [] : [`Referencia: ${data.reference}`]),
-        `Factura: ${data.invoiceNumber}`,
-        `Servicio: ${data.serviceName}`,
         ...balanceChargeLines(data, "es"),
         jobless ? `Total a pagar: ${fmtUsd(data.balance)}` : `Saldo pendiente: ${fmtUsd(data.balance)}`,
         ``,
-        `PAGUE EN LÍNEA`,
-        `Puede pagar de forma segura con tarjeta desde este enlace:`,
-        `${data.payUrl}`,
-        ``,
-        `El enlace estará disponible hasta el ${data.expiresOn}. Si ya realizó el pago o prefiere pagarlo en persona, ignore este mensaje o avísenos y con gusto lo ajustamos.`,
+        ...payOptionsLines(data, "es", "reminder"),
         ``,
         data.bizPhone
           ? `¿Preguntas? Responda a este correo o llámenos al ${data.bizPhone}.`
@@ -1300,10 +1405,10 @@ export function buildBalanceReminderEmail(
   return {
     subject: lastCall
       ? jobless
-        ? `Final reminder — invoice ${data.invoiceNumber} is still open | Grapefruit Cleaning Co.`
+        ? `Final reminder — ${ref} is still unpaid | Grapefruit Cleaning Co.`
         : `Final reminder — your cleaning balance is still open | Grapefruit Cleaning Co.`
       : jobless
-        ? `Friendly reminder — invoice ${data.invoiceNumber} is still open | Grapefruit Cleaning Co.`
+        ? `Friendly reminder — ${ref} is still unpaid | Grapefruit Cleaning Co.`
         : `Friendly reminder — your cleaning balance is still open | Grapefruit Cleaning Co.`,
     body: [
       `Hi ${data.customerName},`,
@@ -1317,17 +1422,12 @@ export function buildBalanceReminderEmail(
           : `We hope you're enjoying your freshly cleaned home! Just a friendly reminder that the balance for your cleaning is still open.`,
       ``,
       `SUMMARY`,
+      `Service: ${ref}`,
       ...(jobless ? [] : [`Reference: ${data.reference}`]),
-      `Invoice: ${data.invoiceNumber}`,
-      `Service: ${data.serviceName}`,
       ...balanceChargeLines(data, "en"),
       jobless ? `Total due: ${fmtUsd(data.balance)}` : `Balance due: ${fmtUsd(data.balance)}`,
       ``,
-      `PAY ONLINE`,
-      `You can pay securely by card using this link:`,
-      `${data.payUrl}`,
-      ``,
-      `The link stays available through ${data.expiresOn}. If you've already paid or would rather settle in person, just ignore this note or let us know and we'll sort it out.`,
+      ...payOptionsLines(data, "en", "reminder"),
       ``,
       data.bizPhone
         ? `Questions? Reply to this email or call us at ${data.bizPhone}.`
@@ -1494,6 +1594,42 @@ export async function sendBalancePaidNotification(data: BalanceEmailData): Promi
 /** Notifies the owner that a duplicate card payment needs refunding. */
 export async function sendRefundNeededAlert(data: BalanceEmailData): Promise<void> {
   await notifyOwnerWithEmailCopy(buildRefundNeededAlert(data));
+}
+
+/**
+ * Owner alert that a customer tapped PAY WITH CASH on their payment email: no
+ * card payment is coming, the automatic card reminders stop, and the money is
+ * collected in person and recorded with one tap. Internal, so the invoice
+ * number is fine here.
+ */
+export function buildCashPreferenceAlert(data: BalanceEmailData): { title: string; content: string } {
+  const ref = referenceOf(data);
+  return {
+    title: `Cash payment chosen — ${fmtUsd(data.balance)} for ${ref}${data.reference ? ` (booking ${data.reference})` : ""}`,
+    content: [
+      `${data.customerName} tapped PAY WITH CASH on their payment email. No card payment is expected — collect ${fmtUsd(data.balance)} in person.`,
+      `Automatic card reminders are paused for this invoice.`,
+      ``,
+      `Service: ${ref}`,
+      data.reference ? `Reference: ${data.reference}` : undefined,
+      `Invoice: ${data.invoiceNumber}`,
+      ``,
+      `Customer: ${data.customerName}`,
+      `Email: ${data.customerEmail}`,
+      data.customerPhone ? `Phone: ${data.customerPhone}` : undefined,
+      data.address ? `Address: ${data.address}` : undefined,
+      ``,
+      `Amount to collect: ${fmtUsd(data.balance)}`,
+      `When you have the cash, tap Paid in Cash on the booking (Admin → Appointments) or Record payment on the invoice. The customer can still pay by card from their email if they change their mind.`,
+    ]
+      .filter(line => line !== undefined)
+      .join("\n"),
+  };
+}
+
+/** Notifies the owner that a customer chose to pay in cash. */
+export async function sendCashPreferenceAlert(data: BalanceEmailData): Promise<void> {
+  await notifyOwnerWithEmailCopy(buildCashPreferenceAlert(data));
 }
 
 /**
@@ -2063,6 +2199,11 @@ export function buildDepositLinkEmail(data: DepositLinkEmailData): {
             : priced
               ? `El precio base cubre su limpieza tal como la conversamos. Si agrega extras, el total y el depósito se actualizan antes de pagar — sin sorpresas.`
               : `Su precio se calcula mientras elige, y el total y el depósito se muestran antes de pagar — sin sorpresas.`,
+          ...(zeroDeposit
+            ? []
+            : [
+                `¿Prefiere pagar en efectivo? Elija PAGAR EN EFECTIVO en su página de reserva — no se cobra depósito y paga el total el día de su limpieza.`,
+              ]),
           scheduled
             ? `Su horario está apartado hasta el ${data.expiresOn}. Después de esa fecha podríamos ofrecerlo a otra persona.`
             : `Su enlace está disponible hasta el ${data.expiresOn}. Si expira, llámenos y le enviamos uno nuevo.`,
@@ -2115,6 +2256,11 @@ export function buildDepositLinkEmail(data: DepositLinkEmailData): {
             : priced
               ? `The base price covers your cleaning exactly as we discussed. If you add extras, your total and deposit update before you pay — no surprises.`
               : `Your price is worked out as you choose, and the total and deposit show before you pay — no surprises.`,
+          ...(zeroDeposit
+            ? []
+            : [
+                `Prefer to pay in cash? Choose PAY WITH CASH on your booking page — no deposit is taken, and you pay in full at your cleaning.`,
+              ]),
           scheduled
             ? `We're holding your time through ${data.expiresOn}. After that we may need to offer it to someone else.`
             : `Your link is good through ${data.expiresOn}. If it expires, just call us and we'll send a fresh one.`,

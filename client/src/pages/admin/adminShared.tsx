@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
-import { PAYMENT_STATUS_LABELS, type BookingPaymentStatus } from "@shared/paymentStatus";
+import {
+  INVOICE_PAYMENT_STATUS_LABELS,
+  PAYMENT_STATUS_LABELS,
+  type BookingPaymentStatus,
+  type InvoicePaymentStatus,
+} from "@shared/paymentStatus";
 
 /** True while `ref`'s content is wider than the element itself. */
 function useHasOverflow(ref: React.RefObject<HTMLElement | null>): boolean {
@@ -242,13 +247,40 @@ export const PAYMENT_STATUS_STYLES: Record<BookingPaymentStatus, string> = {
   deposit_due: "bg-amber-100 text-amber-800",
   deposit_paid: "bg-emerald-100 text-emerald-700",
   pay_after_service: "bg-slate-100 text-slate-700",
+  // Cash is the owner's own money to collect: lime, so it reads apart from a
+  // card balance (blue) and from settled (emerald) at a glance.
+  cash_pending: "bg-lime-100 text-lime-800",
   balance_pending_approval: "bg-amber-100 text-amber-800",
   balance_due: "bg-blue-100 text-blue-700",
   unpaid: "bg-red-100 text-red-600",
   paid: "bg-emerald-100 text-emerald-700",
+  paid_cash: "bg-emerald-100 text-emerald-700",
   paid_offline: "bg-emerald-100 text-emerald-700",
   released: "bg-muted text-muted-foreground",
 };
+
+/** Invoice-side twin of the booking badge, for Admin → Invoices rows. */
+export const INVOICE_PAYMENT_STATUS_STYLES: Record<InvoicePaymentStatus, string> = {
+  paid: "bg-emerald-100 text-emerald-700",
+  paid_cash: "bg-emerald-100 text-emerald-700",
+  paid_offline: "bg-emerald-100 text-emerald-700",
+  cash_pending: "bg-lime-100 text-lime-800",
+  balance_pending_approval: "bg-amber-100 text-amber-800",
+  balance_due: "bg-blue-100 text-blue-700",
+  void: "bg-muted text-muted-foreground",
+  draft: "bg-muted text-muted-foreground",
+};
+
+export function InvoicePaymentBadge({ status }: { status: InvoicePaymentStatus }) {
+  return (
+    <span
+      className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold ${INVOICE_PAYMENT_STATUS_STYLES[status] ?? "bg-muted text-muted-foreground"}`}
+      title="Payment position of this invoice"
+    >
+      {INVOICE_PAYMENT_STATUS_LABELS[status] ?? status}
+    </span>
+  );
+}
 
 export function PaymentStatusBadge({ status }: { status: BookingPaymentStatus }) {
   return (

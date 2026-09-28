@@ -72,6 +72,7 @@ async function toEmailData(booking: Booking, customer: Customer, bizPhone?: stri
     address: composeAddress(booking),
     locale,
     bizPhone,
+    paymentPreference: booking.paymentPreference ?? null,
   };
 }
 

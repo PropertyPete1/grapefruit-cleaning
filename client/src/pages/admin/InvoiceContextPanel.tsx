@@ -37,16 +37,18 @@ export function InvoiceContextPanel({ invoice }: { invoice: InvoiceContextInput 
           <p className="mt-0.5 text-amber-800">{view.explanation}</p>
         </div>
         <Section title="Customer on file" rows={view.customer} />
+        {view.payment.length > 0 && <Section title="Payment" rows={view.payment} />}
       </div>
     );
   }
 
   return (
-    <div className="grid gap-2 lg:grid-cols-3">
+    <div className="grid gap-2 lg:grid-cols-4">
       <Section title="Property" rows={view.property} />
       <Section title="Service" rows={view.service} />
       <Section title="Customer" rows={view.customer} />
-      {view.notes && <NotesBlock notes={view.notes} className="lg:col-span-3" />}
+      {view.payment.length > 0 && <Section title="Payment" rows={view.payment} />}
+      {view.notes && <NotesBlock notes={view.notes} className="lg:col-span-4" />}
     </div>
   );
 }

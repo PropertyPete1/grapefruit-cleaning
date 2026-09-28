@@ -29,6 +29,29 @@ export function computeBalanceDue(booking: { totalAmount: number; depositAmount:
   return Math.max(0, total - deposit);
 }
 
+/** True when a deposit was actually captured on this booking: a Stripe intent exists and the deposit was not 0. */
+export function depositCaptured(booking: {
+  depositAmount: number;
+  depositAmountCents?: number | null;
+  stripePaymentIntentId?: string | null;
+}): boolean {
+  const depositCents = booking.depositAmountCents ?? Math.round(Number(booking.depositAmount) * 100);
+  return Boolean(booking.stripePaymentIntentId) && depositCents > 0;
+}
+
+/**
+ * How a settlement is booked in the payments ledger: "balance" when it
+ * completes a captured deposit, "full" when it is the whole job — an Airbnb
+ * turnover (never a deposit), a cash booking, or a manual invoice with no
+ * booking at all. One rule for the card path and the cash path, so
+ * Admin → Payments tells the two apart the same way whoever collected.
+ */
+export function settlementKind(
+  booking: { depositAmount: number; depositAmountCents?: number | null; stripePaymentIntentId?: string | null } | null | undefined
+): "balance" | "full" {
+  return booking && depositCaptured(booking) ? "balance" : "full";
+}
+
 /** End of the payment link's validity window, BALANCE_LINK_DAYS after `now`. */
 export function balanceLinkExpiresAt(now: Date = new Date()): Date {
   return new Date(now.getTime() + BALANCE_LINK_DAYS * 24 * 60 * 60 * 1000);
