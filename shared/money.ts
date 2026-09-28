@@ -23,6 +23,15 @@ export function moneyCents(cents: number | null | undefined, legacyDollars: numb
   return cents == null ? dollarsToCents(legacyDollars) : cents;
 }
 
+/**
+ * The exact dollar figure for display: cents when they were recorded, else
+ * the legacy whole-dollar column. Every list payload, confirmation page and
+ * email reads through this — the legacy column showed $474 for a $473.99 job.
+ */
+export function exactDollars(cents: number | null | undefined, legacyDollars: number): number {
+  return centsToDollars(moneyCents(cents, legacyDollars));
+}
+
 /** Compatibility value for the unchanged legacy INT columns. */
 export function legacyWholeDollars(cents: number): number {
   if (!Number.isInteger(cents)) throw new Error("Cents must be an integer");

@@ -55,6 +55,7 @@ import {
   type InvoiceLineItem,
 } from "@shared/invoiceItems";
 import { centsToDollars, dollarsToCents } from "@shared/money";
+import { assertNoDuplicateAddons } from "./addonRules";
 import { loadAddonCatalog, resolveSelectedAddons } from "./addonCatalog";
 import type { ExtraId } from "@shared/pricing";
 
@@ -333,8 +334,11 @@ export function lineItemLabel(item: InvoiceLineItem, locale: "en" | "es"): strin
  */
 export async function resolveLineItems(
   addonIds: string[],
-  customItems: { name: string; amount: number }[]
+  customItems: { name: string; amount: number }[],
+  /** The service the bill is for: an add-on it already includes is refused, never billed on top. */
+  serviceType?: string | null
 ): Promise<InvoiceLineItem[]> {
+  assertNoDuplicateAddons(serviceType, addonIds);
   const catalog = await loadAddonCatalog(false);
   if (catalog.enabled) {
     const selected = await resolveSelectedAddons(addonIds);
@@ -625,7 +629,7 @@ export async function approveBalanceInvoice(args: {
   // The final amount is built, not typed: the (possibly corrected) base plus
   // every named item. Items are snapshotted here — name and price as of this
   // moment — so a catalog edit tomorrow cannot rewrite what was billed.
-  const items = await resolveLineItems(args.addonIds ?? [], args.customItems ?? []);
+  const items = await resolveLineItems(args.addonIds ?? [], args.customItems ?? [], booking.serviceType);
   const baseCents = args.adjustedAmount !== undefined
     ? dollarsToCents(args.adjustedAmount)
     : invoice.amountCents ?? dollarsToCents(invoice.amount);
@@ -1100,7 +1104,7 @@ export async function issueManualInvoice(args: {
   if (!customer.email) return { outcome: "customer_has_no_email" };
 
   const now = args.now ?? new Date();
-  const items = await resolveLineItems(args.addonIds ?? [], args.customItems ?? []);
+  const items = await resolveLineItems(args.addonIds ?? [], args.customItems ?? [], args.serviceType ?? null);
   const amountCents = dollarsToCents(args.amount) + lineItemsTotalCents(items);
   const amount = centsToDollars(amountCents);
   const expiresAt = balanceLinkExpiresAt(now);

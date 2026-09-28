@@ -14,6 +14,7 @@
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { exactDollars } from "@shared/money";
 import * as db from "../db";
 import { assertRateLimit, clientIp } from "../antiSpam";
 import { publicOrigin } from "../publicOrigin";
@@ -89,6 +90,7 @@ export const tipRouter = router({
         return { state, locale, notice: NOTICES[state], booking: null };
       }
       const customer = await db.getCustomerById(booking.customerId);
+      const jobTotal = exactDollars(booking.totalAmountCents, booking.totalAmount);
       return {
         state,
         locale,
@@ -99,8 +101,8 @@ export const tipRouter = router({
           serviceName: SERVICE_NAMES[booking.serviceType ?? "residential"][locale],
           date: booking.scheduledDate,
           /** Presets in whole dollars, computed here — the page only displays them. */
-          total: booking.totalAmount,
-          presets: tipPresets(booking.totalAmount),
+          total: jobTotal,
+          presets: tipPresets(jobTotal),
         },
       };
     }),
@@ -140,11 +142,12 @@ export const tipRouter = router({
               : "This tip has already been taken care of — thank you again!",
         });
       }
-      const presets = tipPresets(booking.totalAmount);
+      const jobTotal = exactDollars(booking.totalAmountCents, booking.totalAmount);
+      const presets = tipPresets(jobTotal);
       const amount =
         input.preset != null
-          ? (presets.find(p => p.percent === input.preset)?.amount ?? clampTipAmount(1, booking.totalAmount))
-          : clampTipAmount(input.customAmount!, booking.totalAmount);
+          ? (presets.find(p => p.percent === input.preset)?.amount ?? clampTipAmount(1, jobTotal))
+          : clampTipAmount(input.customAmount!, jobTotal);
 
       const customer = await db.getCustomerById(booking.customerId);
       const session = await createTipCheckoutSession({

@@ -31,6 +31,8 @@ import { LEAD_TIME_SETTING_KEY, parseLeadTimeHours } from "@shared/leadTime";
 import { LUNCH_SETTING_KEY, parseLunchBreak, parseSchedule, SCHEDULE_SETTING_KEY } from "@shared/schedule";
 import * as db from "../db";
 import { assertRateLimit, clientIp } from "../antiSpam";
+import { assertNoDuplicateAddons } from "../addonRules";
+import { EXTRA_NAMES, FREQUENCY_NAMES, SERVICE_NAMES } from "../names";
 import { isRecurringFrequency, RECURRING_LOCKED_MESSAGE } from "@shared/returningCustomer";
 import { isReturningCustomer } from "../returningCustomers";
 import {
@@ -50,7 +52,7 @@ import { mintBookingRescheduleUrl } from "../rescheduleAccess";
 import { getStripe } from "../stripe";
 import { publicProcedure, router } from "../_core/trpc";
 import { bookingAddonSnapshots, loadAddonCatalog, resolveSelectedAddons } from "../addonCatalog";
-import { centsToDollars, depositCents, dollarsToCents, legacyWholeDollars } from "@shared/money";
+import { centsToDollars, depositCents, dollarsToCents, exactDollars, legacyWholeDollars } from "@shared/money";
 import { releaseExpiredCheckoutHolds } from "../checkoutHolds";
 
 const quoteInputSchema = z.object({
@@ -62,33 +64,10 @@ const quoteInputSchema = z.object({
   frequency: z.enum(["onetime", "weekly", "biweekly", "monthly"]),
 });
 
-export const SERVICE_NAMES: Record<string, { en: string; es: string }> = {
-  residential: { en: "Residential Cleaning", es: "Limpieza Residencial" },
-  commercial: { en: "Commercial Cleaning", es: "Limpieza Comercial" },
-  airbnb: { en: "Airbnb Cleaning", es: "Limpieza Airbnb" },
-  moveinout: { en: "Move In/Out Cleaning", es: "Limpieza de Mudanza" },
-  deep: { en: "Deep Cleaning", es: "Limpieza Profunda" },
-  office: { en: "Office Cleaning", es: "Limpieza de Oficinas" },
-};
-
-export const FREQUENCY_NAMES: Record<string, { en: string; es: string }> = {
-  onetime: { en: "One-time", es: "Una sola vez" },
-  weekly: { en: "Weekly", es: "Semanal" },
-  biweekly: { en: "Every two weeks", es: "Quincenal" },
-  monthly: { en: "Monthly", es: "Mensual" },
-};
-
-export const EXTRA_NAMES: Record<string, { en: string; es: string }> = {
-  pets: { en: "Home with pets", es: "Hogar con mascotas" },
-  deepClean: { en: "Deep cleaning", es: "Limpieza profunda" },
-  moveOut: { en: "Move out condition", es: "Condición de mudanza" },
-  oven: { en: "Inside oven", es: "Interior del horno" },
-  refrigerator: { en: "Inside refrigerator", es: "Interior del refrigerador" },
-  windows: { en: "Interior windows", es: "Ventanas interiores" },
-  laundry: { en: "Laundry & folding", es: "Lavandería y doblado" },
-  garage: { en: "Garage sweep", es: "Barrido de cochera" },
-  organization: { en: "Home organization", es: "Organización del hogar" },
-};
+// The customer-facing names live in ../names — a leaf module, so the add-on
+// rule and the emails can read them without importing this router. They are
+// re-exported here for every importer that always found them here.
+export { EXTRA_NAMES, FREQUENCY_NAMES, SERVICE_NAMES } from "../names";
 
 /** Load the live pricing configuration from settings (fallback: defaults). */
 export async function loadPricingConfig(): Promise<PricingConfig> {
@@ -176,6 +155,8 @@ export function occupiedIntervals(
 export const bookingRouter = router({
   /** Server-side authoritative quote calculation. */
   calculate: publicProcedure.input(quoteInputSchema).query(async ({ input }) => {
+    // The service's own work is never an add-on on top of it.
+    assertNoDuplicateAddons(input.type, input.extras);
     const config = await loadPricingConfig();
     const catalog = await loadAddonCatalog(false);
     if (catalog.enabled) {
@@ -333,6 +314,10 @@ export const bookingRouter = router({
       ) {
         throw new TRPCError({ code: "BAD_REQUEST", message: RECURRING_LOCKED_MESSAGE[input.locale] });
       }
+      // An add-on the service already includes is the same work charged
+      // twice — a Deep Cleaning with the "Deep cleaning" add-on. No form
+      // offers one; a request carrying one is refused, never silently kept.
+      assertNoDuplicateAddons(input.quote.type, input.quote.extras, input.locale);
       // Enforce every scheduling rule server-side: the admin-defined hours
       // (e.g. Sundays when closed), the minimum lead time, the hours other
       // bookings have already committed for their full duration, and whether
@@ -669,8 +654,10 @@ export const bookingRouter = router({
           serviceType: updated.serviceType ?? "residential",
           date: updated.scheduledDate ?? "",
           time: updated.scheduledTime ?? "",
-          total: updated.totalAmount,
-          deposit: updated.depositAmount,
+          // Exact money: the legacy columns hold whole dollars for rollback,
+          // and this page once showed $474 for a $473.99 job.
+          total: exactDollars(updated.totalAmountCents, updated.totalAmount),
+          deposit: exactDollars(updated.depositAmountCents, updated.depositAmount),
           paymentPreference: updated.paymentPreference ?? null,
           customerFirstName: customer?.firstName ?? "",
           email: customer?.email ?? "",
@@ -688,8 +675,8 @@ export const bookingRouter = router({
       serviceType: booking.serviceType,
       date: booking.scheduledDate,
       time: booking.scheduledTime,
-      total: booking.totalAmount,
-      deposit: booking.depositAmount,
+      total: exactDollars(booking.totalAmountCents, booking.totalAmount),
+      deposit: exactDollars(booking.depositAmountCents, booking.depositAmount),
       paymentPreference: booking.paymentPreference ?? null,
     };
   }),

@@ -828,3 +828,32 @@ Tap-to-text: `text_number` and `text_name` are public settings (siteInfo) edited
 in Admin → Settings → Reviews & texting; the booking flow renders an `sms:` link
 ("Questions? Text Karyme directly") under the step card on every step, and hides
 it while the number is blank. `google_review_url` stays admin-only.
+
+## Add-ons never duplicate the service; totals keep their cents — September 28, 2026
+
+Production case GFC-9RZ3VG: a Deep Cleaning at 3,000 sq ft ($413.99) was
+confirmed at $473.99 with "Extras: Deep cleaning". The add-on was not
+auto-selected — every add-on list offered "Deep cleaning ($60)" for every
+service and the server accepted it. `shared/addonRules.ts` now names what each
+service includes (`deep` → `deepClean`, `moveinout` → `moveOut`); the quote
+wizard, booking form, deposit link and invoice checklist show such an add-on
+as "Included" and unselectable (the catalog picker takes a `serviceType`), a
+service change drops it from the selection (and from a deposit link's stored
+extras), the booking form strips it from a handoff URL, and the server refuses
+it everywhere an add-on arrives: `booking.calculate`, `booking.create`, the
+deposit link's `createSession`/`confirm`/`chooseCash` (`get` never prices a
+stale one), and `resolveLineItems` for balance approval and manual invoices
+(`server/addonRules.ts` → `assertNoDuplicateAddons`, bilingual message). The
+same add-on stays a normal upsell on any other service. Admin → New booking
+has no add-on list, so nothing changed there. The customer-facing name maps
+moved to `server/names.ts` (a leaf module); the booking router re-exports them.
+
+The "$474": `bookings.totalAmount`/`depositAmount` are the legacy whole-dollar
+INT columns (`normalizeBookingMoney` rounds the exact cents into them for
+rollback). `exactDollars(cents, legacy)` in `shared/money.ts` is now the one
+way to read money for display, and `stripPayToken` — every list payload —
+returns exact `totalAmount`/`depositAmount`; `booking.confirm` and
+`booking.byReference` (the confirmation page), the tip page and email, the
+balance-approval context, the brain ticker and the resent deposit-link email
+all read through it. Emails already did. The client never reads the legacy
+figure any more; the confirmation page formats the total with `formatPrice`.

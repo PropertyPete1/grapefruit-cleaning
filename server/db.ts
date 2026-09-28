@@ -25,7 +25,7 @@ import {
 import { ENV } from './_core/env';
 import { blocksSlot, STALE_DEPOSIT_MINUTES } from "./bookingRules";
 import { customerFillsFor } from "./brainWriteRules";
-import { dollarsToCents, legacyWholeDollars } from "@shared/money";
+import { dollarsToCents, exactDollars, legacyWholeDollars } from "@shared/money";
 import { contactMatchesCustomer, normalizeEmail, normalizePhone } from "@shared/priceLock";
 import type { OfflinePaymentMethod } from "@shared/payments";
 
@@ -1046,14 +1046,31 @@ export function isSlotTakenError(error: unknown): boolean {
  * Applied inside the query functions rather than at the router, so a list
  * endpoint added later cannot forget it.
  */
-export function stripPayToken<T extends { payToken?: string | null; tipToken?: string | null }>(
-  row: T
-): Omit<T, "payToken" | "tipToken"> & { hasPayToken: boolean } {
+export function stripPayToken<
+  T extends {
+    payToken?: string | null;
+    tipToken?: string | null;
+    totalAmount?: number;
+    totalAmountCents?: number | null;
+    depositAmount?: number;
+    depositAmountCents?: number | null;
+  },
+>(row: T): Omit<T, "payToken" | "tipToken"> & { hasPayToken: boolean } {
   const { payToken, tipToken, ...rest } = row;
   void tipToken; // Same bearer-credential rule: the tip page token never rides a list payload.
+  // Exact money on every list payload. The legacy INT columns hold whole
+  // dollars for rollback, and a page that displayed them read $474 for a
+  // $473.99 job; the cents columns win whenever they were recorded.
+  const money =
+    typeof rest.totalAmount === "number" && typeof rest.depositAmount === "number"
+      ? {
+          totalAmount: exactDollars(rest.totalAmountCents, rest.totalAmount),
+          depositAmount: exactDollars(rest.depositAmountCents, rest.depositAmount),
+        }
+      : {};
   // The boolean, not the token: whether a link exists is what the appointments
   // table needs in order to show its status, and it is not a credential.
-  return { ...rest, hasPayToken: Boolean(payToken) };
+  return { ...rest, ...money, hasPayToken: Boolean(payToken) };
 }
 
 /** The same, for the {booking, customer} shape the staff views select. */
