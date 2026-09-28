@@ -118,7 +118,8 @@ export function GrandfatheredPriceDialog({
                 <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-xs">
                   {history.slice(0, 8).map(b => (
                     <li key={b.id} className="flex items-center justify-between gap-3 rounded-lg bg-card px-2.5 py-1.5">
-                      <span className="min-w-0 truncate text-muted-foreground">
+                      {/* Wraps rather than truncates: a nowrap row would set the dialog's width on a phone. */}
+                      <span className="min-w-0 break-words text-muted-foreground">
                         {fmtDate(b.scheduledDate)} · {b.serviceType ? (SERVICE_LABELS[b.serviceType] ?? b.serviceType) : "—"}
                         {b.sqft != null ? ` · ${b.sqft.toLocaleString()} ft²` : ""}
                         {` · ${FREQUENCY_LABELS[b.frequency] ?? b.frequency}`}

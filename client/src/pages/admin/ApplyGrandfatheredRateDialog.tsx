@@ -135,7 +135,7 @@ export function ApplyGrandfatheredRateDialog({
                       {fmtMoney(customer.price)} per {SERVICE_LABELS[customer.serviceType] ?? customer.serviceType} cleaning
                       {applies ? "" : ` — not for ${serviceLabel}`}
                     </span>
-                    <span className="block truncate text-[11px] text-muted-foreground">
+                    <span className="block break-words text-[11px] text-muted-foreground">
                       {[customer.email, customer.phone].filter(Boolean).join(" · ")}
                     </span>
                   </span>
