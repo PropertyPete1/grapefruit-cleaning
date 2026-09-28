@@ -15,6 +15,7 @@ import {
   type Frequency,
   type TieredType,
 } from "@shared/pricing";
+import { DEFAULT_PUBLIC_FREQUENCY, publicTierPrice } from "@shared/publicPricing";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { AddonCatalogDisplay } from "@/components/AddonCatalogPicker";
@@ -32,7 +33,9 @@ export default function Pricing() {
   const { t, locale, path } = useLocale();
   useSeo({ title: t.meta.pricing.title, description: t.meta.pricing.description, jsonLd: [localBusinessJsonLd()] });
   useReveal([locale]);
-  const [frequency, setFrequency] = useState<Frequency>("biweekly");
+  // Opens on the one-time catalog price. A recurring tab used to be the
+  // default, which showed every tier 15% off as if that were the base price.
+  const [frequency, setFrequency] = useState<Frequency>(DEFAULT_PUBLIC_FREQUENCY);
   const pricing = usePricing();
   const catalogQuery = trpc.booking.addonCatalog.useQuery();
   const catalog = catalogQuery.data;
@@ -44,7 +47,6 @@ export default function Pricing() {
     { id: "weekly", label: t.pricing.weekly, discount: t.pricing.weeklyDiscount },
   ];
 
-  const discountRate = pricing.frequencyDiscounts[frequency];
 
   return (
     <>
@@ -69,6 +71,8 @@ export default function Pricing() {
           {freqTabs.map((f) => (
             <button
               key={f.id}
+              type="button"
+              aria-pressed={frequency === f.id}
               onClick={() => setFrequency(f.id)}
               className={cn(
                 "press relative rounded-full px-4 py-2 text-sm font-semibold transition-colors duration-200 sm:px-5",
@@ -143,7 +147,7 @@ export default function Pricing() {
                             sqft: t.pricing.sqft,
                             anySize: t.pricing.anySize,
                           });
-                          const effective = tier.customQuote ? null : round2(tier.price * (1 - discountRate));
+                          const effective = tier.customQuote ? null : publicTierPrice(tier.price, frequency, pricing);
                           return (
                             <tr key={idx} className="border-t border-border/70">
                               {/* Tabular numerals + tight padding keep 14 rows legible at 375px. */}
@@ -194,7 +198,7 @@ export default function Pricing() {
               <Check className="mr-1 inline h-3.5 w-3.5 text-secondary" />
               {t.pricing.startingAt}{" "}
               <span className="font-display text-base font-extrabold text-foreground">
-                ${round2(startingPriceFor("airbnb", pricing) * (1 - discountRate)).toFixed(2)}
+                ${publicTierPrice(startingPriceFor("airbnb", pricing), frequency, pricing).toFixed(2)}
               </span>
             </p>
             <Button asChild size="sm" variant="outline" className="press mt-4 w-fit rounded-full px-5">
@@ -258,8 +262,4 @@ export default function Pricing() {
       </section>
     </>
   );
-}
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
 }
