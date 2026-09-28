@@ -12,6 +12,8 @@ const EMPTY: SiteInfo = {
   stats_cleanings: "",
   stats_years: "",
   stats_rating: "",
+  text_number: "",
+  text_name: "",
 };
 
 /**

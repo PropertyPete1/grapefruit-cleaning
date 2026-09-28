@@ -9,6 +9,7 @@ import { sendDueBalanceReminders } from "./balance";
 import { sdk } from "./_core/sdk";
 import { syncAllProperties } from "./icalSync";
 import { sendDueRebookingNudges } from "./marketing";
+import { sendDueReviewRequests } from "./reviewRequests";
 import { healthProblemCount, runDailyHealthCheck, sendWeeklyDigest } from "./ownerDigest";
 import { publicOrigin } from "./publicOrigin";
 import { sendDueReminders } from "./reminders";
@@ -68,6 +69,21 @@ async function sendRemindersHandler(req: Request, res: Response) {
       `[BalanceReminders] Scanned ${balances.scanned} open balance link(s), sent ${balances.reminded}, alerted owner on ${balances.alerted}.`,
       balances.details.join(" | ") || "none due"
     );
+    // The review ask rides the same beat, the day after a job settles, in its
+    // own try/catch for the same reason marketing is: nothing about a review
+    // is worth a customer's reminder tomorrow.
+    let reviews;
+    try {
+      reviews = await sendDueReviewRequests(publicOrigin(req));
+      console.log(
+        `[Reviews] Scanned ${reviews.scanned} settled job(s), sent ${reviews.sent} review request(s).`,
+        Object.entries(reviews.skipped)
+          .map(([reason, count]) => `${reason}:${count}`)
+          .join(" ") || "no skips"
+      );
+    } catch (error) {
+      console.error("[Reviews] Review request sweep failed:", error);
+    }
     // Marketing rides the same daily beat and runs LAST on purpose: a
     // transactional reminder must never be delayed or dropped because a
     // promotional sweep ahead of it was slow or threw. Its own failure is
@@ -115,7 +131,7 @@ async function sendRemindersHandler(req: Request, res: Response) {
       console.error("[Digest] Reporting failed:", error);
     }
 
-    return res.json({ ok: true, ...summary, balanceReminders: balances, nudges, health, digestSent });
+    return res.json({ ok: true, ...summary, balanceReminders: balances, reviews, nudges, health, digestSent });
   } catch (error) {
     // Stack traces stay in the server log; the response carries only the
     // message, so the endpoint can't be used to map the filesystem.

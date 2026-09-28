@@ -32,6 +32,9 @@ const mockListGrandfathered = vi.fn();
 const mockSetGrandfathered = vi.fn();
 const mockListBookings = vi.fn();
 const mockGetCustomersByIds = vi.fn();
+const mockFindCustomersByContact = vi.fn();
+const mockListCompletedForCustomers = vi.fn();
+const mockListInvoiceStates = vi.fn();
 const mockSessionCreate = vi.fn();
 const mockLookupProperty = vi.fn();
 const mockSendMail = vi.fn();
@@ -53,6 +56,11 @@ vi.mock("./db", async () => {
     setCustomerGrandfathered: (...a: unknown[]) => mockSetGrandfathered(...a),
     listBookings: (...a: unknown[]) => mockListBookings(...a),
     getCustomersByIds: (...a: unknown[]) => mockGetCustomersByIds(...a),
+    // Recurring plans are for returning customers (PR C2): Maria, an original
+    // client with a paid history, is one, so her bi-weekly booking goes through.
+    findCustomersByContact: (...a: unknown[]) => mockFindCustomersByContact(...a),
+    listCompletedBookingsForCustomers: (...a: unknown[]) => mockListCompletedForCustomers(...a),
+    listInvoiceStatesForBookings: (...a: unknown[]) => mockListInvoiceStates(...a),
     listBalanceInvoicesForBookings: vi.fn().mockResolvedValue([]),
     getCouponByCode: vi.fn().mockResolvedValue(undefined),
     expireStaleBookingsForSlot: vi.fn().mockResolvedValue(0),
@@ -245,6 +253,11 @@ beforeEach(() => {
   mockGetBookingByPayToken.mockResolvedValue(linkRow());
   mockGetBookingById.mockResolvedValue(linkRow());
   mockSetGrandfathered.mockResolvedValue(undefined);
+  mockFindCustomersByContact.mockResolvedValue([MARIA]);
+  mockListCompletedForCustomers.mockResolvedValue([
+    { id: 500, customerId: 41, status: "completed", totalAmount: 85, totalAmountCents: 8500, depositAmount: 17, depositAmountCents: 1700, stripePaymentIntentId: "pi_old" },
+  ]);
+  mockListInvoiceStates.mockResolvedValue([{ bookingId: 500, status: "paid", paidAt: new Date("2026-09-02T00:00:00Z") }]);
 });
 
 afterEach(() => {

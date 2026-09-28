@@ -345,7 +345,7 @@ export const es: Dictionary = {
     over: "Más de",
     anySize: "Cualquier tamaño",
     sqft: "pies²",
-    tierNote: "Los planes recurrentes aplican su descuento por frecuencia a estas tarifas. Los extras se cotizan por separado más abajo.",
+    tierNote: "Tarifas de una sola vez — los planes recurrentes con ahorros se desbloquean después de su primera limpieza. Los extras se cotizan por separado más abajo.",
     commercialNote: "Los espacios comerciales y de oficina se cotizan individualmente según el metraje, la distribución y el horario.",
     plans: {
       residential: { name: "Residencial", desc: "Limpieza del hogar recurrente o única" },
@@ -487,6 +487,9 @@ export const es: Dictionary = {
     next3: "Su equipo de limpieza verificado llegará puntual. ¡Disfrute su espacio renovado!",
     backHome: "Volver al Inicio",
     frequency: "Frecuencia",
+    recurringWelcome: "¡Bienvenido de nuevo! Los planes recurrentes y sus ahorros están disponibles para usted — elija uno abajo.",
+    textUs: "¿Preguntas? Envíe un mensaje de texto a {name}",
+    textUsGeneric: "¿Preguntas? Envíenos un mensaje de texto",
     validation: {
       required: "Este campo es obligatorio",
       email: "Ingrese un correo electrónico válido",

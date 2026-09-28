@@ -24,10 +24,10 @@ import {
   SprayCan,
   Warehouse,
   AppWindow,
-  CalendarRange,
   Briefcase,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { RECURRING_UNLOCK_NOTE } from "@shared/returningCustomer";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { useLocale } from "@/i18n/LocaleContext";
@@ -87,8 +87,6 @@ const EXTRA_IDS: ExtraId[] = [
   "organization",
 ];
 
-const FREQUENCIES: Frequency[] = ["onetime", "weekly", "biweekly", "monthly"];
-
 const stepVariants = {
   enter: (dir: number) => ({ opacity: 0, x: dir > 0 ? 32 : -32 }),
   center: { opacity: 1, x: 0 },
@@ -124,7 +122,11 @@ export default function Quote() {
    */
   const [propertyType, setPropertyType] = useState<PropertyType>("house");
   const [extras, setExtras] = useState<string[]>([]);
-  const [frequency, setFrequency] = useState<Frequency>("onetime");
+  // Public quotes are one-time prices. Recurring plans — and their discounts —
+  // are for returning customers and unlock on the booking form once the
+  // customer is recognised; this page never identifies anyone, so it never
+  // offers a plan or shows a discount.
+  const frequency: Frequency = "onetime";
   // Optional address — verifies sqft against public county records and locks the slider to it.
   const [address, setAddress] = useState("");
   const [city, setCity] = useState("");
@@ -195,7 +197,7 @@ export default function Quote() {
     return calculateQuote({ type, bedrooms, bathrooms, sqft, extras: extras as ExtraId[], frequency }, pricing);
   }, [type, bedrooms, bathrooms, sqft, extras, frequency, pricing, catalog]);
 
-  const stepTitles = [t.quote.steps.type, t.quote.steps.details, t.quote.steps.extras, t.quote.steps.frequency, t.quote.steps.result];
+  const stepTitles = [t.quote.steps.type, t.quote.steps.details, t.quote.steps.extras, t.quote.steps.result];
   const totalSteps = stepTitles.length;
 
   const go = (next: number) => {
@@ -221,20 +223,6 @@ export default function Quote() {
     { id: "office", name: t.services.office.name, short: t.services.office.short },
   ];
 
-  const frequencyLabels: Record<Frequency, string> = {
-    onetime: t.pricing.onetime,
-    weekly: t.pricing.weekly,
-    biweekly: t.pricing.biweekly,
-    monthly: t.pricing.monthly,
-  };
-
-  const frequencyBadges: Record<Frequency, string | null> = {
-    onetime: null,
-    weekly: t.pricing.weeklyDiscount,
-    biweekly: t.pricing.biweeklyDiscount,
-    monthly: t.pricing.monthlyDiscount,
-  };
-
   const goToBooking = () => {
     const params = new URLSearchParams({
       source: "quote",
@@ -243,7 +231,6 @@ export default function Quote() {
       bathrooms: String(bathrooms),
       sqft: String(sqft),
       extras: extras.join(","),
-      frequency,
       propertyType,
     });
     if (address.trim()) params.set("address", address.trim());
@@ -637,49 +624,6 @@ export default function Quote() {
 
               {step === 3 && (
                 <motion.div
-                  key="frequency"
-                  custom={direction}
-                  variants={stepVariants}
-                  initial="enter"
-                  animate="center"
-                  exit="exit"
-                  transition={{ duration: 0.22, ease: [0.23, 1, 0.32, 1] }}
-                >
-                  <h2 className="font-display text-2xl font-bold text-foreground">{t.quote.frequencyTitle}</h2>
-                  <p className="mt-2 text-sm text-muted-foreground">{t.quote.frequencySubtitle}</p>
-                  <div className="mt-6 grid gap-3 sm:grid-cols-2">
-                    {FREQUENCIES.map(f => {
-                      const active = frequency === f;
-                      const badge = frequencyBadges[f];
-                      return (
-                        <button
-                          key={f}
-                          type="button"
-                          onClick={() => setFrequency(f)}
-                          className={`relative flex items-center justify-between rounded-2xl border-2 p-5 text-left transition-all duration-200 active:scale-[0.98] ${
-                            active
-                              ? "border-primary bg-primary/5 shadow-md shadow-primary/10"
-                              : "border-border bg-card hover:border-primary/40"
-                          }`}
-                        >
-                          <span className="flex items-center gap-3">
-                            <CalendarRange className={`h-5 w-5 ${active ? "text-primary" : "text-muted-foreground"}`} />
-                            <span className="font-semibold text-foreground">{frequencyLabels[f]}</span>
-                          </span>
-                          {badge && (
-                            <span className="rounded-full bg-secondary/10 px-3 py-1 text-xs font-bold text-secondary">
-                              {badge}
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </motion.div>
-              )}
-
-              {step === 4 && (
-                <motion.div
                   key="result"
                   custom={direction}
                   variants={stepVariants}
@@ -711,11 +655,9 @@ export default function Quote() {
                           <AnimatedPrice value={breakdown.total} />
                         </div>
                         <p className="mt-1 text-sm text-muted-foreground">{t.quote.perCleaning}</p>
-                        {breakdown.discount > 0 && (
-                          <p className="mt-3 inline-block rounded-full bg-secondary/10 px-4 py-1.5 text-sm font-bold text-secondary">
-                            {t.quote.savings} ${formatPrice(breakdown.discount)}
-                          </p>
-                        )}
+                        <p className="mt-3 text-xs leading-relaxed text-muted-foreground" data-testid="recurring-unlock-note">
+                          {RECURRING_UNLOCK_NOTE[locale]}
+                        </p>
                       </>
                     )}
                   </div>
@@ -757,7 +699,7 @@ export default function Quote() {
             </AnimatePresence>
 
             {/* Nav buttons */}
-            {step < 4 && (
+            {step < 3 && (
               <div className="mt-10 flex items-center justify-between border-t border-border pt-6">
                 <Button
                   variant="ghost"
@@ -819,12 +761,6 @@ export default function Quote() {
                       {t.quote.steps.extras} ({extras.length})
                     </span>
                     <span className="font-medium">${formatPrice(breakdown.extrasTotal)}</span>
-                  </div>
-                )}
-                {breakdown.discount > 0 && (
-                  <div className="flex justify-between text-emerald-400">
-                    <span>{frequencyLabels[frequency]} · {Math.round(pricing.frequencyDiscounts[frequency] * 100)}%</span>
-                    <span className="font-medium">−${formatPrice(breakdown.discount)}</span>
                   </div>
                 )}
               </div>

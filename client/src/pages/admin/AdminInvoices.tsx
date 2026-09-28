@@ -50,6 +50,7 @@ import {
   fmtMoney,
 } from "./adminShared";
 import { InvoiceContextPanel } from "./InvoiceContextPanel";
+import { InvoiceCustomerDialog, type InvoiceCustomerTarget } from "./InvoiceCustomerDialog";
 
 const INVOICE_STATUSES = ["draft", "sent", "overdue", "void"] as const;
 
@@ -473,6 +474,8 @@ export default function AdminInvoices() {
   // Desktop rows opened to show their property and customer details. Phone cards
   // use RowCard's own Details toggle for the same panel.
   const [expandedIds, setExpandedIds] = useState<number[]>([]);
+  // The customer popout: who is on this bill, and what the bill is called.
+  const [customerPopout, setCustomerPopout] = useState<InvoiceCustomerTarget | null>(null);
   const toggleExpanded = (id: number) =>
     setExpandedIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
   const resend = trpc.admin.resendBalanceLink.useMutation({
@@ -698,6 +701,7 @@ export default function AdminInvoices() {
         }
       />
 
+      <InvoiceCustomerDialog invoice={customerPopout} onClose={() => setCustomerPopout(null)} />
       <OfflinePaymentDialog
         invoice={recording}
         customer={recording ? (recording.customerName ?? customerName(recording.customerId)) : ""}
@@ -751,7 +755,17 @@ export default function AdminInvoices() {
                     </td>
                     {/* The customer's name for this bill — what their emails say. */}
                     <td className="px-6 py-3.5 text-sm font-medium text-foreground">{inv.serviceReference}</td>
-                    <td className="px-6 py-3.5">{inv.customerName ?? customerName(inv.customerId)}</td>
+                    <td className="px-6 py-3.5">
+                      <button
+                        type="button"
+                        onClick={() => setCustomerPopout(inv)}
+                        title="Customer details — and the service type and date on this invoice"
+                        className="text-left font-medium text-primary underline-offset-2 hover:underline"
+                        data-testid="invoice-customer-button"
+                      >
+                        {inv.customerName ?? customerName(inv.customerId)}
+                      </button>
+                    </td>
                     <td className="px-6 py-3.5">
                       <span className="font-semibold">{fmtMoney(invoiceAmount(inv))}</span>
                       {(() => {
@@ -856,7 +870,14 @@ export default function AdminInvoices() {
                 title={<span>{inv.serviceReference}</span>}
                 subtitle={
                   <>
-                    {inv.customerName ?? customerName(inv.customerId)}
+                    <button
+                      type="button"
+                      onClick={() => setCustomerPopout(inv)}
+                      className="text-left font-medium text-primary underline-offset-2 hover:underline"
+                      data-testid="invoice-customer-button"
+                    >
+                      {inv.customerName ?? customerName(inv.customerId)}
+                    </button>
                     <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">{inv.number}</span>
                   </>
                 }

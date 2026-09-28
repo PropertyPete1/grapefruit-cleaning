@@ -31,6 +31,8 @@ import { LEAD_TIME_SETTING_KEY, parseLeadTimeHours } from "@shared/leadTime";
 import { LUNCH_SETTING_KEY, parseLunchBreak, parseSchedule, SCHEDULE_SETTING_KEY } from "@shared/schedule";
 import * as db from "../db";
 import { assertRateLimit, clientIp } from "../antiSpam";
+import { isRecurringFrequency, RECURRING_LOCKED_MESSAGE } from "@shared/returningCustomer";
+import { isReturningCustomer } from "../returningCustomers";
 import {
   blocksSlot,
   STALE_DEPOSIT_MINUTES,
@@ -277,6 +279,19 @@ export const bookingRouter = router({
   }),
 
   /** Create booking + Stripe Checkout session for the deposit. */
+  /**
+   * Whether these contact details belong to a returning customer — someone
+   * with a completed, paid cleaning behind them — which is what unlocks the
+   * recurring plans on the booking form's review step. A boolean and nothing
+   * else, rate-limited like the other public lookups: it confirms a past
+   * customer exists, never who they are, what they paid or when.
+   */
+  returningCustomer: publicProcedure
+    .input(z.object({ email: z.string().max(320).optional(), phone: z.string().max(40).optional() }))
+    .query(async ({ input, ctx }) => {
+      assertRateLimit("returning", clientIp(ctx), 20, 60_000);
+      return { returning: await isReturningCustomer(input) };
+    }),
   create: publicProcedure
     .input(
       z.object({
@@ -307,6 +322,17 @@ export const bookingRouter = router({
     .mutation(async ({ input, ctx }) => {
       // Nuisance-bot protection: max 5 booking attempts per IP per minute.
       assertRateLimit("booking", clientIp(ctx), 5, 60_000);
+      // Recurring plans are for returning customers. The form offers them only
+      // once the contact details match a completed, paid cleaning; this is the
+      // same rule applied to what actually arrives, so a crafted request cannot
+      // take a discount the page never showed. The owner's own form is not
+      // gated — Admin → New booking puts anyone on a plan.
+      if (
+        isRecurringFrequency(input.quote.frequency) &&
+        !(await isReturningCustomer({ email: input.email, phone: input.phone }))
+      ) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: RECURRING_LOCKED_MESSAGE[input.locale] });
+      }
       // Enforce every scheduling rule server-side: the admin-defined hours
       // (e.g. Sundays when closed), the minimum lead time, the hours other
       // bookings have already committed for their full duration, and whether

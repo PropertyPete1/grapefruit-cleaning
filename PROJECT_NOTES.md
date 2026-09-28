@@ -780,3 +780,51 @@ own min and max, inserts a tier between any two rows, and on save sorts by max
 sq ft, snaps each min to the previous max, and lists every boundary it
 straightened as a warning. The stored ladder shape and the server's strict
 validation are unchanged.
+
+## Returning customers, review requests, customer picker, tap-to-text — September 28, 2026
+
+Recurring plans are for returning customers (`shared/returningCustomer.ts`). A
+customer is returning when their normalized email or phone matches a customer
+row with at least one booking that is completed AND paid: a paid invoice (card
+through the balance link, cash or another method the owner recorded), or — with
+no invoice at all — a captured deposit that covered the whole job. An open
+invoice, a cancelled job, or a completed job nobody billed does not count. The
+public pricing page shows one-time prices only (no frequency toggle), the quote
+wizard has no frequency step, and the booking form shows the note "Recurring
+plans with savings unlock after your first cleaning." until the review step,
+where `booking.returningCustomer` (a rate-limited yes/no on the typed contact)
+unlocks the plan chips and their discounts. `booking.create` applies the same
+rule to what actually arrives and refuses a recurring frequency from a
+first-time customer with one localized message; Admin → New booking is never
+gated. The recurring discounts themselves (`pricing_config.frequencyDiscounts`)
+are unchanged.
+
+The review request (`server/reviewRequests.ts`) runs on the daily
+`/api/scheduled/sendReminders` beat after the balance reminders, in its own
+try/catch. Candidates are completed jobs not yet asked (`bookings.reviewEmailSentAt`
+null, migration 0035), never auto-booked turnovers; the sweep sends when the job
+is paid by the definition above and its settlement (the paid invoice's `paidAt`,
+else the completion thank-you's timestamp) is between 20 hours and 14 days old —
+so nothing in history is emailed on deploy. The claim is a conditional UPDATE
+before the send (once per job), the email is logged as `review_request` against
+the booking, it is skipped for `marketingUnsubscribedAt`, and it carries the same
+one-click unsubscribe link as the nudges (`customers.marketingToken`, minted if
+missing). The button goes to `google_review_url` from Admin → Settings (validated
+as an http(s) URL on save), or to the site's testimonials page when blank. On a
+customer's first completed one-time job the email adds that recurring plans are
+now available, with the booking link. Nothing is sent without a public origin.
+
+Admin → New booking has an existing-customer search (name, email or phone,
+digits matched with punctuation stripped) that prefills name, phone, email,
+language and address and sends `customerId`; `createAdminBooking` books on that
+row and refreshes it from the (editable) fields — a caller naming the row with no
+contact (the brain write API) still skips the refresh. Admin → Invoices opens a
+customer popout from the customer's name (contact, language, recent bookings)
+where the invoice's service type and date — the bill's name on every email and
+the pay page — are edited through `admin.updateInvoiceReference`; money is never
+touched there.
+
+Tap-to-text: `text_number` and `text_name` are public settings (siteInfo) edited
+in Admin → Settings → Reviews & texting; the booking flow renders an `sms:` link
+("Questions? Text Karyme directly") under the step card on every step, and hides
+it while the number is blank. `google_review_url` stays admin-only.

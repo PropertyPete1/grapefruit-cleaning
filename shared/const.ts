@@ -19,6 +19,9 @@ export const PUBLIC_SETTING_KEYS = [
   "stats_cleanings",
   "stats_years",
   "stats_rating",
+  /** Tap-to-text line offered in the booking flow, and whose name the link carries. */
+  "text_number",
+  "text_name",
 ] as const;
 export type PublicSettingKey = (typeof PUBLIC_SETTING_KEYS)[number];
 

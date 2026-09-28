@@ -28,6 +28,7 @@ import {
   SCHEDULE_SETTING_KEY,
   type WeeklySchedule,
 } from "@shared/schedule";
+import { REVIEW_URL_SETTING_KEY, TEXT_NAME_SETTING_KEY, TEXT_NUMBER_SETTING_KEY } from "@shared/reviewRequest";
 import { PageHeader } from "./adminShared";
 
 type Field = { key: string; label: string; placeholder: string; hint?: string };
@@ -49,6 +50,31 @@ const SECTIONS: { title: string; description: string; fields: Field[] }[] = [
     fields: [
       { key: "instagram_url", label: "Instagram URL", placeholder: "https://instagram.com/yourbusiness" },
       { key: "facebook_url", label: "Facebook URL", placeholder: "https://facebook.com/yourbusiness" },
+    ],
+  },
+  {
+    title: "Reviews & texting",
+    description:
+      "The review request emails each customer the day after a cleaning is completed and paid — once per job, in their language. The text line appears in the booking flow as a tap-to-text link.",
+    fields: [
+      {
+        key: REVIEW_URL_SETTING_KEY,
+        label: "Google review link",
+        placeholder: "https://g.page/r/…/review",
+        hint: "Where the review button sends customers. Leave blank to send them to your site's testimonials page instead.",
+      },
+      {
+        key: TEXT_NUMBER_SETTING_KEY,
+        label: "Text line",
+        placeholder: "(210) 555-0123",
+        hint: "Customers can tap to text this number while booking. Leave blank to hide the link.",
+      },
+      {
+        key: TEXT_NAME_SETTING_KEY,
+        label: "Text line name",
+        placeholder: "Karyme",
+        hint: "Whose number it is — the link reads “Questions? Text Karyme directly”.",
+      },
     ],
   },
   {
@@ -432,6 +458,7 @@ export default function AdminSettings() {
                         Save
                       </Button>
                     </div>
+                    {f.hint && <p className="mt-1 text-[11px] text-muted-foreground">{f.hint}</p>}
                   </div>
                 ))}
               </div>
