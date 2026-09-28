@@ -50,6 +50,7 @@ import { AddonCatalogPicker, CatalogAddonsSummary, selectedCatalogAddons } from 
 import { usePricing } from "@/hooks/usePricing";
 import { useSiteInfo } from "@/hooks/useSiteInfo";
 import { RECURRING_UNLOCK_NOTE } from "@shared/returningCustomer";
+import { addonIncludedIn, includedInServiceLabel, withoutIncludedAddons } from "@shared/addonRules";
 import { smsHref } from "@shared/reviewRequest";
 import { formatPrice } from "@/lib/formatPrice";
 import { ENTRY_BATHROOMS, ENTRY_BEDROOMS, entrySqft } from "@/lib/quoteDefaults";
@@ -124,8 +125,19 @@ export default function Booking() {
   const [extras, setExtras] = useState<string[]>(() => {
     const raw = params.get("extras");
     if (!raw) return [];
-    return raw.split(",").map(value => value.trim()).filter(Boolean);
+    // A handoff (or an old link) never carries the service's own work as an
+    // add-on: a deep clean arriving with "deepClean" drops it here.
+    return withoutIncludedAddons(type, raw.split(",").map(value => value.trim()).filter(Boolean));
   });
+  const toggleExtra = (id: string) => {
+    if (addonIncludedIn(type, id)) return;
+    setExtras(prev => (prev.includes(id) ? prev.filter(key => key !== id) : [...prev, id]));
+  };
+  /** Switching service drops any add-on the new service includes. */
+  const chooseType = (next: CleaningType) => {
+    setType(next);
+    setExtras(prev => withoutIncludedAddons(next, prev));
+  };
   const [frequency, setFrequency] = useState<Frequency>(() => {
     const q = params.get("frequency");
     return VALID_FREQ.includes(q as Frequency) ? (q as Frequency) : "onetime";
@@ -506,7 +518,7 @@ export default function Booking() {
               </div>
               <div className="rounded-2xl border border-border p-4">
                 <p className="text-xs text-muted-foreground">{t.booking.estimatedTotal}</p>
-                <p className="mt-1 font-semibold text-foreground">${confirmed.total}</p>
+                <p className="mt-1 font-semibold text-foreground">${formatPrice(confirmed.total)}</p>
               </div>
               <div className="rounded-2xl border border-border p-4">
                 {confirmed.deposit > 0 ? (
@@ -616,7 +628,7 @@ export default function Booking() {
                         <button
                           key={svc.id}
                           type="button"
-                          onClick={() => setType(svc.id)}
+                          onClick={() => chooseType(svc.id)}
                           className={`flex items-center gap-4 rounded-2xl border-2 p-4 text-left transition-all duration-200 active:scale-[0.98] ${
                             active
                               ? "border-primary bg-primary/5 shadow-md shadow-primary/10"
@@ -785,34 +797,52 @@ export default function Booking() {
                       catalog={catalog}
                       locale={locale}
                       selectedKeys={extras}
-                      onToggle={id => setExtras(prev => prev.includes(id) ? prev.filter(key => key !== id) : [...prev, id])}
+                      onToggle={toggleExtra}
+                      serviceType={type}
                       className="mt-6"
                     />
                   ) : (
                     <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                       {ALL_EXTRAS.map(id => {
-                      const active = extras.includes(id);
+                      // Included in the chosen service: shown, never selectable, never priced.
+                      const bundled = addonIncludedIn(type, id);
+                      const active = !bundled && extras.includes(id);
                       return (
                         <button
                           key={id}
                           type="button"
-                          onClick={() =>
-                            setExtras(prev => (prev.includes(id) ? prev.filter(e => e !== id) : [...prev, id]))
-                          }
+                          onClick={() => toggleExtra(id)}
+                          aria-pressed={active}
+                          aria-disabled={bundled || undefined}
+                          disabled={bundled}
+                          data-included={bundled ? "true" : undefined}
                           className={`relative flex items-center gap-3 rounded-2xl border-2 p-4 text-left transition-all duration-200 active:scale-[0.97] ${
-                            active
-                              ? "border-primary bg-primary/5 shadow-md shadow-primary/10"
-                              : "border-border bg-card hover:border-primary/40"
+                            bundled
+                              ? "cursor-default border-dashed border-border bg-muted/40"
+                              : active
+                                ? "border-primary bg-primary/5 shadow-md shadow-primary/10"
+                                : "border-border bg-card hover:border-primary/40"
                           }`}
                         >
                           <span
                             className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
-                              active ? "border-primary bg-primary text-primary-foreground" : "border-border"
+                              active
+                                ? "border-primary bg-primary text-primary-foreground"
+                                : bundled
+                                  ? "border-secondary/40 bg-secondary/15 text-secondary"
+                                  : "border-border"
                             }`}
                           >
-                            {active && <Check className="h-3.5 w-3.5" />}
+                            {(active || bundled) && <Check className="h-3.5 w-3.5" />}
                           </span>
-                          <span className="text-sm font-semibold text-foreground">{t.extras[id]}</span>
+                          <span className="min-w-0">
+                            <span className="block text-sm font-semibold text-foreground">{t.extras[id]}</span>
+                            {bundled && (
+                              <span className="block text-xs font-semibold text-secondary">
+                                {includedInServiceLabel(serviceName, locale)}
+                              </span>
+                            )}
+                          </span>
                         </button>
                       );
                       })}

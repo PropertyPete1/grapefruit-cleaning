@@ -48,6 +48,8 @@ import { getStripe } from "../stripe";
 import { publicProcedure, router } from "../_core/trpc";
 import { finalizeBooking, loadPricingConfig, loadSchedulingRules, occupiedIntervals, SERVICE_NAMES } from "./booking";
 import { bookingAddonSnapshots, loadAddonCatalog, resolveSelectedAddons } from "../addonCatalog";
+import { assertNoDuplicateAddons } from "../addonRules";
+import { withoutIncludedAddons } from "@shared/addonRules";
 import { releaseExpiredCheckoutHolds } from "../checkoutHolds";
 
 const extrasInput = z.array(z.string().min(1).max(100)).max(50);
@@ -286,7 +288,12 @@ export const depositLinkRouter = router({
         return { state: kind, locale, notice: NOTICES[kind], booking: null };
       }
 
-      const selectedExtras: string[] = JSON.parse(booking.extras ?? "[]");
+      // Whatever was stored, minus anything the service now includes: an
+      // add-on chosen before the rule existed must never price again.
+      const selectedExtras: string[] = withoutIncludedAddons(
+        booking.serviceType,
+        JSON.parse(booking.extras ?? "[]") as string[]
+      );
       const money = await priceWithExtras(booking, selectedExtras);
       const customer = await db.getCustomerById(booking.customerId);
       // Only the discount terms, and only when the coupon is one the server
@@ -410,7 +417,14 @@ export const depositLinkRouter = router({
 
       const patch: Parameters<typeof db.updateBooking>[1] = {};
       const serviceType = input.serviceType ?? booking.serviceType;
-      if (input.serviceType) patch.serviceType = input.serviceType;
+      if (input.serviceType) {
+        patch.serviceType = input.serviceType;
+        // A service that includes an add-on chosen earlier drops it: a deep
+        // clean picked after tapping "Deep cleaning" must not carry both.
+        const stored: string[] = JSON.parse(booking.extras ?? "[]");
+        const kept = withoutIncludedAddons(input.serviceType, stored);
+        if (kept.length !== stored.length) patch.extras = JSON.stringify(kept);
+      }
       if (input.propertyType) patch.propertyType = input.propertyType;
       if (input.unitNumber !== undefined) patch.unitNumber = input.unitNumber.trim() || null;
       const propertyType = input.propertyType ?? booking.propertyType;
@@ -626,6 +640,7 @@ export const depositLinkRouter = router({
     .mutation(async ({ input, ctx }) => {
       assertRateLimit("depositLinkPay", clientIp(ctx), 10, 60_000);
       const { booking, locale } = await openLinkBooking(input.token);
+      assertNoDuplicateAddons(booking.serviceType, input.extras, locale);
       if (!isBookingComplete(booking)) {
         refuse(
           locale,
@@ -746,6 +761,7 @@ export const depositLinkRouter = router({
     .mutation(async ({ input, ctx }) => {
       assertRateLimit("depositLinkPay", clientIp(ctx), 10, 60_000);
       const { booking, locale } = await openLinkBooking(input.token);
+      assertNoDuplicateAddons(booking.serviceType, input.extras, locale);
       if (!isBookingComplete(booking)) {
         refuse(
           locale,
@@ -832,6 +848,7 @@ export const depositLinkRouter = router({
     .mutation(async ({ input, ctx }) => {
       assertRateLimit("depositLinkPay", clientIp(ctx), 10, 60_000);
       const { booking, locale } = await openLinkBooking(input.token);
+      assertNoDuplicateAddons(booking.serviceType, input.extras, locale);
       if (!isBookingComplete(booking)) {
         refuse(
           locale,

@@ -23,6 +23,7 @@ import { createHash, timingSafeEqual } from "crypto";
 import type { Booking, ContactMessage, Customer, Payment } from "../drizzle/schema";
 import { assertRateLimit } from "./antiSpam";
 import * as db from "./db";
+import { exactDollars } from "@shared/money";
 
 /** Max rows per page; `?limit=` above this is clamped, per the spec. */
 const PAGE_LIMIT_MAX = 200;
@@ -167,7 +168,7 @@ function bookingRow(row: Booking) {
     scheduledDate: row.scheduledDate,
     scheduledTime: row.scheduledTime,
     status: row.status,
-    totalAmount: row.totalAmount,
+    totalAmount: exactDollars(row.totalAmountCents, row.totalAmount),
     tipAmount: row.tipAmount,
     createdAt: iso(row.createdAt),
   };

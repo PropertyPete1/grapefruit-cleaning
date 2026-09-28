@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { RECURRING_UNLOCK_NOTE } from "@shared/returningCustomer";
+import { addonIncludedIn, includedInServiceLabel, withoutIncludedAddons } from "@shared/addonRules";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { useLocale } from "@/i18n/LocaleContext";
@@ -211,8 +212,16 @@ export default function Quote() {
     window.scrollTo({ top: 0, behavior: "auto" });
   }, [step]);
 
-  const toggleExtra = (id: string) =>
+  const toggleExtra = (id: string) => {
+    // The service's own work is never an add-on on top of it.
+    if (addonIncludedIn(type, id)) return;
     setExtras(prev => (prev.includes(id) ? prev.filter(e => e !== id) : [...prev, id]));
+  };
+  /** Switching service drops any add-on the new service includes — a deep clean never carries "Deep cleaning". */
+  const chooseType = (next: CleaningType) => {
+    setType(next);
+    setExtras(prev => withoutIncludedAddons(next, prev));
+  };
 
   const serviceEntries: { id: CleaningType; name: string; short: string }[] = [
     { id: "residential", name: t.services.residential.name, short: t.services.residential.short },
@@ -299,7 +308,7 @@ export default function Quote() {
                         <button
                           key={svc.id}
                           type="button"
-                          onClick={() => setType(svc.id)}
+                          onClick={() => chooseType(svc.id)}
                           className={`flex items-start gap-4 rounded-2xl border-2 p-4 text-left transition-all duration-200 active:scale-[0.98] ${
                             active
                               ? "border-primary bg-primary/5 shadow-md shadow-primary/10"
@@ -583,26 +592,39 @@ export default function Quote() {
                       locale={locale}
                       selectedKeys={extras}
                       onToggle={toggleExtra}
+                      serviceType={type}
                       className="mt-6"
                     />
                   ) : (
                     <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                       {EXTRA_IDS.map(id => {
                         const Icon = EXTRA_ICONS[id];
-                        const active = extras.includes(id);
+                        // Included in the chosen service: shown, never selectable, never priced.
+                        const bundled = addonIncludedIn(type, id);
+                        const active = !bundled && extras.includes(id);
                         return (
                           <button
                             key={id}
                             type="button"
                             onClick={() => toggleExtra(id)}
+                            aria-pressed={active}
+                            aria-disabled={bundled || undefined}
+                            disabled={bundled}
+                            data-included={bundled ? "true" : undefined}
                             className={`relative flex flex-col items-start gap-3 rounded-2xl border-2 p-4 text-left transition-all duration-200 active:scale-[0.97] ${
-                              active
-                                ? "border-primary bg-primary/5 shadow-md shadow-primary/10"
-                                : "border-border bg-card hover:border-primary/40"
+                              bundled
+                                ? "cursor-default border-dashed border-border bg-muted/40"
+                                : active
+                                  ? "border-primary bg-primary/5 shadow-md shadow-primary/10"
+                                  : "border-border bg-card hover:border-primary/40"
                             }`}
                           >
-                            {active && (
-                              <span className="absolute right-3 top-3 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                            {(active || bundled) && (
+                              <span
+                                className={`absolute right-3 top-3 flex h-5 w-5 items-center justify-center rounded-full ${
+                                  bundled ? "bg-secondary/15 text-secondary" : "bg-primary text-primary-foreground"
+                                }`}
+                              >
                                 <Check className="h-3 w-3" />
                               </span>
                             )}
@@ -614,6 +636,11 @@ export default function Quote() {
                               <Icon className="h-5 w-5" />
                             </span>
                             <span className="text-sm font-semibold text-foreground">{t.extras[id]}</span>
+                            {bundled && (
+                              <span className="text-xs font-semibold text-secondary">
+                                {includedInServiceLabel(serviceEntries.find(s => s.id === type)?.name ?? type, locale)}
+                              </span>
+                            )}
                           </button>
                         );
                       })}

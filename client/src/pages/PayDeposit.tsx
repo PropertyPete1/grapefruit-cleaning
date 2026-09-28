@@ -37,6 +37,7 @@ import { Button } from "@/components/ui/button";
 import { en } from "@/i18n/translations/en";
 import { es } from "@/i18n/translations/es";
 import { AddonCatalogPicker, CatalogAddonsSummary, selectedCatalogAddons } from "@/components/AddonCatalogPicker";
+import { addonIncludedIn, INCLUDED_LABEL, withoutIncludedAddons } from "@shared/addonRules";
 
 const COPY = {
   en: {
@@ -299,7 +300,9 @@ export default function PayDeposit() {
   const c = COPY[locale];
   const t = locale === "es" ? es : en;
 
-  const chosen = extras ?? (booking?.selectedExtras ?? []);
+  // Never the service's own work as an add-on, whatever was stored or tapped
+  // before the service was chosen: a deep clean never carries "Deep cleaning".
+  const chosen = withoutIncludedAddons(booking?.serviceType ?? null, extras ?? (booking?.selectedExtras ?? []));
   const catalog = booking?.addonCatalog;
   const kind = kindChoice ?? booking?.propertyType ?? "house";
   const noteText = note ?? booking?.customerNote ?? "";
@@ -744,37 +747,50 @@ export default function PayDeposit() {
                 const current = currentState ?? chosen;
                 return current.includes(id) ? current.filter(key => key !== id) : [...current, id];
               })}
+              serviceType={booking.serviceType}
               className="mt-3"
             />
           ) : (
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
               {EXTRA_IDS.map(id => {
-                const active = chosen.includes(id);
+                // Included in the chosen service: shown, never selectable, never priced.
+                const bundled = addonIncludedIn(booking.serviceType, id);
+                const active = !bundled && chosen.includes(id);
                 const price = booking.pricing.extras[id] ?? 0;
                 return (
                   <button
                     key={id}
                     type="button"
                     aria-pressed={active}
+                    aria-disabled={bundled || undefined}
+                    disabled={bundled}
+                    data-included={bundled ? "true" : undefined}
                     onClick={() =>
+                      !bundled &&
                       setExtras(prev => {
                         const current = prev ?? chosen;
                         return current.includes(id) ? current.filter(e => e !== id) : [...current, id];
                       })
                     }
                     className={`flex items-center gap-3 rounded-xl border-2 p-3 text-left transition-all duration-150 active:scale-[0.97] ${
-                      active ? "border-[#F26D5B] bg-[#FFF3F0]" : "border-[#F0E6DE] bg-white hover:border-[#F26D5B]/40"
+                      bundled
+                        ? "cursor-default border-dashed border-[#E3D8CE] bg-[#FDF8F3]"
+                        : active
+                          ? "border-[#F26D5B] bg-[#FFF3F0]"
+                          : "border-[#F0E6DE] bg-white hover:border-[#F26D5B]/40"
                     }`}
                   >
                     <span
                       className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 ${
-                        active ? "border-[#F26D5B] bg-[#F26D5B] text-white" : "border-[#E3D8CE]"
+                        active ? "border-[#F26D5B] bg-[#F26D5B] text-white" : bundled ? "border-[#2E7D5B] text-[#2E7D5B]" : "border-[#E3D8CE]"
                       }`}
                     >
-                      {active && <Check className="h-3 w-3" />}
+                      {(active || bundled) && <Check className="h-3 w-3" />}
                     </span>
                     <span className="flex-1 text-sm font-semibold text-[#3d3733]">{t.extras[id]}</span>
-                    <span className="text-sm font-semibold text-[#7a716b]">+{money(price)}</span>
+                    <span className={`text-sm font-semibold ${bundled ? "text-[#2E7D5B]" : "text-[#7a716b]"}`}>
+                      {bundled ? INCLUDED_LABEL[locale] : `+${money(price)}`}
+                    </span>
                   </button>
                 );
               })}

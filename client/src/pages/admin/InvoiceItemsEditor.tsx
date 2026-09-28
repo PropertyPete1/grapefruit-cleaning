@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CUSTOM_ITEM_MAX } from "@shared/invoiceItems";
 import { EXTRA_IDS } from "@shared/pricing";
+import { addonIncludedIn } from "@shared/addonRules";
 import type { AddonCatalogPayload } from "@shared/addonCatalog";
 import { centsToDollars } from "@shared/money";
 import { en } from "@/i18n/translations/en";
@@ -58,6 +59,7 @@ export function InvoiceItemsEditor({
   addonsHint = "Checked items appear on the invoice by name, priced from today's catalog.",
   catalog,
   excludedAddonKeys = [],
+  serviceType,
 }: {
   extras: Record<string, number>;
   checkedAddons: string[];
@@ -68,6 +70,8 @@ export function InvoiceItemsEditor({
   addonsHint?: string;
   catalog?: AddonCatalogPayload;
   excludedAddonKeys?: string[];
+  /** The service the bill is for: an add-on it already includes is shown as included and cannot be billed on top. */
+  serviceType?: string | null;
 }) {
   const parsed = parseCustomItems(customs);
   const valid = customItemsValid(parsed);
@@ -87,21 +91,28 @@ export function InvoiceItemsEditor({
         <p className="mt-0.5 text-xs text-muted-foreground">{addonsHint}</p>
         <div className="mt-2 grid grid-cols-2 gap-1.5">
           {options.map(option => {
-            const active = checkedAddons.includes(option.id);
+            const bundled = addonIncludedIn(serviceType, option.id);
+            const active = !bundled && checkedAddons.includes(option.id);
             return (
               <button
                 key={option.id}
                 type="button"
                 aria-pressed={active}
-                onClick={() => onToggleAddon(option.id)}
+                aria-disabled={bundled || undefined}
+                disabled={bundled}
+                data-included={bundled ? "true" : undefined}
+                title={bundled ? "Included in the service — never billed on top" : undefined}
+                onClick={() => !bundled && onToggleAddon(option.id)}
                 className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-left text-xs font-medium transition-colors ${
-                  active
-                    ? "border-primary bg-primary/5 text-foreground"
-                    : "border-border bg-card text-muted-foreground hover:border-primary/40"
+                  bundled
+                    ? "cursor-default border-dashed border-border bg-muted/40 text-muted-foreground"
+                    : active
+                      ? "border-primary bg-primary/5 text-foreground"
+                      : "border-border bg-card text-muted-foreground hover:border-primary/40"
                 }`}
               >
                 <span className="min-w-0 truncate">{option.name}</span>
-                <span className="shrink-0">+{fmtMoney(option.price)}</span>
+                <span className="shrink-0">{bundled ? "Included" : `+${fmtMoney(option.price)}`}</span>
               </button>
             );
           })}

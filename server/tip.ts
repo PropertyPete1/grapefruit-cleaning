@@ -15,6 +15,7 @@
  * and the webhook records the payment (kind "tip") at most once.
  */
 import { randomBytes } from "node:crypto";
+import { exactDollars } from "@shared/money";
 import * as db from "./db";
 import {
   sendTipReceivedNotification,
@@ -114,7 +115,8 @@ export async function sendTipRequestEmailSafely(bookingId: number, origin: strin
     // relative URL in an email goes nowhere. Either way the customer still
     // deserves their thank-you: the plain one, which shares the same
     // once-per-booking claim so the dedupe holds.
-    if (booking.totalAmount <= 0 || !origin) {
+    const jobTotal = exactDollars(booking.totalAmountCents, booking.totalAmount);
+    if (jobTotal <= 0 || !origin) {
       await sendJobCompleteEmailSafely(bookingId, origin);
       return;
     }
@@ -136,8 +138,8 @@ export async function sendTipRequestEmailSafely(bookingId: number, origin: strin
       customerEmail: customer.email ?? "",
       locale,
       bizPhone: (await db.getSetting("business_phone"))?.trim() || undefined,
-      total: booking.totalAmount,
-      presets: tipPresets(booking.totalAmount),
+      total: jobTotal,
+      presets: tipPresets(jobTotal),
       tipUrl: tipPayUrl(origin, token),
       reviewUrl: reviewFormUrl(origin, locale),
     };

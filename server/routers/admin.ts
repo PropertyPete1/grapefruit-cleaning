@@ -81,7 +81,7 @@ import { getStripe } from "../stripe";
 import { protectedProcedure, router } from "../_core/trpc";
 import { addonCatalogAdminRouter } from "./addonCatalogAdmin";
 import { loadAddonCatalog } from "../addonCatalog";
-import { centsToDollars, dollarsToCents } from "@shared/money";
+import { centsToDollars, dollarsToCents, exactDollars, moneyCents } from "@shared/money";
 import { OFFLINE_PAYMENT_METHODS } from "@shared/payments";
 import { mintBookingRescheduleUrl } from "../rescheduleAccess";
 import {
@@ -532,6 +532,8 @@ export const adminRouter = router({
       const payUrl = depositPayUrl(origin, payToken);
       const locale = (booking.locale as "en" | "es") ?? "en";
       const bizPhone = (await db.getSetting("business_phone"))?.trim() || undefined;
+      // Zero is the unpriceable sentinel, never a price to promise.
+      const priced = moneyCents(booking.totalAmountCents, booking.totalAmount) > 0;
       let emailSent = false;
       try {
         emailSent = await sendDepositLinkEmail({
@@ -542,9 +544,8 @@ export const adminRouter = router({
           customerName: customer.firstName,
           customerEmail: customer.email ?? "",
           address: composeAddress(booking) || undefined,
-          // Zero is the unpriceable sentinel, never a price to promise.
-          basePrice: booking.totalAmount > 0 ? booking.totalAmount : null,
-          deposit: booking.totalAmount > 0 ? booking.depositAmount : null,
+          basePrice: priced ? exactDollars(booking.totalAmountCents, booking.totalAmount) : null,
+          deposit: priced ? exactDollars(booking.depositAmountCents, booking.depositAmount) : null,
           payUrl,
           expiresOn: expiresAt.toISOString().slice(0, 10),
           locale,
@@ -1597,9 +1598,9 @@ export const adminRouter = router({
           serviceDate: booking?.scheduledDate ?? null,
           // What the customer asked for, in front of whoever approves the bill.
           bookingNotes: booking?.notes ?? null,
-          bookingTotal: booking?.totalAmount ?? null,
+          bookingTotal: booking ? exactDollars(booking.totalAmountCents, booking.totalAmount) : null,
           // Only a captured deposit is credited against the balance.
-          depositCredited: booking?.stripePaymentIntentId ? (booking?.depositAmount ?? 0) : 0,
+          depositCredited: booking?.stripePaymentIntentId ? exactDollars(booking.depositAmountCents, booking.depositAmount) : 0,
           customerName: customer ? `${customer.firstName} ${customer.lastName}` : null,
           customerEmail: customer?.email ?? null,
           bookedAddons: bookedAddons.map(item => ({

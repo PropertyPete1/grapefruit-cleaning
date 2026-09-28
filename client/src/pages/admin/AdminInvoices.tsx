@@ -28,6 +28,7 @@ import { lineItemAmountCents, lineItemName, parseLineItems } from "@shared/invoi
 import { centsToDollars } from "@shared/money";
 import { OFFLINE_PAYMENT_METHODS, type OfflinePaymentMethod } from "@shared/payments";
 import { CLEANING_TYPES } from "@shared/pricing";
+import { withoutIncludedAddons } from "@shared/addonRules";
 import { usePricing } from "@/hooks/usePricing";
 import { en } from "@/i18n/translations/en";
 import {
@@ -69,6 +70,7 @@ type PendingInvoice = {
   amount: number;
   computedAmount: number | null;
   bookingReference: string | null;
+  serviceType: string | null;
   serviceDate: string | null;
   bookingNotes: string | null;
   bookingTotal: number | null;
@@ -344,6 +346,7 @@ function ReviewAndSendDialog({
             <InvoiceItemsEditor
               extras={pricing.extras}
               catalog={catalog}
+              serviceType={invoice.serviceType}
               excludedAddonKeys={invoice.bookedAddons.map(item => item.key)}
               checkedAddons={checkedAddons}
               onToggleAddon={id =>
@@ -541,7 +544,14 @@ export default function AdminInvoices() {
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
                     <Label>Service</Label>
-                    <Select value={form.serviceType} onValueChange={v => setForm(f => ({ ...f, serviceType: v }))}>
+                    <Select
+                      value={form.serviceType}
+                      onValueChange={v => {
+                        setForm(f => ({ ...f, serviceType: v }));
+                        // The service's own work is never billed as an add-on on top of it.
+                        setNewAddons(prev => withoutIncludedAddons(v, prev));
+                      }}
+                    >
                       <SelectTrigger className="mt-1.5 rounded-xl" aria-label="Service type">
                         <SelectValue placeholder="Cleaning services" />
                       </SelectTrigger>
@@ -586,6 +596,7 @@ export default function AdminInvoices() {
                 <InvoiceItemsEditor
                   extras={pricing.extras}
                   catalog={addonCatalog.data}
+                  serviceType={form.serviceType || null}
                   checkedAddons={newAddons}
                   onToggleAddon={id =>
                     setNewAddons(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]))

@@ -1,5 +1,6 @@
 import { Check, Sparkles } from "lucide-react";
 import type { AddonCatalogPayload } from "@shared/addonCatalog";
+import { addonIncludedIn, INCLUDED_LABEL } from "@shared/addonRules";
 import { centsToDollars } from "@shared/money";
 import { cn } from "@/lib/utils";
 
@@ -37,12 +38,19 @@ export function AddonCatalogPicker({
   selectedKeys,
   onToggle,
   className,
+  serviceType,
 }: {
   catalog: AddonCatalogPayload;
   locale: Locale;
   selectedKeys: readonly string[];
   onToggle: (key: string) => void;
   className?: string;
+  /**
+   * The chosen service. An add-on it already includes (the deep clean on a
+   * Deep Cleaning) is shown as included and cannot be selected — the same
+   * work is never charged twice.
+   */
+  serviceType?: string | null;
 }) {
   const labels = CATALOG_LABELS[locale];
   return (
@@ -63,7 +71,8 @@ export function AddonCatalogPicker({
           )}
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {category.addons.map(addon => {
-              const active = selectedKeys.includes(addon.key);
+              const bundled = addonIncludedIn(serviceType, addon.key);
+              const active = !bundled && selectedKeys.includes(addon.key);
               const name = locale === "es" ? addon.nameEs : addon.nameEn;
               const description = locale === "es" ? addon.descriptionEs : addon.descriptionEn;
               const note = locale === "es" ? addon.noteEs : addon.noteEn;
@@ -73,21 +82,32 @@ export function AddonCatalogPicker({
                 <button
                   key={addon.key}
                   type="button"
-                  onClick={() => onToggle(addon.key)}
+                  onClick={() => !bundled && onToggle(addon.key)}
                   aria-pressed={active}
+                  aria-disabled={bundled || undefined}
+                  disabled={bundled}
+                  data-included={bundled ? "true" : undefined}
                   className={cn(
                     "group relative rounded-2xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
-                    active ? "border-primary bg-primary/5 shadow-sm" : "border-border bg-card hover:border-primary/45"
+                    bundled
+                      ? "cursor-default border-dashed border-border bg-muted/40"
+                      : active
+                        ? "border-primary bg-primary/5 shadow-sm"
+                        : "border-border bg-card hover:border-primary/45"
                   )}
                 >
                   <span className={cn("absolute right-3 top-3 grid size-6 place-items-center rounded-full border", active ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background")}>
-                    {active ? <Check className="size-3.5" /> : <Sparkles className="size-3 text-muted-foreground" />}
+                    {active || bundled ? <Check className={cn("size-3.5", bundled && "text-secondary")} /> : <Sparkles className="size-3 text-muted-foreground" />}
                   </span>
                   <div className="pr-9">
                     <p className="font-semibold text-foreground">{name}</p>
-                    <p className="mt-1 text-sm font-bold text-primary">
-                      {pricePrefix}${centsToDollars(addon.startingPriceCents).toFixed(2)}
-                    </p>
+                    {bundled ? (
+                      <p className="mt-1 text-sm font-bold text-secondary">{INCLUDED_LABEL[locale]}</p>
+                    ) : (
+                      <p className="mt-1 text-sm font-bold text-primary">
+                        {pricePrefix}${centsToDollars(addon.startingPriceCents).toFixed(2)}
+                      </p>
+                    )}
                     {description && <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{description}</p>}
                     {included.length > 0 && (
                       <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
