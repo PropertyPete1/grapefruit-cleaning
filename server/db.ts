@@ -26,6 +26,7 @@ import { ENV } from './_core/env';
 import { blocksSlot, STALE_DEPOSIT_MINUTES } from "./bookingRules";
 import { customerFillsFor } from "./brainWriteRules";
 import { dollarsToCents, legacyWholeDollars } from "@shared/money";
+import { contactMatchesCustomer, normalizeEmail, normalizePhone } from "@shared/priceLock";
 import type { OfflinePaymentMethod } from "@shared/payments";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -338,10 +339,27 @@ export async function listCustomers(search?: string) {
   const db = requireDb(await getDb());
   if (search) {
     const q = `%${search}%`;
+    const conditions = [
+      like(customers.firstName, q),
+      like(customers.lastName, q),
+      like(customers.email, q),
+      like(customers.phone, q),
+    ];
+    // A phone typed as digits finds "(210) 555-0199" too: the picker on the
+    // New booking form is used with a number on the screen as often as a name.
+    const digits = search.replace(/\D/g, "");
+    if (digits.length >= 3) {
+      conditions.push(
+        like(
+          sql`REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(${customers.phone}, '(', ''), ')', ''), '-', ''), ' ', ''), '.', '')`,
+          `%${digits}%`
+        )
+      );
+    }
     return db
       .select()
       .from(customers)
-      .where(or(like(customers.firstName, q), like(customers.lastName, q), like(customers.email, q)))
+      .where(or(...conditions))
       .orderBy(desc(customers.createdAt))
       .limit(200);
   }
@@ -2322,6 +2340,141 @@ export async function getCustomerByMarketingToken(token: string) {
   const db = requireDb(await getDb());
   const rows = await db.select().from(customers).where(eq(customers.marketingToken, token)).limit(1);
   return rows[0];
+}
+
+// ---------- Returning customers & review requests ----------
+
+/**
+ * The customer rows a set of contact details could belong to. SQL narrows by
+ * the normalized email or the phone's last digits; the exact decision is
+ * contactMatchesCustomer, in memory, where the normalization rules live —
+ * the same split as the grandfathered lookup, for the same reason (people type
+ * phone numbers every way there is).
+ */
+export async function findCustomersByContact(contact: { email?: string | null; phone?: string | null }) {
+  const email = normalizeEmail(contact.email);
+  const phone = normalizePhone(contact.phone);
+  const conditions = [];
+  if (email) conditions.push(eq(sql`LOWER(${customers.email})`, email));
+  if (phone) conditions.push(like(customers.phone, `%${phone.slice(-4)}%`));
+  if (conditions.length === 0) return [];
+  const db = requireDb(await getDb());
+  const rows = await db.select().from(customers).where(or(...conditions)).limit(50);
+  return rows.filter(row => contactMatchesCustomer(row, contact));
+}
+
+/** The completed bookings of a set of customers, with the facts the paid test reads. */
+export async function listCompletedBookingsForCustomers(customerIds: number[]) {
+  if (customerIds.length === 0) return [];
+  const db = requireDb(await getDb());
+  return db
+    .select({
+      id: bookings.id,
+      customerId: bookings.customerId,
+      status: bookings.status,
+      totalAmount: bookings.totalAmount,
+      totalAmountCents: bookings.totalAmountCents,
+      depositAmount: bookings.depositAmount,
+      depositAmountCents: bookings.depositAmountCents,
+      stripePaymentIntentId: bookings.stripePaymentIntentId,
+    })
+    .from(bookings)
+    .where(and(inArray(bookings.customerId, customerIds), eq(bookings.status, "completed")))
+    .limit(500);
+}
+
+/** Every invoice's status for a set of bookings — void ones included; the rule filters them. */
+export async function listInvoiceStatesForBookings(bookingIds: number[]) {
+  if (bookingIds.length === 0) return [];
+  const db = requireDb(await getDb());
+  return db
+    .select({ bookingId: invoices.bookingId, status: invoices.status, paidAt: invoices.paidAt })
+    .from(invoices)
+    .where(inArray(invoices.bookingId, bookingIds));
+}
+
+/**
+ * Completed jobs not yet asked for a review, with their customer — the review
+ * sweep's candidates. Whether each is paid, and settled long enough ago, is
+ * decided in the sweep from the invoices; this only bounds the scan to rows
+ * touched recently (an ask is for a recent job, never a backfill) and leaves
+ * out auto-booked turnovers, which are never asked.
+ */
+export async function listReviewRequestCandidates(since: Date, limit = 200) {
+  const db = requireDb(await getDb());
+  return db
+    .select({
+      bookingId: bookings.id,
+      reference: bookings.reference,
+      customerId: bookings.customerId,
+      serviceType: bookings.serviceType,
+      scheduledDate: bookings.scheduledDate,
+      frequency: bookings.frequency,
+      locale: bookings.locale,
+      status: bookings.status,
+      totalAmount: bookings.totalAmount,
+      totalAmountCents: bookings.totalAmountCents,
+      depositAmount: bookings.depositAmount,
+      depositAmountCents: bookings.depositAmountCents,
+      stripePaymentIntentId: bookings.stripePaymentIntentId,
+      completedEmailSentAt: bookings.completedEmailSentAt,
+      tipEmailSentAt: bookings.tipEmailSentAt,
+      customerFirstName: customers.firstName,
+      customerEmail: customers.email,
+      marketingUnsubscribedAt: customers.marketingUnsubscribedAt,
+      marketingToken: customers.marketingToken,
+    })
+    .from(bookings)
+    .innerJoin(customers, eq(bookings.customerId, customers.id))
+    .where(
+      and(
+        eq(bookings.status, "completed"),
+        isNull(bookings.reviewEmailSentAt),
+        ne(bookings.kind, "ical_auto"),
+        gte(bookings.updatedAt, since)
+      )
+    )
+    .orderBy(asc(bookings.id))
+    .limit(limit);
+}
+
+/** Claims the once-per-job review request. Same shape as claimTipRequestEmail: the WHERE decides. */
+export async function claimReviewRequestEmail(id: number, now: Date = new Date()): Promise<boolean> {
+  const db = requireDb(await getDb());
+  const result = await db
+    .update(bookings)
+    .set({ reviewEmailSentAt: now })
+    .where(and(eq(bookings.id, id), isNull(bookings.reviewEmailSentAt)));
+  return affectedRows(result) > 0;
+}
+
+/** How many of a customer's bookings are completed — one means the job just settled was their first. */
+export async function countCompletedBookingsForCustomer(customerId: number): Promise<number> {
+  const db = requireDb(await getDb());
+  const rows = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(bookings)
+    .where(and(eq(bookings.customerId, customerId), eq(bookings.status, "completed")));
+  return Number(rows[0]?.count ?? 0);
+}
+
+/**
+ * The customer's unsubscribe token, minting one when they have none. The
+ * conditional UPDATE means two sweeps minting at once keep one token between
+ * them; the read-back returns whichever won.
+ */
+export async function ensureMarketingToken(customerId: number, token: string): Promise<string | null> {
+  const db = requireDb(await getDb());
+  await db
+    .update(customers)
+    .set({ marketingToken: token })
+    .where(and(eq(customers.id, customerId), isNull(customers.marketingToken)));
+  const rows = await db
+    .select({ marketingToken: customers.marketingToken })
+    .from(customers)
+    .where(eq(customers.id, customerId))
+    .limit(1);
+  return rows[0]?.marketingToken ?? null;
 }
 
 // ---------- Owner reporting (weekly digest + daily health check) ----------

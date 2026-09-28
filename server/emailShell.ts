@@ -58,6 +58,12 @@ export interface BrandedEmail {
   signOff: string[];
   /** Footer line under the card, e.g. the business phone. */
   footerNote?: string;
+  /**
+   * A small link under the footer note — the one-click unsubscribe on an email
+   * that is not purely transactional. A real anchor in the HTML part and
+   * "label: url" in the text part, so it works wherever the email is read.
+   */
+  footerLink?: { label: string; url: string };
 }
 
 /** HTML-escapes a value for insertion into markup or an attribute. */
@@ -155,7 +161,12 @@ export function renderBrandedEmail(email: BrandedEmail): string {
         </tr>
         <tr>
           <td style="background-color:#ffffff;border-top:1px solid ${HAIRLINE};border-radius:0 0 16px 16px;padding:18px 28px;text-align:center;">
-            <p style="margin:0;font-family:${FONT};font-size:12px;line-height:1.6;color:${SOFT_INK};">${escapeHtml(email.footerNote ?? "")}</p>
+            <p style="margin:0;font-family:${FONT};font-size:12px;line-height:1.6;color:${SOFT_INK};">${escapeHtml(email.footerNote ?? "")}</p>${
+              email.footerLink
+                ? `
+            <p style="margin:8px 0 0;font-family:${FONT};font-size:12px;line-height:1.6;color:${SOFT_INK};"><a href="${escapeHtml(email.footerLink.url)}" style="color:${SOFT_INK};text-decoration:underline;">${escapeHtml(email.footerLink.label)}</a></p>`
+                : ""
+            }
           </td>
         </tr>
       </table>
@@ -196,5 +207,6 @@ export function renderBrandedEmailText(email: BrandedEmail): string {
     ``,
     ...email.signOff,
     ...(email.footerNote ? [``, email.footerNote] : []),
+    ...(email.footerLink ? [`${email.footerLink.label}: ${email.footerLink.url}`] : []),
   ].join("\n");
 }

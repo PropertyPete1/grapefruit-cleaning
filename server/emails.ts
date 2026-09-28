@@ -12,6 +12,7 @@ import nodemailer, { type Transporter } from "nodemailer";
 import { notifyOwner } from "./_core/notification";
 import { logEmailAttempt } from "./emailLog";
 import { renderBrandedEmail, renderBrandedEmailText, type BrandedEmail } from "./emailShell";
+import { REVIEW_REQUEST_EMAIL_TYPE } from "@shared/reviewRequest";
 import { serviceReference } from "@shared/invoiceReference";
 
 export interface BookingEmailData {
@@ -1978,6 +1979,149 @@ export async function sendTipRequestEmail(data: TipEmailData): Promise<boolean> 
   const email = buildTipRequestEmail(data);
   return deliverEmail(data.customerEmail, email.subject, email.body, email.html, {
     emailType: "tip_request",
+  });
+}
+
+// ---------- Review request (the day after a settled cleaning) ----------
+
+export interface ReviewRequestEmailData {
+  bookingId: number;
+  reference: string;
+  serviceName: string;
+  /** Date the cleaning was performed (YYYY-MM-DD). */
+  date: string;
+  customerName: string;
+  customerEmail: string;
+  locale: "en" | "es";
+  bizPhone?: string;
+  /** Where the button goes: the Google review link from Settings, or the site's own review form. */
+  reviewUrl: string;
+  /** True when reviewUrl is the Google link — the copy then says so. */
+  googleReview: boolean;
+  /** Set on a customer's first completed job: the recurring plans just unlocked for them. */
+  recurringInvite?: { bookUrl: string };
+  /** Absolute one-click unsubscribe URL. Required — a send without one is refused. */
+  unsubscribeUrl: string;
+}
+
+/**
+ * "How did we do?" — the review ask that follows a completed and paid
+ * cleaning by a day. Bilingual, branded, with the review link as the one
+ * button that matters; on a first job, a second callout says the recurring
+ * plans are now theirs and where to book. Every copy carries the same
+ * one-click unsubscribe the nudges do.
+ */
+export function buildReviewRequestEmail(data: ReviewRequestEmailData): {
+  subject: string;
+  body: string;
+  html: string;
+} {
+  const spanish = data.locale === "es";
+  const reviewCallout = {
+    text: spanish
+      ? data.googleReview
+        ? "¿Nos regala un minuto? Una reseña en Google ayuda a otras familias a encontrarnos — y a nuestro equipo le encanta leerlas."
+        : "¿Nos regala un minuto? Su reseña le dice a otras familias qué esperar — y a nuestro equipo le encanta leerlas."
+      : data.googleReview
+        ? "Could you spare a minute? A Google review helps other families find us — and our crew loves reading them."
+        : "Could you spare a minute? Your review tells other families what to expect — and our crew loves reading them.",
+    ctaLabel: spanish
+      ? data.googleReview
+        ? "Dejar una reseña en Google"
+        : "Dejar una reseña"
+      : data.googleReview
+        ? "Leave a Google review"
+        : "Leave a review",
+    ctaUrl: data.reviewUrl,
+  };
+  const recurringCallout = data.recurringInvite
+    ? {
+        text: spanish
+          ? "Ahora que terminó su primera limpieza, los planes recurrentes ya están disponibles para usted — semanal, quincenal o mensual, cada uno con ahorros. Elija el suyo al reservar su próxima visita."
+          : "Now that your first cleaning is done, recurring plans are available to you — weekly, every two weeks or monthly, each with savings. Pick yours when you book your next visit.",
+        ctaLabel: spanish ? "Reservar mi próxima limpieza" : "Book my next cleaning",
+        ctaUrl: data.recurringInvite.bookUrl,
+      }
+    : undefined;
+  const unsubscribeLabel = spanish
+    ? "¿No desea recibir correos como este? Cancele su suscripción con un clic."
+    : "Don't want emails like this? Unsubscribe in one click.";
+
+  const email: BrandedEmail = spanish
+    ? {
+        preheader: `¿Cómo lo hicimos? Su opinión sobre la limpieza ${data.reference} nos importa.`,
+        eyebrow: "Su opinión",
+        headline: "¿Cómo lo hicimos? 🍊",
+        intro: [
+          `Hola ${data.customerName},`,
+          `Gracias de nuevo por recibirnos el ${data.date}. Esperamos que su hogar todavía se sienta recién limpio — y si tiene un momento, nos encantaría saber cómo le fue.`,
+        ],
+        detailsTitle: "Su limpieza",
+        details: [
+          { label: "Servicio", value: data.serviceName },
+          { label: "Fecha", value: data.date },
+          { label: "Referencia", value: data.reference },
+        ],
+        callout: reviewCallout,
+        secondaryCallout: recurringCallout,
+        outro: [
+          data.bizPhone
+            ? `¿Algo que pudimos hacer mejor? Llámenos al ${data.bizPhone} o responda a este correo — preferimos escucharlo primero de usted.`
+            : `¿Algo que pudimos hacer mejor? Responda a este correo — preferimos escucharlo primero de usted.`,
+        ],
+        signOff: ["Con aprecio,", "El equipo de Grapefruit Cleaning Co."],
+        footerNote: data.bizPhone ? `Grapefruit Cleaning Co. · ${data.bizPhone}` : `Grapefruit Cleaning Co.`,
+        footerLink: { label: unsubscribeLabel, url: data.unsubscribeUrl },
+      }
+    : {
+        preheader: `How did we do? We'd love your thoughts on cleaning ${data.reference}.`,
+        eyebrow: "Your feedback",
+        headline: "How did we do? 🍊",
+        intro: [
+          `Hi ${data.customerName},`,
+          `Thank you again for having us on ${data.date}. We hope your home still feels freshly cleaned — and if you have a moment, we'd love to hear how it went.`,
+        ],
+        detailsTitle: "Your cleaning",
+        details: [
+          { label: "Service", value: data.serviceName },
+          { label: "Date", value: data.date },
+          { label: "Reference", value: data.reference },
+        ],
+        callout: reviewCallout,
+        secondaryCallout: recurringCallout,
+        outro: [
+          data.bizPhone
+            ? `Anything we could have done better? Call us at ${data.bizPhone} or reply to this email — we'd rather hear it from you first.`
+            : `Anything we could have done better? Reply to this email — we'd rather hear it from you first.`,
+        ],
+        signOff: ["Warmly,", "The Grapefruit Cleaning Co. Team"],
+        footerNote: data.bizPhone ? `Grapefruit Cleaning Co. · ${data.bizPhone}` : `Grapefruit Cleaning Co.`,
+        footerLink: { label: unsubscribeLabel, url: data.unsubscribeUrl },
+      };
+
+  return {
+    subject: spanish
+      ? `¿Cómo lo hicimos? Su opinión nos importa | Grapefruit Cleaning Co.`
+      : `How did we do? We'd love your review | Grapefruit Cleaning Co.`,
+    body: renderBrandedEmailText(email),
+    html: renderBrandedEmail(email),
+  };
+}
+
+/**
+ * Sends the review request, logged as "review_request" against its booking.
+ * Refuses outright without an unsubscribe URL, exactly as the nudges do: an
+ * ask that cannot be declined is one we must not send.
+ */
+export async function sendReviewRequestEmail(data: ReviewRequestEmailData): Promise<boolean> {
+  if (!data.unsubscribeUrl) {
+    console.error("[Reviews] Refusing to send a review request with no unsubscribe link");
+    return false;
+  }
+  const email = buildReviewRequestEmail(data);
+  return deliverEmail(data.customerEmail, email.subject, email.body, email.html, {
+    emailType: REVIEW_REQUEST_EMAIL_TYPE,
+    bookingId: data.bookingId,
   });
 }
 

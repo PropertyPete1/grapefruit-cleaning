@@ -11,9 +11,14 @@
  *   - the page opens on the one-time frequency, in both languages;
  *   - at that frequency every tier's headline IS its catalog price, and the
  *     Airbnb "starting at" figure too;
- *   - the toggle still works: a recurring tab shows the discounted price;
+ *   - the helper still knows the recurring discounts — the booking form applies
+ *     them for a returning customer (see returningCustomers.test.ts);
  *   - the other public surfaces (home hero, service pages, quote, booking)
  *     never apply a frequency discount to an advertised figure.
+ *
+ * PR C2 then removed the toggle altogether: recurring plans are for returning
+ * customers, so the pricing page shows one-time prices only and says so. The
+ * pins below follow that — the page has no tabs to open on.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -43,7 +48,7 @@ describe("the public pricing headline", () => {
     expect(publicTierPrice(startingPriceFor("airbnb", DEFAULT_PRICING), "onetime", DEFAULT_PRICING)).toBe(79.99);
   });
 
-  it("the recurring tabs still discount — that is the leak, now behind a tap", () => {
+  it("publicTierPrice still knows the recurring discounts — the booking form applies them for returning customers", () => {
     expect(publicTierPrice(79.99, "biweekly", DEFAULT_PRICING)).toBe(67.99);
     expect(publicTierPrice(79.99, "monthly", DEFAULT_PRICING)).toBe(71.99);
     expect(publicTierPrice(79.99, "weekly", DEFAULT_PRICING)).toBe(63.99);
@@ -59,9 +64,9 @@ describe("the public pricing headline", () => {
 describe("the pricing page reads the shared default and helper", () => {
   const page = source("../client/src/pages/Pricing.tsx");
 
-  it("opens on the shared default, not a hard-coded recurring tab", () => {
-    expect(page).toContain("useState<Frequency>(DEFAULT_PUBLIC_FREQUENCY)");
-    expect(page).not.toMatch(/useState<Frequency>\("(biweekly|weekly|monthly)"\)/);
+  it("prices at the shared one-time default, with no state that could drift to a recurring tab", () => {
+    expect(page).toContain("const frequency: Frequency = DEFAULT_PUBLIC_FREQUENCY;");
+    expect(page).not.toContain("useState<Frequency>");
   });
 
   it("prices every tier row and the Airbnb figure through publicTierPrice", () => {
@@ -71,8 +76,10 @@ describe("the pricing page reads the shared default and helper", () => {
     expect(page).not.toContain("* (1 - discountRate)");
   });
 
-  it("marks the selected tab for assistive tech and the browser check", () => {
-    expect(page).toContain("aria-pressed={frequency === f.id}");
+  it("offers a first-time visitor no frequency toggle at all, and says why", () => {
+    expect(page).not.toContain("aria-pressed={frequency === f.id}");
+    expect(page).not.toContain("freqTabs");
+    expect(page).toContain("RECURRING_UNLOCK_NOTE[locale]");
   });
 
   it("both languages label the one-time tab", () => {
@@ -83,7 +90,7 @@ describe("the pricing page reads the shared default and helper", () => {
 
 describe("no other public surface bakes a frequency discount into an advertised price", () => {
   it("the quote and booking forms start at one-time", () => {
-    expect(source("../client/src/pages/Quote.tsx")).toContain('useState<Frequency>("onetime")');
+    expect(source("../client/src/pages/Quote.tsx")).toContain('const frequency: Frequency = "onetime";');
     expect(source("../client/src/pages/Booking.tsx")).toContain('(q as Frequency) : "onetime"');
   });
 

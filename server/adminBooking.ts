@@ -447,20 +447,24 @@ export async function createAdminBooking(
   const expiresAt = depositLinkExpiresAt(createdAt, holdMinutes);
 
   // A recognised grandfathered client books on her own record, whatever
-  // contact she was entered under this time.
+  // contact she was entered under this time — and a customer the owner picked
+  // from the list books on that record, with the contact fields he saw (and
+  // may have corrected) refreshed onto it. Only a caller that named the row
+  // and nothing else skips the refresh: there is nothing to refresh from.
   const customerId =
-    input.customerId ??
-    (await db.findOrCreateCustomer({
-      firstName: input.firstName,
-      lastName: input.lastName,
-      email: input.email,
-      phone: input.phone,
-      address: input.address,
-      city: input.city,
-      zip: input.zip,
-      preferredLocale: input.locale ?? "en",
-      customerId: lockedCustomer?.id,
-    }));
+    input.customerId != null && !input.email && !input.phone
+      ? input.customerId
+      : await db.findOrCreateCustomer({
+          firstName: input.firstName,
+          lastName: input.lastName,
+          email: input.email,
+          phone: input.phone,
+          address: input.address,
+          city: input.city,
+          zip: input.zip,
+          preferredLocale: input.locale ?? "en",
+          customerId: input.customerId ?? lockedCustomer?.id,
+        });
 
   // Provenance: the facts the OWNER locked. Everything else is the customer's
   // to fill in — and to re-edit until they pay.

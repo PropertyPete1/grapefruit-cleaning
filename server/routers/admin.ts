@@ -21,6 +21,7 @@ import {
   type PricingConfig,
 } from "@shared/pricing";
 import { CLEANING_TYPES, FREQUENCIES } from "@shared/pricing";
+import { REVIEW_URL_SETTING_KEY, reviewUrlProblem } from "@shared/reviewRequest";
 import * as db from "../db";
 import { createAdminBooking, generateDepositToken, repriceBookingMoney } from "../adminBooking";
 import { grandfatheredColumns } from "../priceLock";
@@ -385,6 +386,12 @@ export const adminRouter = router({
           // The hard floor: someone to greet and a way to reach them. A lead
           // typed with a thumb between calls is a first name and a number.
           firstName: z.string().min(1).max(100),
+          /**
+           * An existing customer picked from the list: the booking lands on
+           * that record, and the contact fields below — prefilled from it and
+           * still editable — refresh it. Absent for a customer typed in fresh.
+           */
+          customerId: z.number().int().positive().optional(),
           lastName: z.string().max(100).optional(),
           email: z.string().email().max(320).optional(),
           phone: z.string().min(7).max(40).optional(),
@@ -417,7 +424,7 @@ export const adminRouter = router({
           /** Owner's choice: email the link, or copy it for a text message. */
           sendEmail: z.boolean().default(true),
         })
-        .refine(input => input.email || input.phone, {
+        .refine(input => input.email || input.phone || input.customerId != null, {
           message: "Enter an email or a phone number — the link needs a way to reach them.",
         })
         .refine(input => Boolean(input.date) === Boolean(input.time), {
@@ -1485,6 +1492,27 @@ export const adminRouter = router({
       });
       return { success: true } as const;
     }),
+  /**
+   * Sets what the customer sees this bill called — "Deep Cleaning — September
+   * 28, 2026" — after the fact, from the customer popout on Admin → Invoices.
+   * Either part may be cleared, which reads "Cleaning services" or no date
+   * rather than a made-up value. A label, never money: the amount is
+   * untouched, so a paid invoice can be relabelled too.
+   */
+  updateInvoiceReference: adminProcedure
+    .input(
+      z.object({
+        id: z.number().int(),
+        serviceType: z.enum(CLEANING_TYPES).nullable(),
+        serviceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const invoice = await db.getInvoiceById(input.id);
+      if (!invoice) throw new TRPCError({ code: "NOT_FOUND", message: "That invoice no longer exists." });
+      await db.updateInvoice(input.id, { serviceType: input.serviceType, serviceDate: input.serviceDate });
+      return { success: true } as const;
+    }),
   recordOfflinePayment: adminProcedure
     .input(
       z.object({
@@ -1787,6 +1815,12 @@ export const adminRouter = router({
       }
       if (input.key === ADMIN_HOLD_SETTING_KEY) {
         assertValidAdminHoldHours(input.value);
+      }
+      // The review link goes into every review request as the one button that
+      // matters; a typo here would send every customer somewhere broken.
+      if (input.key === REVIEW_URL_SETTING_KEY) {
+        const problem = reviewUrlProblem(input.value);
+        if (problem) throw new TRPCError({ code: "BAD_REQUEST", message: problem });
       }
       await db.setSetting(input.key, input.value);
       return { success: true } as const;

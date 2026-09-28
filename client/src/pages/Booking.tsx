@@ -17,9 +17,11 @@ import {
   Loader2,
   Mail,
   MapPin,
+  MessageCircle,
   PackageOpen,
   PartyPopper,
   Phone,
+  Repeat,
   ShieldCheck,
   Sparkles,
   User,
@@ -46,6 +48,9 @@ import {
 } from "@shared/pricing";
 import { AddonCatalogPicker, CatalogAddonsSummary, selectedCatalogAddons } from "@/components/AddonCatalogPicker";
 import { usePricing } from "@/hooks/usePricing";
+import { useSiteInfo } from "@/hooks/useSiteInfo";
+import { RECURRING_UNLOCK_NOTE } from "@shared/returningCustomer";
+import { smsHref } from "@shared/reviewRequest";
 import { formatPrice } from "@/lib/formatPrice";
 import { ENTRY_BATHROOMS, ENTRY_BEDROOMS, entrySqft } from "@/lib/quoteDefaults";
 
@@ -222,6 +227,25 @@ export default function Booking() {
     !verifiedSqft && propertyLookup.data?.addressVerified ? (propertyLookup.data.county ?? null) : null;
 
   const pricing = usePricing();
+  // Recurring plans are for returning customers. The URL may carry a plan (a
+  // returning customer's link, an old email); it applies only once the contact
+  // details typed on step 3 match a completed, paid cleaning. Until then — and
+  // for everyone booking their first cleaning — the quote is one-time and the
+  // page says why. The check runs from the review step, when the details are
+  // complete, and the server answers nothing more than yes or no.
+  const returningQuery = trpc.booking.returningCustomer.useQuery(
+    { email: form.email.trim() || undefined, phone: form.phone.trim() || undefined },
+    {
+      enabled: step >= 4 && (form.email.trim().length > 0 || form.phone.trim().length >= 7),
+      staleTime: 5 * 60 * 1000,
+    }
+  );
+  const returning = returningQuery.data?.returning === true;
+  const effectiveFrequency: Frequency = returning ? frequency : "onetime";
+  // Tap-to-text: the line from Admin → Settings, when one is set.
+  const { info: siteInfo } = useSiteInfo();
+  const textHref = smsHref(siteInfo.text_number);
+  const textName = siteInfo.text_name.trim();
   const catalogQuery = trpc.booking.addonCatalog.useQuery();
   const catalog = catalogQuery.data;
   const sqft = unitSqft ?? sqftParam ?? entrySqft(type, pricing);
@@ -234,12 +258,15 @@ export default function Booking() {
           0
         );
         return calculateCatalogQuote(
-          { type, bedrooms, bathrooms, sqft: candidateSqft, frequency },
+          { type, bedrooms, bathrooms, sqft: candidateSqft, frequency: effectiveFrequency },
           subtotalCents,
           pricing
         );
       }
-      return calculateQuote({ type, bedrooms, bathrooms, sqft: candidateSqft, extras: extras as ExtraId[], frequency }, pricing);
+      return calculateQuote(
+        { type, bedrooms, bathrooms, sqft: candidateSqft, extras: extras as ExtraId[], frequency: effectiveFrequency },
+        pricing
+      );
     };
     const entered = calculateFor(sqft);
     if (verifiedSqft) {
@@ -247,7 +274,7 @@ export default function Booking() {
       if (verified.total > entered.total) return { breakdown: verified, sqftAdjusted: true };
     }
     return { breakdown: entered, sqftAdjusted: false };
-  }, [type, bedrooms, bathrooms, sqft, extras, frequency, verifiedSqft, pricing, catalog]);
+  }, [type, bedrooms, bathrooms, sqft, extras, effectiveFrequency, verifiedSqft, pricing, catalog]);
   // 0 when the admin has turned deposits off, and always 0 for Airbnb (one
   // payment for the full amount after the cleaning — never a deposit); the
   // booking then confirms on submit with no Stripe step at all. Choosing cash
@@ -370,7 +397,7 @@ export default function Booking() {
     if (!date || !time) return;
     try {
       const result = await createBooking.mutateAsync({
-        quote: { type, bedrooms, bathrooms, sqft, extras, frequency },
+        quote: { type, bedrooms, bathrooms, sqft, extras, frequency: effectiveFrequency },
         date: toDateString(date),
         time,
         firstName: form.firstName.trim(),
@@ -609,24 +636,14 @@ export default function Booking() {
                       );
                     })}
                   </div>
-                  {/* Frequency inline */}
-                  <h3 className="mt-8 font-display text-lg font-bold text-foreground">{t.booking.frequency}</h3>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {VALID_FREQ.map(f => (
-                      <button
-                        key={f}
-                        type="button"
-                        onClick={() => setFrequency(f)}
-                        className={`rounded-full border-2 px-5 py-2.5 text-sm font-semibold transition-all duration-150 active:scale-95 ${
-                          frequency === f
-                            ? "border-primary bg-primary text-primary-foreground shadow-md shadow-primary/20"
-                            : "border-border bg-card text-foreground hover:border-primary/40"
-                        }`}
-                      >
-                        {frequencyLabels[f]}
-                      </button>
-                    ))}
-                  </div>
+                  {/* Recurring plans unlock for returning customers on the review step. */}
+                  <p
+                    className="mt-6 flex items-start gap-2 text-sm text-muted-foreground"
+                    data-testid="recurring-unlock-note"
+                  >
+                    <Repeat className="mt-0.5 h-4 w-4 shrink-0 text-secondary" />
+                    <span>{RECURRING_UNLOCK_NOTE[locale]}</span>
+                  </p>
                 </motion.div>
               )}
 
@@ -1021,7 +1038,7 @@ export default function Booking() {
                       <div className="rounded-2xl border border-border p-4">
                         <p className="text-xs text-muted-foreground">{t.booking.service}</p>
                         <p className="mt-1 font-semibold text-foreground">{serviceName}</p>
-                        <p className="text-sm text-muted-foreground">{frequencyLabels[frequency]}</p>
+                        <p className="text-sm text-muted-foreground">{frequencyLabels[effectiveFrequency]}</p>
                       </div>
                       <div className="rounded-2xl border border-border p-4">
                         <p className="text-xs text-muted-foreground">{t.booking.dateTime}</p>
@@ -1053,6 +1070,46 @@ export default function Booking() {
                         </p>
                       </div>
                     </div>
+
+                    {/* Recurring plans: offered only to a returning customer —
+                        someone whose details match a completed, paid cleaning.
+                        Everyone else sees why not. */}
+                    {returning ? (
+                      <div className="rounded-2xl border border-secondary/40 bg-secondary/5 p-4" data-testid="recurring-plans">
+                        <p className="flex items-start gap-2 text-sm font-semibold text-foreground">
+                          <Repeat className="mt-0.5 h-4 w-4 shrink-0 text-secondary" />
+                          <span>{t.booking.recurringWelcome}</span>
+                        </p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {VALID_FREQ.map(f => {
+                            const discount = Math.round((pricing.frequencyDiscounts[f] ?? 0) * 100);
+                            return (
+                              <button
+                                key={f}
+                                type="button"
+                                aria-pressed={frequency === f}
+                                onClick={() => setFrequency(f)}
+                                className={`rounded-full border-2 px-4 py-2 text-sm font-semibold transition-all duration-150 active:scale-95 ${
+                                  frequency === f
+                                    ? "border-primary bg-primary text-primary-foreground shadow-md shadow-primary/20"
+                                    : "border-border bg-card text-foreground hover:border-primary/40"
+                                }`}
+                              >
+                                {frequencyLabels[f]}
+                                {discount > 0 && <span className="ml-1.5 text-xs font-bold opacity-90">−{discount}%</span>}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : (
+                      !returningQuery.isLoading && (
+                        <p className="flex items-start gap-2 text-xs text-muted-foreground" data-testid="recurring-unlock-note">
+                          <Repeat className="mt-0.5 h-3.5 w-3.5 shrink-0 text-secondary" />
+                          <span>{RECURRING_UNLOCK_NOTE[locale]}</span>
+                        </p>
+                      )
+                    )}
 
                     {/* PAY ONLINE or PAY WITH CASH — the customer's choice, sent
                         to the server as a preference and never as an amount. */}
@@ -1172,6 +1229,18 @@ export default function Booking() {
                   {t.common.next} <ChevronRight className="ml-1 h-4 w-4" />
                 </Button>
               </div>
+            )}
+
+            {/* Tap to text — the line from Admin → Settings, shown on every step. */}
+            {textHref && (
+              <a
+                href={textHref}
+                data-testid="text-us"
+                className="mt-6 flex items-center justify-center gap-2 rounded-2xl border border-dashed border-border px-4 py-3 text-sm font-medium text-foreground transition-colors hover:border-primary/40 hover:text-primary"
+              >
+                <MessageCircle className="h-4 w-4 shrink-0 text-primary" />
+                <span>{textName ? t.booking.textUs.replace("{name}", textName) : t.booking.textUsGeneric}</span>
+              </a>
             )}
           </div>
 

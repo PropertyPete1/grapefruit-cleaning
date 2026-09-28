@@ -13,9 +13,9 @@
  * computed on the server from the live pricing config — there is nowhere here
  * to type an amount, because there is nowhere for one to be trusted from.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { CalendarDays, ChevronDown, Copy, Loader2 } from "lucide-react";
+import { CalendarDays, ChevronDown, Copy, Loader2, UserCheck } from "lucide-react";
 import { CLEANING_TYPES, FREQUENCIES } from "@shared/pricing";
 import { MAX_HOME_SQFT, MIN_HOME_SQFT } from "@shared/property";
 import { todayInBookingZone } from "@shared/leadTime";
@@ -130,6 +130,20 @@ export function NewBookingDialog({ initialDate, open: controlledOpen, onOpenChan
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [locale, setLocale] = useState<"en" | "es">("en");
+  // An existing customer picked from the list — the booking lands on that
+  // record and the fields above are prefilled from it — or null for a customer
+  // typed in fresh, who is created (or matched by contact) on the server.
+  const [customerId, setCustomerId] = useState<number | null>(null);
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const handle = setTimeout(() => setDebouncedSearch(customerSearch.trim()), 250);
+    return () => clearTimeout(handle);
+  }, [customerSearch]);
+  const customerMatches = trpc.admin.customers.useQuery(
+    { search: debouncedSearch },
+    { enabled: open && customerId === null && debouncedSearch.length >= 2 }
+  );
 
   // Everything he happens to know.
   const [serviceType, setServiceType] = useState<string>("");
@@ -175,6 +189,7 @@ export function NewBookingDialog({ initialDate, open: controlledOpen, onOpenChan
     onSuccess: data => {
       setResult(data);
       utils.admin.bookings.invalidate();
+      utils.admin.customers.invalidate();
       utils.admin.stats.invalidate();
       utils.booking.availability.invalidate();
       toast.success(
@@ -185,12 +200,28 @@ export function NewBookingDialog({ initialDate, open: controlledOpen, onOpenChan
   });
 
   const contactValid = name.trim() !== "" && (phone.trim().length >= 7 || /.+@.+\..+/.test(email));
+
+  type CustomerMatch = NonNullable<typeof customerMatches.data>[number];
+  /** Prefill from the record; every field stays editable, and edits refresh the record on submit. */
+  const pickCustomer = (customer: CustomerMatch) => {
+    setCustomerId(customer.id);
+    setName(`${customer.firstName} ${customer.lastName}`.trim());
+    setPhone(customer.phone ?? "");
+    setEmail(customer.email ?? "");
+    setLocale(customer.preferredLocale === "es" ? "es" : "en");
+    setAddress(customer.address ?? "");
+    setCity(customer.city ?? "");
+    setZip(customer.zip ?? "");
+    setCustomerSearch("");
+  };
   const scheduleConsistent = Boolean(date) === Boolean(time);
   const valid = contactValid && scheduleConsistent;
 
   const reset = () => {
     setResult(null);
     setOpenSection(initialDate ? "schedule" : null);
+    setCustomerId(null);
+    setCustomerSearch("");
     setName("");
     setPhone("");
     setEmail("");
@@ -325,6 +356,70 @@ export function NewBookingDialog({ initialDate, open: controlledOpen, onOpenChan
           </div>
         ) : (
           <div className="space-y-4">
+            {/* Existing customer from the list, or a new one typed in below. */}
+            <div className="rounded-xl border border-border p-3" data-testid="customer-picker">
+              {customerId !== null ? (
+                // Wraps, so the button drops under the name on a phone instead
+                // of widening the dialog past the screen.
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="min-w-0 text-sm">
+                    <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      <UserCheck className="h-3.5 w-3.5 text-emerald-600" /> Existing customer
+                    </span>
+                    <span className="block truncate font-semibold text-foreground">{name}</span>
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0 rounded-lg"
+                    onClick={() => setCustomerId(null)}
+                  >
+                    New customer instead
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <Label className="text-xs font-semibold">Existing customer</Label>
+                  <Input
+                    className="mt-1.5 rounded-xl"
+                    placeholder="Search by name, phone or email…"
+                    aria-label="Search existing customers"
+                    value={customerSearch}
+                    onChange={e => setCustomerSearch(e.target.value)}
+                  />
+                  {debouncedSearch.length >= 2 && (
+                    <ul className="mt-2 divide-y divide-border rounded-lg border border-border" data-testid="customer-matches">
+                      {(customerMatches.data ?? []).slice(0, 6).map(customer => (
+                        <li key={customer.id}>
+                          <button
+                            type="button"
+                            onClick={() => pickCustomer(customer)}
+                            className="flex w-full flex-col px-3 py-2 text-left hover:bg-muted/60"
+                          >
+                            <span className="text-sm font-semibold text-foreground">
+                              {customer.firstName} {customer.lastName}
+                            </span>
+                            <span className="break-words text-xs text-muted-foreground">
+                              {[customer.phone, customer.email].filter(Boolean).join(" · ") || "no contact on file"}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                      {(customerMatches.data ?? []).length === 0 && !customerMatches.isLoading && (
+                        <li className="px-3 py-2 text-xs text-muted-foreground">
+                          No match — fill in the details below to add them.
+                        </li>
+                      )}
+                    </ul>
+                  )}
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    Pick a customer to prefill their details, or type a new customer below.
+                  </p>
+                </>
+              )}
+            </div>
+
             {/* The floor — everything the link cannot work without. */}
             <Field label="Customer name">
               <Input
@@ -621,6 +716,7 @@ export function NewBookingDialog({ initialDate, open: controlledOpen, onOpenChan
                 disabled={!valid || create.isPending}
                 onClick={() =>
                   create.mutate({
+                    customerId: customerId ?? undefined,
                     firstName: firstName ?? "",
                     lastName: restName.join(" ") || undefined,
                     email: email.trim() || undefined,

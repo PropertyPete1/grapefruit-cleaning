@@ -1,6 +1,5 @@
 import { Link } from "wouter";
 import { ArrowRight, Check, Sparkles } from "lucide-react";
-import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useLocale } from "@/i18n/LocaleContext";
 import { useSeo, localBusinessJsonLd } from "@/hooks/useSeo";
@@ -16,6 +15,7 @@ import {
   type TieredType,
 } from "@shared/pricing";
 import { DEFAULT_PUBLIC_FREQUENCY, publicTierPrice } from "@shared/publicPricing";
+import { RECURRING_UNLOCK_NOTE } from "@shared/returningCustomer";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { AddonCatalogDisplay } from "@/components/AddonCatalogPicker";
@@ -33,19 +33,14 @@ export default function Pricing() {
   const { t, locale, path } = useLocale();
   useSeo({ title: t.meta.pricing.title, description: t.meta.pricing.description, jsonLd: [localBusinessJsonLd()] });
   useReveal([locale]);
-  // Opens on the one-time catalog price. A recurring tab used to be the
-  // default, which showed every tier 15% off as if that were the base price.
-  const [frequency, setFrequency] = useState<Frequency>(DEFAULT_PUBLIC_FREQUENCY);
+  // One-time catalog prices only. Recurring plans — and their discounts — are
+  // for returning customers, and unlock on the booking form once a customer's
+  // contact details match a completed, paid cleaning. A first-time visitor
+  // never sees a discounted figure here, presented as the price or otherwise.
+  const frequency: Frequency = DEFAULT_PUBLIC_FREQUENCY;
   const pricing = usePricing();
   const catalogQuery = trpc.booking.addonCatalog.useQuery();
   const catalog = catalogQuery.data;
-
-  const freqTabs: { id: Frequency; label: string; discount: string | null }[] = [
-    { id: "onetime", label: t.pricing.onetime, discount: null },
-    { id: "monthly", label: t.pricing.monthly, discount: t.pricing.monthlyDiscount },
-    { id: "biweekly", label: t.pricing.biweekly, discount: t.pricing.biweeklyDiscount },
-    { id: "weekly", label: t.pricing.weekly, discount: t.pricing.weeklyDiscount },
-  ];
 
 
   return (
@@ -66,35 +61,12 @@ export default function Pricing() {
       </section>
 
       <section className="container pb-20 md:pb-28">
-        {/* Frequency toggle */}
-        <div className="reveal mx-auto flex max-w-fit flex-wrap justify-center gap-1 rounded-full border border-border bg-card p-1.5 shadow-soft">
-          {freqTabs.map((f) => (
-            <button
-              key={f.id}
-              type="button"
-              aria-pressed={frequency === f.id}
-              onClick={() => setFrequency(f.id)}
-              className={cn(
-                "press relative rounded-full px-4 py-2 text-sm font-semibold transition-colors duration-200 sm:px-5",
-                frequency === f.id ? "bg-primary text-primary-foreground shadow-soft" : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {f.label}
-              {f.discount && (
-                <span
-                  className={cn(
-                    "ml-1.5 hidden text-[10px] font-bold sm:inline",
-                    frequency === f.id ? "text-primary-foreground/90" : "text-secondary",
-                  )}
-                >
-                  {f.discount}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
-        <p className="reveal mt-3 text-center text-xs text-muted-foreground" style={{ transitionDelay: "60ms" }}>
-          {t.pricing.frequencyTitle}
+        {/* No frequency toggle: recurring plans unlock after the first cleaning. */}
+        <p
+          className="reveal mx-auto max-w-xl text-center text-sm text-muted-foreground"
+          data-testid="recurring-unlock-note"
+        >
+          {RECURRING_UNLOCK_NOTE[locale]}
         </p>
 
         {/* Fixed tier tables */}

@@ -337,7 +337,7 @@ export const en = {
     over: "Over",
     anySize: "Any size",
     sqft: "sq ft",
-    tierNote: "Recurring plans apply your frequency discount to these rates. Add-ons are priced separately below.",
+    tierNote: "One-time rates — recurring plans with savings unlock after your first cleaning. Add-ons are priced separately below.",
     commercialNote: "Commercial and office spaces are quoted individually based on square footage, layout, and schedule.",
     plans: {
       residential: { name: "Residential", desc: "Recurring or one-time home cleaning" },
@@ -478,6 +478,9 @@ export const en = {
     next3: "Your vetted cleaning team arrives on time — enjoy your fresh space!",
     backHome: "Back to Home",
     frequency: "Frequency",
+    recurringWelcome: "Welcome back! Recurring plans and their savings are available to you — pick one below.",
+    textUs: "Questions? Text {name} directly",
+    textUsGeneric: "Questions? Text us directly",
     validation: {
       required: "This field is required",
       email: "Please enter a valid email address",

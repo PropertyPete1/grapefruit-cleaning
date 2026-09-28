@@ -229,6 +229,13 @@ export const bookings = mysqlTable("bookings", {
   /** Set when the customer tapped "no tip, just say thanks" — the page stops asking. */
   tipDeclinedAt: timestamp("tipDeclinedAt"),
   /**
+   * When the "how did we do? leave us a review" email went out (null = not
+   * yet). The once-per-job claim for that email, exactly like tipEmailSentAt:
+   * the daily sweep claims it in a conditional UPDATE before sending, so two
+   * sweeps racing, or a job completed twice, still produce one ask.
+   */
+  reviewEmailSentAt: timestamp("reviewEmailSentAt"),
+  /**
    * Hours the crew is expected to be on site, pinned when the booking was made.
    *
    * Stored rather than recomputed so that editing the duration ladder later
