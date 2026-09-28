@@ -557,7 +557,7 @@
 - [x] Pull latest GitHub `main` first and prove merged PR #23 is present
 - [x] Confirm the merged range has no migration or environment-file changes
 - [x] Run focused duplicate-add-on and cents-total regressions, TypeScript, the complete Vitest suite, and a production build
-- [ ] Save a release checkpoint and publish with a genuine production restart; do not change environment values
-- [ ] Fetch production `/api/version` and prove the fresh running build contains merged PR #23
-- [ ] Open the live quote flow, choose Deep Cleaning, and prove its Deep cleaning add-on reads Included and cannot be selected
-- [ ] Confirm private GitHub, managed source, and the production-tracked release are synchronized
+- [x] Save a release checkpoint and publish with a genuine production restart; do not change environment values
+- [x] Fetch production `/api/version` and prove the fresh running build contains merged PR #23
+- [x] Open the live quote flow, choose Deep Cleaning, and prove its Deep cleaning add-on reads Included and cannot be selected
+- [x] Confirm private GitHub, managed source, and the production-tracked release are synchronized
