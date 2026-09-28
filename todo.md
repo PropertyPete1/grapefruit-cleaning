@@ -533,3 +533,12 @@
 - [x] Fetch production `/api/version` and prove the fresh running build contains the merged release
 - [x] Fetch live EN and ES pricing pages and prove Residential opens at $79.99 below 600 sq ft, not $67.99
 - [x] Confirm private GitHub, managed source, and the production-tracked release are synchronized
+
+## PR #21 deployment — grandfathered pricing, apartment sqft, and tier editor
+- [x] Pull latest GitHub `main` first and prove merged PR #21 is present
+- [x] Inspect migration 0034 and verify all additions are nullable with no backfill before applying it
+- [x] Apply migration 0034 only, then prove the applied journal record exists in `__drizzle_migrations`
+- [x] Run focused PR #21 regressions, TypeScript, the complete Vitest suite, and a production build
+- [ ] Save a release checkpoint and publish with a genuine production restart; do not change environment values
+- [ ] Fetch production `/api/version` and prove the fresh running build contains merged PR #21
+- [ ] Confirm private GitHub, managed source, and the production-tracked release are synchronized
