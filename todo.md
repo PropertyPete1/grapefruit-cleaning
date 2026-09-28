@@ -552,3 +552,12 @@
 - [x] Fetch production `/api/version` and prove the fresh running build contains merged PR #22
 - [x] Fetch live EN and ES pricing pages and prove one-time pricing, no frequency toggle, and the returning-customer savings note
 - [x] Confirm private GitHub, managed source, and the production-tracked release are synchronized
+
+## PR #23 deployment — included add-on guards and exact cents totals
+- [x] Pull latest GitHub `main` first and prove merged PR #23 is present
+- [x] Confirm the merged range has no migration or environment-file changes
+- [x] Run focused duplicate-add-on and cents-total regressions, TypeScript, the complete Vitest suite, and a production build
+- [ ] Save a release checkpoint and publish with a genuine production restart; do not change environment values
+- [ ] Fetch production `/api/version` and prove the fresh running build contains merged PR #23
+- [ ] Open the live quote flow, choose Deep Cleaning, and prove its Deep cleaning add-on reads Included and cannot be selected
+- [ ] Confirm private GitHub, managed source, and the production-tracked release are synchronized
