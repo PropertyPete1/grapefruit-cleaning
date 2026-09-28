@@ -523,3 +523,13 @@
 - [x] Save a deployment checkpoint and publish it with a genuine production restart
 - [x] Fetch production `/api/version`, prove a fresh boot timestamp, and confirm the running build contains PR #18
 - [x] Verify the production calendar/Airbnb release non-destructively and confirm managed source remains aligned with private GitHub `main`
+
+## PRs #18–#20 deployment — calendar, pricing, and payments
+- [x] Pull latest GitHub `main` first and prove merged PRs #18, #19, and #20 are present
+- [x] Inspect migration 0033 and verify its seven additive nullable columns before applying it
+- [x] Apply migration 0033 only, then prove the applied journal record exists in `__drizzle_migrations`
+- [x] Run TypeScript, focused release regressions, the complete Vitest suite, and a production build
+- [ ] Save a release checkpoint and publish with a genuine production restart; do not change any environment values
+- [ ] Fetch production `/api/version` and prove the fresh running build contains the merged release
+- [ ] Fetch live EN and ES pricing pages and prove Residential opens at $79.99 below 600 sq ft, not $67.99
+- [ ] Confirm private GitHub, managed source, and the production-tracked release are synchronized
