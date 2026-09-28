@@ -30,6 +30,7 @@
 
 import { z } from "zod";
 import { centsToDollars, depositCents, dollarsToCents } from "./money";
+import type { PriceLock } from "./priceLock";
 
 /** Every service that can be booked, in the order they are offered. */
 export const CLEANING_TYPES = [
@@ -570,6 +571,8 @@ export interface QuoteBreakdown {
   startingAt: boolean;
   /** True when the size requires a custom quote (residential 3,500+ sq ft). */
   customQuote: boolean;
+  /** True when the base came from a customer's grandfathered rate, not the tier table. */
+  grandfathered: boolean;
 }
 
 export interface CatalogQuoteBreakdown extends QuoteBreakdown {
@@ -589,15 +592,19 @@ export interface CatalogQuoteBreakdown extends QuoteBreakdown {
 export function calculateCatalogQuote(
   input: Omit<QuoteInput, "extras">,
   extrasTotalCents: number,
-  config: PricingConfig = DEFAULT_PRICING
+  config: PricingConfig = DEFAULT_PRICING,
+  lock: PriceLock | { basePriceCents: number; serviceType?: CleaningType } | null = null
 ): CatalogQuoteBreakdown {
   if (!Number.isInteger(extrasTotalCents) || extrasTotalCents < 0) {
     throw new Error("Add-on subtotal must be a non-negative integer number of cents");
   }
-  const baseQuote = calculateQuote({ ...input, extras: [], frequency: "onetime" }, config);
-  const baseCents = dollarsToCents(baseQuote.base);
+  const locked = lockApplies(lock, input.type);
+  const baseQuote = calculateQuote({ ...input, extras: [], frequency: "onetime" }, config, lock);
+  const baseCents = locked ? lock.basePriceCents : dollarsToCents(baseQuote.base);
   const subtotalCents = baseCents + extrasTotalCents;
-  const discountRate = config.frequencyDiscounts[input.frequency] ?? 0;
+  // A grandfathered rate is the customer's whole per-visit price: recurring
+  // discounts are already in it and never stack on top.
+  const discountRate = locked ? 0 : (config.frequencyDiscounts[input.frequency] ?? 0);
   const discountCents = Math.round(subtotalCents * discountRate);
   const totalCents = subtotalCents - discountCents;
   const exactDepositCents = depositCents(totalCents, depositRateFor(input.type, config));
@@ -612,6 +619,7 @@ export function calculateCatalogQuote(
     deposit: centsToDollars(exactDepositCents),
     startingAt: baseQuote.startingAt,
     customQuote: baseQuote.customQuote,
+    grandfathered: locked,
     baseCents,
     extrasTotalCents,
     subtotalCents,
@@ -621,15 +629,45 @@ export function calculateCatalogQuote(
   };
 }
 
-export function calculateQuote(input: QuoteInput, config: PricingConfig = DEFAULT_PRICING): QuoteBreakdown {
+/**
+ * Whether a price lock prices this service. Locks are service-specific: a
+ * grandfathered residential rate says nothing about a deep clean.
+ */
+function lockApplies(
+  lock: { basePriceCents: number; serviceType?: CleaningType } | null | undefined,
+  type: CleaningType
+): lock is { basePriceCents: number; serviceType?: CleaningType } {
+  return Boolean(
+    lock &&
+      Number.isInteger(lock.basePriceCents) &&
+      lock.basePriceCents > 0 &&
+      (lock.serviceType === undefined || lock.serviceType === type)
+  );
+}
+
+/**
+ * The quote engine. With a `lock` (a customer's grandfathered rate for this
+ * service) the locked figure replaces the tier price whatever the size says —
+ * no "starting at", no custom quote — extras and coupons still add on top, and
+ * the recurring discount does not stack. Without one, or for another service,
+ * the catalog prices as always.
+ */
+export function calculateQuote(
+  input: QuoteInput,
+  config: PricingConfig = DEFAULT_PRICING,
+  lock: PriceLock | { basePriceCents: number; serviceType?: CleaningType } | null = null
+): QuoteBreakdown {
   const sqft = Math.max(200, Math.min(20000, input.sqft));
   const tier = getTier(input.type, sqft, config);
+  const locked = lockApplies(lock, input.type);
 
   let base: number;
   let startingAt = false;
   let customQuote = false;
 
-  if (tier) {
+  if (locked) {
+    base = centsToDollars(lock.basePriceCents);
+  } else if (tier) {
     if (tier.customQuote) {
       customQuote = true;
       // Use the last priced tier as the reference floor for display purposes.
@@ -653,12 +691,24 @@ export function calculateQuote(input: QuoteInput, config: PricingConfig = DEFAUL
   const sqftCharge = 0;
   const extrasTotal = input.extras.reduce((sum, id) => sum + (config.extras[id] ?? 0), 0);
   const subtotal = round2(base + extrasTotal);
-  const discountRate = config.frequencyDiscounts[input.frequency] ?? 0;
+  const discountRate = locked ? 0 : (config.frequencyDiscounts[input.frequency] ?? 0);
   const discount = round2(subtotal * discountRate);
   const total = round2(subtotal - discount);
   // Airbnb prices its deposit at 0 whatever the dial says — see depositRateFor.
   const deposit = round2(total * depositRateFor(input.type, config));
-  return { base, rooms, sqftCharge, extrasTotal, subtotal, discount, total, deposit, startingAt, customQuote };
+  return {
+    base,
+    rooms,
+    sqftCharge,
+    extrasTotal,
+    subtotal,
+    discount,
+    total,
+    deposit,
+    startingAt,
+    customQuote,
+    grandfathered: locked,
+  };
 }
 
 function round2(n: number): number {

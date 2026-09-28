@@ -19,6 +19,7 @@ const mockConfirmUnpaidBooking = vi.fn();
 const mockCreateBooking = vi.fn();
 
 vi.mock("./db", () => ({
+  listGrandfatheredCustomers: vi.fn().mockResolvedValue([]),
   getSetting: vi.fn().mockResolvedValue(null),
   getBookingById: (...args: unknown[]) => mockGetBookingById(...args),
   updateBooking: (...args: unknown[]) => mockUpdateBooking(...args),

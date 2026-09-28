@@ -32,12 +32,58 @@ export type PropertyType = (typeof PROPERTY_TYPES)[number];
  */
 export const VERIFIED_SQFT_MAX_MULTIPLE = 4;
 
+/**
+ * The largest home any quote will price, and the smallest. A county record
+ * above the cap is a building, a strip mall, or a parcel mismatch — never one
+ * customer's home — and is treated as a failed lookup even with no entered
+ * figure to compare against. The same cap bounds every square-footage input,
+ * public and admin, so an absurd number cannot reach a quote by any road.
+ */
+export const MAX_HOME_SQFT = 10_000;
+export const MIN_HOME_SQFT = 200;
+
 export function plausibleVerifiedSqft(
   enteredSqft: number | null | undefined,
   verifiedSqft: number
 ): boolean {
+  if (!Number.isFinite(verifiedSqft) || verifiedSqft <= 0 || verifiedSqft > MAX_HOME_SQFT) return false;
   if (enteredSqft == null || enteredSqft <= 0) return true;
   return verifiedSqft <= enteredSqft * VERIFIED_SQFT_MAX_MULTIPLE;
+}
+
+/**
+ * Whether a street line names a unit — "Apt 204", "Unit 5B", "#12", "Ste
+ * 300", "Condo 7". A unit address is an apartment or condo whatever the
+ * property-type toggle says, so the county lookup (which would return the
+ * whole building) is skipped and the customer is asked for the unit's own
+ * square footage. Street names that merely contain one of these words
+ * ("Building Blvd") do not count: the designator has to be followed by a unit
+ * token.
+ */
+export function looksLikeUnitAddress(addressLine: string | null | undefined): boolean {
+  const line = (addressLine ?? "").trim();
+  if (!line) return false;
+  // A unit token is a number-led code ("204", "5B", "300-A") or a single
+  // letter ("B") — never a whole word, so "Condo Ln" and "Building Blvd" stay
+  // street names.
+  const token = String.raw`(?:\d[a-z0-9-]*|[a-z](?:\d[a-z0-9-]*)?)\b`;
+  if (new RegExp(String.raw`(?:^|[\s,])#\s*${token}`, "i").test(line)) return true;
+  return new RegExp(
+    String.raw`(?:^|[\s,])(?:apt|apartment|unit|ste|suite|condo|bldg|building|fl|floor)\.?\s*#?\s*${token}`,
+    "i"
+  ).test(line);
+}
+
+/**
+ * A square footage a quote may be built on: a whole number inside the home
+ * range. Null for anything else — blank, text, a building.
+ */
+export function acceptableSqft(value: number | string | null | undefined): number | null {
+  const n = typeof value === "string" ? Number(value.trim()) : value;
+  if (n == null || !Number.isFinite(n)) return null;
+  const rounded = Math.round(n);
+  if (rounded < MIN_HOME_SQFT || rounded > MAX_HOME_SQFT) return null;
+  return rounded;
 }
 
 /**

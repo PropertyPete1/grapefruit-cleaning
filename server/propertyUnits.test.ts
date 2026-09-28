@@ -25,6 +25,7 @@ const mockConfirmUnpaid = vi.fn();
 vi.mock("./db", async () => {
   const actual = await vi.importActual<typeof import("./db")>("./db");
   return {
+    listGrandfatheredCustomers: vi.fn().mockResolvedValue([]),
     stripPayToken: actual.stripPayToken,
     setBookingRescheduleToken: vi.fn().mockResolvedValue(undefined),
     isSlotTakenError: actual.isSlotTakenError,
@@ -456,9 +457,13 @@ describe("the plausibility guard", () => {
     expect(plausibleVerifiedSqft(800, 12000)).toBe(false);
   });
 
-  it("has no opinion without a baseline", () => {
-    expect(plausibleVerifiedSqft(null, 50000)).toBe(true);
-    expect(plausibleVerifiedSqft(undefined, 50000)).toBe(true);
+  it("has no opinion without a baseline — up to the size of a home", () => {
+    expect(plausibleVerifiedSqft(null, 5000)).toBe(true);
+    expect(plausibleVerifiedSqft(undefined, 5000)).toBe(true);
+    // A record bigger than any home is a building even with nothing to compare
+    // it to (the 300,000 sq ft apartment-complex bug).
+    expect(plausibleVerifiedSqft(null, 50000)).toBe(false);
+    expect(plausibleVerifiedSqft(undefined, 300000)).toBe(false);
   });
 
   it("keeps the entered figure in resolveEffectiveSqft when the record is absurd", () => {
@@ -658,9 +663,11 @@ describe("exact square footage", () => {
     "utf-8"
   );
 
-  it("admin form takes an exact number on a numeric keypad, clamped 200–20,000", () => {
-    expect(dialog).toMatch(/type="number"[\s\S]{0,120}inputMode="numeric"[\s\S]{0,240}min=\{200\}[\s\S]{0,60}max=\{20000\}/);
-    expect(dialog).toContain("Math.min(20000, Math.max(200, Number(sqft)))");
+  it("admin form takes an exact number on a numeric keypad, clamped 200–10,000", () => {
+    expect(dialog).toMatch(
+      /type="number"[\s\S]{0,120}inputMode="numeric"[\s\S]{0,240}min=\{MIN_HOME_SQFT\}[\s\S]{0,60}max=\{MAX_HOME_SQFT\}/
+    );
+    expect(dialog).toContain("Math.min(MAX_HOME_SQFT, Math.max(MIN_HOME_SQFT, Number(sqft)))");
     expect(dialog).not.toContain('type="range"');
   });
 

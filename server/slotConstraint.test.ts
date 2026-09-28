@@ -25,6 +25,7 @@ const mockSessionCreate = vi.fn();
 vi.mock("./db", async () => {
   const actual = await vi.importActual<typeof import("./db")>("./db");
   return {
+    listGrandfatheredCustomers: vi.fn().mockResolvedValue([]),
     getSetting: vi.fn().mockResolvedValue(null),
     getOccupiedBookings: vi.fn().mockResolvedValue([]),
     getCouponByCode: vi.fn().mockResolvedValue(undefined),

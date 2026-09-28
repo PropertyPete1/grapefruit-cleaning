@@ -385,6 +385,17 @@ export const es: Dictionary = {
     bedrooms: "Habitaciones",
     bathrooms: "Baños",
     sqft: "Metros cuadrados aproximados (en pies²)",
+    exactSqft: "Pies² exactos",
+    sqftOutOfRange: "Ingrese un tamaño entre 200 y 10,000 pies².",
+    propertyTypeLabel: "Tipo de propiedad",
+    propertyHouse: "Casa",
+    propertyApartment: "Apartamento / Condominio",
+    unitSqftPrompt:
+      "Apartamentos y condominios: ingrese los pies cuadrados exactos de su unidad — no del edificio. Los registros del condado miden edificios completos, así que no los consultamos.",
+    unitSqftRequired: "Ingrese los pies cuadrados de su unidad para continuar.",
+    unitDetected: "Esta dirección parece un apartamento o condominio, así que cotizamos por el tamaño de su unidad.",
+    implausibleRecord:
+      "Los registros del condado indican {sqft} pies² para esta dirección — es un edificio completo o un registro equivocado, así que no lo aplicamos. Ingrese los pies cuadrados exactos de su hogar abajo.",
     extrasTitle: "¿Algún extra?",
     extrasSubtitle: "Seleccione todo lo que aplique y vea su precio actualizarse en vivo.",
     frequencyTitle: "¿Con qué frecuencia debemos ir?",
@@ -435,6 +446,10 @@ export const es: Dictionary = {
     apartmentNote:
       "Los registros del condado miden edificios completos, no unidades — así que tomamos sus pies cuadrados tal como los ingresó y los confirmamos en su cita.",
     unitPlaceholder: "Unidad #",
+    unitSqftLabel: "Pies cuadrados de su unidad",
+    unitSqftHint: "El tamaño exacto de su unidad, no del edificio — es la base de su precio.",
+    unitSqftInvalid: "Ingrese los pies cuadrados de su unidad (200–10,000).",
+    unitDetected: "Esta dirección parece un apartamento o condominio, así que no consultamos los registros del condado — ingrese el tamaño de su unidad.",
     reviewTitle: "Revise su reserva",
     service: "Servicio",
     dateTime: "Fecha y hora",

@@ -9,11 +9,23 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { PageHeader, RowCard, SERVICE_LABELS, StatusBadge, TableOrCards, fmtDate, fmtMoney } from "./adminShared";
+import { Button } from "@/components/ui/button";
+import {
+  GrandfatheredBadge,
+  PageHeader,
+  RowCard,
+  SERVICE_LABELS,
+  StatusBadge,
+  TableOrCards,
+  fmtDate,
+  fmtMoney,
+} from "./adminShared";
+import { GrandfatheredPriceDialog } from "./GrandfatheredPriceDialog";
 
 export default function AdminCustomers() {
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [rateOpen, setRateOpen] = useState(false);
   const customers = trpc.admin.customers.useQuery({ search: search || undefined });
   const detail = trpc.admin.customerDetail.useQuery(
     { id: selectedId ?? 0 },
@@ -71,7 +83,10 @@ export default function AdminCustomers() {
                     className="cursor-pointer border-b border-border/60 last:border-0 hover:bg-muted/40"
                   >
                     <td className="px-6 py-3.5 font-medium text-foreground">
-                      {c.firstName} {c.lastName}
+                      <span className="inline-flex flex-wrap items-center gap-2">
+                        {c.firstName} {c.lastName}
+                        {c.grandfatheredPriceCents != null && <GrandfatheredBadge />}
+                      </span>
                     </td>
                     <td className="px-6 py-3.5 text-muted-foreground">{c.email}</td>
                     <td className="px-6 py-3.5 text-muted-foreground">{c.phone ?? "—"}</td>
@@ -96,8 +111,11 @@ export default function AdminCustomers() {
                 title={`${c.firstName} ${c.lastName}`}
                 subtitle={c.email}
                 badge={
-                  <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-semibold uppercase">
-                    {c.preferredLocale}
+                  <span className="flex flex-col items-end gap-1">
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-semibold uppercase">
+                      {c.preferredLocale}
+                    </span>
+                    {c.grandfatheredPriceCents != null && <GrandfatheredBadge />}
                   </span>
                 }
                 details={[
@@ -147,6 +165,41 @@ export default function AdminCustomers() {
                   </p>
                 </div>
               </div>
+              <div
+                className="mt-4 rounded-xl border border-amber-200 bg-amber-50/70 p-3 text-sm"
+                data-testid="grandfathered-block"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-amber-800">Grandfathered price</p>
+                    {detail.data.customer.grandfatheredPriceCents != null ? (
+                      <>
+                        <p className="mt-1 font-semibold text-foreground">
+                          {fmtMoney(detail.data.customer.grandfatheredPriceCents / 100)} per{" "}
+                          {detail.data.customer.grandfatheredServiceType
+                            ? (SERVICE_LABELS[detail.data.customer.grandfatheredServiceType] ?? detail.data.customer.grandfatheredServiceType)
+                            : ""}{" "}
+                          cleaning
+                        </p>
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          {detail.data.customer.grandfatheredAt ? `Set ${fmtDate(detail.data.customer.grandfatheredAt)}. ` : ""}
+                          Applied when their email or phone matches at booking. Extras add on top; recurring discounts
+                          don't stack.
+                          {detail.data.customer.grandfatheredNote ? ` — ${detail.data.customer.grandfatheredNote}` : ""}
+                        </p>
+                      </>
+                    ) : (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Pays the current catalog price. Set a grandfathered price to keep an original client at their old
+                        rate — only this customer, nobody else.
+                      </p>
+                    )}
+                  </div>
+                  <Button size="sm" variant="outline" className="rounded-lg bg-card" onClick={() => setRateOpen(true)}>
+                    {detail.data.customer.grandfatheredPriceCents != null ? "Change rate" : "Set grandfathered price"}
+                  </Button>
+                </div>
+              </div>
               <h3 className="mt-5 text-sm font-semibold text-foreground">Booking history</h3>
               <div className="mt-2 max-h-64 space-y-2 overflow-y-auto">
                 {detail.data.bookings.length === 0 ? (
@@ -164,6 +217,9 @@ export default function AdminCustomers() {
                       <div className="text-right">
                         <p className="font-semibold">{fmtMoney(b.totalAmount)}</p>
                         <StatusBadge status={b.status} />
+                        {b.grandfatheredBaseCents != null && (
+                          <p className="mt-1 text-[10px] font-semibold text-amber-800">Grandfathered price</p>
+                        )}
                       </div>
                     </div>
                   ))
@@ -173,6 +229,13 @@ export default function AdminCustomers() {
           ) : null}
         </DialogContent>
       </Dialog>
+      {rateOpen && detail.data && (
+        <GrandfatheredPriceDialog
+          customer={detail.data.customer}
+          bookings={detail.data.bookings}
+          onClose={() => setRateOpen(false)}
+        />
+      )}
     </div>
   );
 }

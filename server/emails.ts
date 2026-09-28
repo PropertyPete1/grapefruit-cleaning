@@ -55,6 +55,12 @@ export interface BookingEmailData {
    * instead of talking about a deposit or a card balance.
    */
   paymentPreference?: "online" | "cash" | null;
+  /**
+   * Set when a grandfathered rate priced this booking instead of the catalog:
+   * whose rate, and the per-visit figure. Owner notification only — the
+   * customer's confirmation simply shows the total.
+   */
+  grandfathered?: { customerName: string; basePrice: number } | null;
 }
 
 const fmtUsd = (n: number) => `$${n.toFixed(0)} USD`;
@@ -636,6 +642,9 @@ export function buildOwnerNotification(data: BookingEmailData): { title: string;
       `Date & time: ${data.date} at ${data.time}`,
       `Frequency: ${data.frequencyLabel}`,
       `Extras: ${data.extras.length > 0 ? data.extras.join(", ") : "None"}`,
+      ...(data.grandfathered
+        ? [`Price: GRANDFATHERED RATE — $${data.grandfathered.basePrice.toFixed(2)} per cleaning (${data.grandfathered.customerName}), not the catalog price`]
+        : []),
       ``,
       `Customer: ${data.customerName}`,
       `Email: ${data.customerEmail}`,

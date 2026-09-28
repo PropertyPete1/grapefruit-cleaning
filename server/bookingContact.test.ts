@@ -23,6 +23,7 @@ const mockSendMail = vi.fn();
 vi.mock("./db", async () => {
   const actual = await vi.importActual<typeof import("./db")>("./db");
   return {
+    listGrandfatheredCustomers: vi.fn().mockResolvedValue([]),
     stripPayToken: actual.stripPayToken,
     isSlotTakenError: actual.isSlotTakenError,
     listBookings: (...a: unknown[]) => mockListBookings(...a),

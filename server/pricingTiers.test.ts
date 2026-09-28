@@ -12,6 +12,7 @@ const mockSessionCreate = vi.fn();
 const mockLookupProperty = vi.fn();
 
 vi.mock("./db", () => ({
+  listGrandfatheredCustomers: vi.fn().mockResolvedValue([]),
   getSetting: (...args: unknown[]) => mockGetSetting(...args),
   setSetting: (...args: unknown[]) => mockSetSetting(...args),
   createBooking: (...args: unknown[]) => mockCreateBooking(...args),

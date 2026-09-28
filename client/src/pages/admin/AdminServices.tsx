@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
+import { ArrowDownToLine, Loader2, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,7 +13,6 @@ import {
   type ExtraId,
   type Frequency,
   type PricingConfig,
-  type PricingTier,
   type TieredType,
 } from "@shared/pricing";
 import {
@@ -27,6 +26,7 @@ import {
   type DurationConfig,
   type DurationTier,
 } from "@shared/duration";
+import { draftFromTiers, insertTierAfter, normalizeTierDraft, type DraftTier } from "@shared/tierDraft";
 import { PageHeader, SERVICE_LABELS, TableOrCards } from "./adminShared";
 import { AddonCatalogManager } from "./AddonCatalogManager";
 import { BookingHoursSection } from "./AdminSettings";
@@ -54,37 +54,34 @@ const TIERED: TieredType[] = ["residential", "deep", "moveinout"];
 
 const TIER_LABELS = { under: "Under", over: "Over", sqft: "sq ft", anySize: "Any size" };
 
-function tierRange(tier: PricingTier, prev?: PricingTier): string {
-  return tierRangeLabel(tier, prev, TIER_LABELS);
+/**
+ * What the editor's rows would become on save, with the same rules the server
+ * enforces (errors) and every boundary the save would straighten out
+ * (warnings) — so the admin sees both inline instead of a rejected save or a
+ * silent reorder. The server re-checks everything.
+ */
+function tierReport(rows: DraftTier[], service: string) {
+  return normalizeTierDraft(rows, SERVICE_LABELS[service] ?? service, MAX_TIERS_PER_SERVICE);
 }
 
-/**
- * Client-side mirror of the server's tier rules, so an admin sees the problem
- * inline instead of a rejected save. The server re-checks everything.
- */
-function tierProblems(tiers: PricingTier[], service: string): string[] {
-  const problems: string[] = [];
-  const label = SERVICE_LABELS[service] ?? service;
-  if (tiers.length === 0) problems.push(`${label}: needs at least one tier`);
-  if (tiers.length > MAX_TIERS_PER_SERVICE)
-    problems.push(`${label}: at most ${MAX_TIERS_PER_SERVICE} tiers (currently ${tiers.length})`);
-  const unbounded = tiers.filter(t => t.maxSqft === Infinity).length;
-  if (unbounded !== 1 || tiers[tiers.length - 1]?.maxSqft !== Infinity)
-    problems.push(`${label}: the last tier must be the only open-ended one`);
-  let previous = 0;
-  tiers.forEach((tier, idx) => {
-    if (tier.maxSqft === Infinity) return;
-    if (!Number.isInteger(tier.maxSqft) || tier.maxSqft <= 0) {
-      problems.push(`${label} tier ${idx + 1}: max sq ft must be a whole number above 0`);
-      return;
-    }
-    if (tier.maxSqft <= previous) {
-      problems.push(`${label} tier ${idx + 1}: ${tier.maxSqft.toLocaleString("en-US")} must be larger than ${previous.toLocaleString("en-US")}`);
-      return;
-    }
-    previous = tier.maxSqft;
-  });
-  return problems;
+type TierDrafts = Record<TieredType, DraftTier[]>;
+
+/** The stored ladders as editable rows, each with its own min and max. */
+function draftsFromConfig(cfg: PricingConfig): TierDrafts {
+  return {
+    residential: draftFromTiers(cfg.tiers.residential),
+    deep: draftFromTiers(cfg.tiers.deep),
+    moveinout: draftFromTiers(cfg.tiers.moveinout),
+  };
+}
+
+/** A row's size band as words: "Under 700", "700–900", "Over 3,500". */
+function rowRange(row: DraftTier, idx: number): string {
+  return tierRangeLabel(
+    { maxSqft: row.maxSqft, price: row.price },
+    idx > 0 ? { maxSqft: row.minSqft, price: 0 } : undefined,
+    TIER_LABELS
+  );
 }
 
 /** Deep-clone a config so edits never mutate the query cache or defaults. */
@@ -451,11 +448,20 @@ export default function AdminServices() {
   const utils = trpc.useUtils();
   const configQuery = trpc.booking.pricingConfig.useQuery(undefined, { staleTime: 0 });
   const [draft, setDraft] = useState<PricingConfig | null>(null);
+  /**
+   * The tier ladders as the editor works on them: every row with its own min
+   * and max, in whatever order the owner left them. Turned back into the
+   * stored shape (sorted by max, mins implied) on save — see shared/tierDraft.
+   */
+  const [tierDrafts, setTierDrafts] = useState<TierDrafts | null>(null);
   const [dirty, setDirty] = useState(false);
 
   // Initialize the editable draft once the live config arrives.
   useEffect(() => {
-    if (configQuery.data && !draft) setDraft(cloneConfig(configQuery.data));
+    if (configQuery.data && !draft) {
+      setDraft(cloneConfig(configQuery.data));
+      setTierDrafts(draftsFromConfig(configQuery.data));
+    }
   }, [configQuery.data, draft]);
 
   const save = trpc.admin.savePricingConfig.useMutation({
@@ -468,7 +474,7 @@ export default function AdminServices() {
     onError: e => toast.error(e.message || "Could not save pricing"),
   });
 
-  if (!draft) {
+  if (!draft || !tierDrafts) {
     return (
       <div>
         <PageHeader title="Services & Pricing" subtitle="Edit every price the site charges — changes apply everywhere at once" />
@@ -494,7 +500,18 @@ export default function AdminServices() {
     return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null;
   };
 
-  const problems = TIERED.flatMap(svc => tierProblems(draft.tiers[svc], svc));
+  const reports = Object.fromEntries(TIERED.map(svc => [svc, tierReport(tierDrafts[svc], svc)])) as Record<
+    TieredType,
+    ReturnType<typeof tierReport>
+  >;
+  const problems = TIERED.flatMap(svc => reports[svc].errors);
+  const warnings = TIERED.flatMap(svc => reports[svc].warnings);
+
+  /** Edits one service's rows; the editor never touches the stored shape directly. */
+  const updateTiers = (svc: TieredType, fn: (rows: DraftTier[]) => DraftTier[]) => {
+    setTierDrafts(prev => (prev ? { ...prev, [svc]: fn(prev[svc].map(row => ({ ...row }))) } : prev));
+    setDirty(true);
+  };
 
   const handleSave = () => {
     // Basic sanity: deposit rate 0–100%. Zero is a real mode — no deposit is
@@ -507,31 +524,73 @@ export default function AdminServices() {
       toast.error(problems[0]);
       return;
     }
-    save.mutate({ config: serializePricingConfig(draft) });
+    // Position is decided by max sq ft, never by where a row was typed: the
+    // ladders go out sorted, with each row's min snapped to its neighbour's
+    // max, and the editor adopts that order so what is shown is what was saved.
+    const tiers = {
+      residential: reports.residential.tiers,
+      deep: reports.deep.tiers,
+      moveinout: reports.moveinout.tiers,
+    };
+    setTierDrafts({ residential: reports.residential.draft, deep: reports.deep.draft, moveinout: reports.moveinout.draft });
+    setDraft(prev => (prev ? { ...prev, tiers } : prev));
+    if (warnings.length > 0) toast.info(`Tier boundaries straightened out on save (${warnings.length}) — rows are ordered by max sq ft`);
+    save.mutate({ config: serializePricingConfig({ ...draft, tiers }) });
   };
 
-  /** Inserts a tier above the open-ended one, halfway between its neighbours. */
+  /**
+   * A new row directly after this one, sized to fit between it and the next
+   * (see insertTierAfter). Disabled when the two rows sit too close together.
+   */
+  const insertAfter = (svc: TieredType, idx: number) => {
+    updateTiers(svc, rows => insertTierAfter(rows, idx) ?? rows);
+  };
+
+  /** Adds a tier just below the open-ended one — the old "Add tier". */
   const addTier = (svc: TieredType) => {
-    update(cfg => {
-      const tiers = cfg.tiers[svc];
-      const lastBoundedIdx = tiers.length - 2;
-      const lastBounded = lastBoundedIdx >= 0 ? tiers[lastBoundedIdx] : undefined;
-      const previous = lastBoundedIdx >= 1 ? tiers[lastBoundedIdx - 1] : undefined;
-      const step = lastBounded && previous ? Math.max(100, lastBounded.maxSqft - previous.maxSqft) : 200;
-      const maxSqft = lastBounded ? lastBounded.maxSqft + step : 700;
-      const price = lastBounded ? Math.round((lastBounded.price + 20) * 100) / 100 : 99.99;
-      tiers.splice(Math.max(0, tiers.length - 1), 0, { maxSqft, price });
+    updateTiers(svc, rows => {
+      const anchor = rows.length - 2;
+      if (anchor >= 0) return insertTierAfter(rows, anchor) ?? rows;
+      // Only the open-ended row exists: give the ladder a first band.
+      const top = rows[0];
+      return [{ minSqft: 0, maxSqft: 700, price: 99.99 }, { ...top, minSqft: 700 }];
     });
   };
 
   const removeTier = (svc: TieredType, idx: number) => {
-    update(cfg => {
-      cfg.tiers[svc].splice(idx, 1);
+    updateTiers(svc, rows => {
+      const next = rows.filter((_, i) => i !== idx);
+      // The row that moves up now starts where the removed row's predecessor ends.
+      if (next[idx] && idx > 0) next[idx] = { ...next[idx], minSqft: next[idx - 1].maxSqft };
+      if (next[0]) next[0] = { ...next[0], minSqft: 0 };
+      return next;
+    });
+  };
+
+  /**
+   * Min and max are one boundary seen from two rows: typing a row's min moves
+   * the row above's max with it, and typing a max moves the row below's min.
+   * A max typed past another row's max is what reorders the ladder on save —
+   * and what the warnings describe.
+   */
+  const setRowMin = (svc: TieredType, idx: number, n: number) => {
+    updateTiers(svc, rows => {
+      rows[idx] = { ...rows[idx], minSqft: n };
+      if (idx > 0 && Number.isFinite(rows[idx - 1].maxSqft)) rows[idx - 1] = { ...rows[idx - 1], maxSqft: n };
+      return rows;
+    });
+  };
+  const setRowMax = (svc: TieredType, idx: number, n: number) => {
+    updateTiers(svc, rows => {
+      rows[idx] = { ...rows[idx], maxSqft: n };
+      if (rows[idx + 1]) rows[idx + 1] = { ...rows[idx + 1], minSqft: n };
+      return rows;
     });
   };
 
   const handleReset = () => {
     setDraft(cloneConfig(DEFAULT_PRICING));
+    setTierDrafts(draftsFromConfig(DEFAULT_PRICING));
     setDirty(true);
     toast.info("Reset to default pricing — click Save to apply");
   };
@@ -601,23 +660,92 @@ export default function AdminServices() {
       <div className="grid gap-6 lg:grid-cols-2">
         <div className="space-y-6">
           {TIERED.map(svc => {
-            const tiers = draft.tiers[svc];
-            const topPricedIdx = tiers.reduce((acc, t, i) => (t.customQuote ? acc : i), -1);
-            const svcProblems = tierProblems(tiers, svc);
+            const rows = tierDrafts[svc];
+            const report = reports[svc];
+            const topPricedIdx = rows.reduce((acc, t, i) => (t.customQuote ? acc : i), -1);
+            const label = SERVICE_LABELS[svc] ?? svc;
+            const sqftInput = (
+              value: number,
+              onChange: (n: number) => void,
+              ariaLabel: string,
+              className: string
+            ) => (
+              <Input
+                aria-label={ariaLabel}
+                type="number"
+                inputMode="numeric"
+                min={1}
+                step={50}
+                className={className}
+                value={value}
+                onChange={e => {
+                  const n = Number(e.target.value);
+                  if (Number.isFinite(n)) onChange(Math.round(n));
+                }}
+              />
+            );
+            const insertButton = (idx: number, mobile: boolean) => (
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label={`Insert ${label} tier after tier ${idx + 1}${mobile ? " (mobile)" : ""}`}
+                title="Insert a tier below this one"
+                className="h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground"
+                disabled={rows.length >= MAX_TIERS_PER_SERVICE || insertTierAfter(rows, idx) === null}
+                onClick={() => insertAfter(svc, idx)}
+              >
+                <ArrowDownToLine className="h-3.5 w-3.5" />
+              </Button>
+            );
+            const removeButton = (idx: number) => (
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label={`Remove ${SERVICE_LABELS[svc] ?? svc} tier ${idx + 1}`}
+                className="h-8 w-8 rounded-lg text-muted-foreground hover:text-destructive"
+                disabled={rows.length <= 1}
+                onClick={() => removeTier(svc, idx)}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            );
+            const startingAtToggle = (idx: number, row: DraftTier, compact: boolean) => (
+              <label
+                className={
+                  compact
+                    ? "mt-1 flex items-center gap-1.5 text-[11px] font-normal text-muted-foreground"
+                    : "flex items-center gap-2 text-xs text-muted-foreground"
+                }
+              >
+                <input
+                  type="checkbox"
+                  className={compact ? "h-3 w-3 accent-primary" : "h-3.5 w-3.5 accent-primary"}
+                  checked={Boolean(row.startingAt)}
+                  onChange={e => {
+                    const on = e.target.checked;
+                    updateTiers(svc, current => {
+                      current[idx] = { ...current[idx], startingAt: on || undefined };
+                      return current;
+                    });
+                  }}
+                />
+                show as "starting at"
+              </label>
+            );
             return (
-              <div key={svc} className="rounded-2xl bg-card shadow-sm ring-1 ring-border">
+              <div key={svc} className="rounded-2xl bg-card shadow-sm ring-1 ring-border" data-testid={`tier-editor-${svc}`}>
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-4 lg:px-6">
                   <div>
-                    <h2 className="font-semibold text-foreground">{SERVICE_LABELS[svc] ?? svc} — rates by size</h2>
+                    <h2 className="font-semibold text-foreground">{label} — rates by size</h2>
                     <p className="mt-0.5 text-xs text-muted-foreground">
-                      {tiers.length} tiers · each row covers up to its max sq ft
+                      {rows.length} tiers · edit min and max sq ft inline · rows are ordered by max sq ft when you save
                     </p>
                   </div>
                   <Button
                     size="sm"
                     variant="outline"
                     className="press h-8 rounded-lg bg-card text-xs"
-                    disabled={tiers.length >= MAX_TIERS_PER_SERVICE}
+                    disabled={rows.length >= MAX_TIERS_PER_SERVICE}
                     onClick={() => addTier(svc)}
                   >
                     <Plus className="mr-1 h-3.5 w-3.5" /> Add tier
@@ -625,134 +753,114 @@ export default function AdminServices() {
                 </div>
                 <TableOrCards
                   table={
-                  <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-                      <th className="px-6 py-2 font-medium">Range</th>
-                      <th className="px-2 py-2 font-medium">Max sq ft</th>
-                      <th className="px-2 py-2 text-right font-medium">Price</th>
-                      <th className="w-10 px-2 py-2" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tiers.map((tier, idx, arr) => (
-                      <tr key={idx} className="border-b border-border/60 last:border-0">
-                        <td className="px-6 py-2.5 text-xs font-medium text-foreground">
-                          {tierRange(tier, idx > 0 ? arr[idx - 1] : undefined)}
-                          {idx === topPricedIdx && (
-                            <label className="mt-1 flex items-center gap-1.5 text-[11px] font-normal text-muted-foreground">
-                              <input
-                                type="checkbox"
-                                className="h-3 w-3 accent-primary"
-                                checked={Boolean(tier.startingAt)}
-                                onChange={e => {
-                                  const on = e.target.checked;
-                                  update(cfg => {
-                                    cfg.tiers[svc][idx].startingAt = on || undefined;
-                                  });
-                                }}
-                              />
-                              show as "starting at"
-                            </label>
-                          )}
-                        </td>
-                        <td className="px-2 py-2.5">
-                          {tier.maxSqft === Infinity ? (
-                            <span className="text-xs text-muted-foreground">and up</span>
-                          ) : (
-                            <Input
-                              aria-label={`${SERVICE_LABELS[svc] ?? svc} tier ${idx + 1} max sq ft`}
-                              type="number"
-                              min={1}
-                              step={50}
-                              className="h-9 w-24 text-right text-sm"
-                              value={tier.maxSqft}
-                              onChange={e => {
-                                const n = Number(e.target.value);
-                                if (Number.isFinite(n)) {
-                                  update(cfg => {
-                                    cfg.tiers[svc][idx].maxSqft = Math.round(n);
-                                  });
-                                }
-                              }}
-                            />
-                          )}
-                        </td>
-                        <td className="px-2 py-2.5 text-right">
-                          {tier.customQuote ? (
-                            <span className="text-xs font-semibold text-muted-foreground">Custom Quote</span>
-                          ) : (
-                            <div className="flex justify-end">
-                              {priceInput(
-                                tier.price,
-                                n => update(cfg => { cfg.tiers[svc][idx].price = n; }),
-                                `${SERVICE_LABELS[svc] ?? svc} tier ${idx + 1} price`
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                          <th className="px-6 py-2 font-medium">Range</th>
+                          <th className="px-2 py-2 font-medium">Min sq ft</th>
+                          <th className="px-2 py-2 font-medium">Max sq ft</th>
+                          <th className="px-2 py-2 text-right font-medium">Price</th>
+                          <th className="w-20 px-2 py-2" />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((row, idx) => (
+                          <tr key={idx} className="border-b border-border/60 last:border-0">
+                            <td className="px-6 py-2.5 text-xs font-medium text-foreground">
+                              {rowRange(row, idx)}
+                              {idx === topPricedIdx && startingAtToggle(idx, row, true)}
+                            </td>
+                            <td className="px-2 py-2.5">
+                              {idx === 0 ? (
+                                <span className="text-xs text-muted-foreground">0</span>
+                              ) : (
+                                sqftInput(
+                                  row.minSqft,
+                                  n => setRowMin(svc, idx, n),
+                                  `${label} tier ${idx + 1} min sq ft`,
+                                  "h-9 w-24 text-right text-sm"
+                                )
                               )}
-                            </div>
-                          )}
-                        </td>
-                        <td className="px-2 py-2.5">
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            aria-label={`Remove ${SERVICE_LABELS[svc] ?? svc} tier ${idx + 1}`}
-                            className="h-8 w-8 rounded-lg text-muted-foreground hover:text-destructive"
-                            disabled={tiers.length <= 1}
-                            onClick={() => removeTier(svc, idx)}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                            </td>
+                            <td className="px-2 py-2.5">
+                              {row.maxSqft === Infinity ? (
+                                <span className="text-xs text-muted-foreground">and up</span>
+                              ) : (
+                                sqftInput(
+                                  row.maxSqft,
+                                  n => setRowMax(svc, idx, n),
+                                  `${label} tier ${idx + 1} max sq ft`,
+                                  "h-9 w-24 text-right text-sm"
+                                )
+                              )}
+                            </td>
+                            <td className="px-2 py-2.5 text-right">
+                              {row.customQuote ? (
+                                <span className="text-xs font-semibold text-muted-foreground">Custom Quote</span>
+                              ) : (
+                                <div className="flex justify-end">
+                                  {priceInput(
+                                    row.price,
+                                    n =>
+                                      updateTiers(svc, current => {
+                                        current[idx] = { ...current[idx], price: n };
+                                        return current;
+                                      }),
+                                    `${label} tier ${idx + 1} price`
+                                  )}
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-2 py-2.5">
+                              <div className="flex justify-end gap-0.5">
+                                {row.maxSqft !== Infinity && insertButton(idx, false)}
+                                {removeButton(idx)}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   }
-                  cards={tiers.map((tier, idx, arr) => (
+                  cards={rows.map((row, idx) => (
                     <div key={idx} className="space-y-3 px-4 py-3.5">
                       <div className="flex items-start justify-between gap-2">
-                        <p className="text-sm font-medium text-foreground">
-                          {tierRange(tier, idx > 0 ? arr[idx - 1] : undefined)}
-                        </p>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          aria-label={`Remove ${SERVICE_LABELS[svc] ?? svc} tier ${idx + 1}`}
-                          className="h-8 w-8 shrink-0 rounded-lg text-muted-foreground hover:text-destructive"
-                          disabled={tiers.length <= 1}
-                          onClick={() => removeTier(svc, idx)}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
+                        <p className="text-sm font-medium text-foreground">{rowRange(row, idx)}</p>
+                        <div className="flex shrink-0 gap-0.5">
+                          {row.maxSqft !== Infinity && insertButton(idx, true)}
+                          {removeButton(idx)}
+                        </div>
                       </div>
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="grid grid-cols-3 gap-3">
+                        <div>
+                          <Label className="text-[11px] text-muted-foreground">Min sq ft</Label>
+                          {idx === 0 ? (
+                            <p className="mt-1.5 h-9 text-xs leading-9 text-muted-foreground">0</p>
+                          ) : (
+                            sqftInput(
+                              row.minSqft,
+                              n => setRowMin(svc, idx, n),
+                              `${label} tier ${idx + 1} min sq ft (mobile)`,
+                              "mt-1.5 h-9 w-full text-sm"
+                            )
+                          )}
+                        </div>
                         <div>
                           <Label className="text-[11px] text-muted-foreground">Max sq ft</Label>
-                          {tier.maxSqft === Infinity ? (
+                          {row.maxSqft === Infinity ? (
                             <p className="mt-1.5 h-9 text-xs leading-9 text-muted-foreground">and up</p>
                           ) : (
-                            <Input
-                              aria-label={`${SERVICE_LABELS[svc] ?? svc} tier ${idx + 1} max sq ft (mobile)`}
-                              type="number"
-                              inputMode="numeric"
-                              min={1}
-                              step={50}
-                              className="mt-1.5 h-9 w-full text-sm"
-                              value={tier.maxSqft}
-                              onChange={e => {
-                                const n = Number(e.target.value);
-                                if (Number.isFinite(n)) {
-                                  update(cfg => {
-                                    cfg.tiers[svc][idx].maxSqft = Math.round(n);
-                                  });
-                                }
-                              }}
-                            />
+                            sqftInput(
+                              row.maxSqft,
+                              n => setRowMax(svc, idx, n),
+                              `${label} tier ${idx + 1} max sq ft (mobile)`,
+                              "mt-1.5 h-9 w-full text-sm"
+                            )
                           )}
                         </div>
                         <div>
                           <Label className="text-[11px] text-muted-foreground">Price</Label>
-                          {tier.customQuote ? (
+                          {row.customQuote ? (
                             <p className="mt-1.5 h-9 text-xs leading-9 text-muted-foreground">Custom quote</p>
                           ) : (
                             <div className="relative mt-1.5">
@@ -760,18 +868,19 @@ export default function AdminServices() {
                                 $
                               </span>
                               <Input
-                                aria-label={`${SERVICE_LABELS[svc] ?? svc} tier ${idx + 1} price (mobile)`}
+                                aria-label={`${label} tier ${idx + 1} price (mobile)`}
                                 type="number"
                                 inputMode="decimal"
                                 min={0}
                                 step="0.01"
                                 className="h-9 w-full pl-6 text-right text-sm"
-                                value={tier.price}
+                                value={row.price}
                                 onChange={e => {
                                   const n = parsePrice(e.target.value);
                                   if (n !== null)
-                                    update(cfg => {
-                                      cfg.tiers[svc][idx].price = n;
+                                    updateTiers(svc, current => {
+                                      current[idx] = { ...current[idx], price: n };
+                                      return current;
                                     });
                                 }}
                               />
@@ -779,28 +888,26 @@ export default function AdminServices() {
                           )}
                         </div>
                       </div>
-                      {idx === topPricedIdx && (
-                        <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <input
-                            type="checkbox"
-                            className="h-3.5 w-3.5 accent-primary"
-                            checked={Boolean(tier.startingAt)}
-                            onChange={e => {
-                              const on = e.target.checked;
-                              update(cfg => {
-                                cfg.tiers[svc][idx].startingAt = on || undefined;
-                              });
-                            }}
-                          />
-                          show as "starting at"
-                        </label>
-                      )}
+                      {idx === topPricedIdx && startingAtToggle(idx, row, false)}
                     </div>
                   ))}
                 />
-                {svcProblems.length > 0 && (
+                {report.warnings.length > 0 && (
+                  <ul
+                    className="space-y-1 border-t border-border bg-amber-50 px-6 py-3 text-xs text-amber-900"
+                    data-testid={`tier-warnings-${svc}`}
+                  >
+                    {report.warnings.map(warning => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                    <li className="pt-1 text-[11px] text-amber-800">
+                      Saving orders the rows by max sq ft and starts each tier where the one above it ends.
+                    </li>
+                  </ul>
+                )}
+                {report.errors.length > 0 && (
                   <ul className="space-y-1 border-t border-border bg-destructive/5 px-6 py-3 text-xs text-destructive">
-                    {svcProblems.map(problem => (
+                    {report.errors.map(problem => (
                       <li key={problem}>{problem}</li>
                     ))}
                   </ul>

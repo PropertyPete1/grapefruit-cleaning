@@ -27,7 +27,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { NotesBlock, PaymentStatusBadge, SERVICE_LABELS, fmtDate, fmtMoney } from "./adminShared";
+import { GrandfatheredBadge, NotesBlock, PaymentStatusBadge, SERVICE_LABELS, fmtDate, fmtMoney } from "./adminShared";
+import { ApplyGrandfatheredRateDialog, type RateSuggestion } from "./ApplyGrandfatheredRateDialog";
 import { PaidInCashDialog } from "./PaidInCashDialog";
 
 /** The booking-list row shape this panel reads (admin.bookings output). */
@@ -63,7 +64,16 @@ export interface BookingDetailsRow {
   customerPhone: string | null;
   customerEmail: string | null;
   customerLocale: "en" | "es";
+  /** Set when a grandfathered rate priced this booking instead of the catalog. */
+  grandfatheredBaseCents?: number | null;
+  grandfatheredCustomerId?: number | null;
+  grandfatheredCustomerName?: string | null;
+  /** A grandfathered customer this booking probably belongs to but was not priced for. */
+  grandfatheredSuggestion?: RateSuggestion | null;
 }
+
+/** The statuses whose price can still change — the same set the server enforces. */
+const REPRICEABLE = new Set(["pending_deposit", "confirmed", "in_progress"]);
 
 const KIND_LABELS: Record<string, string> = {
   self_serve: "Booked online",
@@ -195,6 +205,9 @@ function EditContactDialog({ row, onClose }: { row: BookingDetailsRow; onClose: 
 
 export function BookingDetails({ row }: { row: BookingDetailsRow }) {
   const [editing, setEditing] = useState(false);
+  const [changingRate, setChangingRate] = useState(false);
+  const grandfathered = row.grandfatheredBaseCents != null;
+  const canReprice = REPRICEABLE.has(row.status) && row.serviceType != null && row.sqft != null;
   const [payingCash, setPayingCash] = useState(false);
   const airbnb = isAirbnbBooking(row);
   const chosenCash = row.paymentPreference === "cash";
@@ -302,6 +315,51 @@ export function BookingDetails({ row }: { row: BookingDetailsRow }) {
       </Section>
 
       <Section title="Money">
+        <Row
+          label="Rate"
+          value={
+            <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
+              {grandfathered ? (
+                <>
+                  <GrandfatheredBadge />
+                  <span>
+                    {fmtMoney((row.grandfatheredBaseCents ?? 0) / 100)} per cleaning
+                    {row.grandfatheredCustomerName && row.grandfatheredCustomerName !== row.customerName
+                      ? ` — ${row.grandfatheredCustomerName}'s rate`
+                      : ""}
+                  </span>
+                </>
+              ) : (
+                <span>Catalog price</span>
+              )}
+              {canReprice && (
+                <button
+                  type="button"
+                  onClick={() => setChangingRate(true)}
+                  className="text-[11px] font-semibold text-primary underline"
+                >
+                  Change rate
+                </button>
+              )}
+            </span>
+          }
+        />
+        {!grandfathered && row.grandfatheredSuggestion && canReprice && (
+          <div
+            className="rounded-lg bg-amber-50 p-2 text-[11px] leading-relaxed text-amber-900"
+            data-testid="grandfathered-hint"
+          >
+            {row.grandfatheredSuggestion.reason === "address"
+              ? `This address matches ${row.grandfatheredSuggestion.customerName}'s record`
+              : row.grandfatheredSuggestion.reason === "contact"
+                ? `The contact details match ${row.grandfatheredSuggestion.customerName}'s record`
+                : `${row.grandfatheredSuggestion.customerName} has a grandfathered rate`}{" "}
+            ({fmtMoney(row.grandfatheredSuggestion.basePrice)} per cleaning) — this booking is at the catalog price.{" "}
+            <button type="button" onClick={() => setChangingRate(true)} className="font-semibold underline">
+              Apply their rate
+            </button>
+          </div>
+        )}
         {row.paymentStatus && <Row label="Payment" value={<PaymentStatusBadge status={row.paymentStatus} />} />}
         {chosenCash && <Row label="Customer chose" value="Cash — collect in person" />}
         {row.couponCode && (
@@ -344,6 +402,7 @@ export function BookingDetails({ row }: { row: BookingDetailsRow }) {
 
       {editing && <EditContactDialog row={row} onClose={() => setEditing(false)} />}
       {payingCash && <PaidInCashDialog booking={row} onClose={() => setPayingCash(false)} />}
+      {changingRate && <ApplyGrandfatheredRateDialog row={row} onClose={() => setChangingRate(false)} />}
     </div>
   );
 }

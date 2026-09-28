@@ -742,3 +742,41 @@ server-rendered localized Open Graph/Twitter metadata with an absolute Grapefrui
 social image. Admin and staff retain their route-scoped manifests and app
 identities. Future favicon incidents must check both repository files and the
 managed app-logo setting before changing assets.
+
+## Grandfathered pricing, apartment square footage, tier editor — September 28, 2026
+
+Migration 0034 adds `customers.grandfatheredPriceCents/ServiceType/Note/At/ByUserId`
+and `bookings.grandfatheredBaseCents/CustomerId`. A grandfathered price is one
+customer's whole per-cleaning figure for one service, before extras; it is set
+from the customer record (Admin → Customers → Set grandfathered price, prefilled
+from the customer's latest completed cleaning) and applied only when a new
+booking's contact matches that record by normalized email or phone
+(`shared/priceLock.ts`: lowercase email, digits-only phone with a leading US
+country code dropped). The service address is a secondary signal only: it never
+applies a price by itself, it drives the "Apply their rate" suggestion on the
+booking's Details. When the lock applies, `calculateQuote`/`calculateCatalogQuote`
+take it as a third/fourth argument: the locked figure replaces the tier price
+(no "starting at", no custom quote), extras and coupons still add, and the
+recurring discount does not stack. The public flow, the admin form and the
+deposit link all price through it and record it on the booking; the balance
+invoice inherits the booking total. `admin.repriceBooking` is the manual
+fallback (one booking, a chosen customer's rate or back to the catalog; a paid
+deposit stays paid; finished jobs are adjusted on their invoice instead). The
+public booking preview shows catalog pricing until submit; the deposit link's
+preview receives `priceLock` and shows the real figure. Nobody without a lock is
+affected in any way.
+
+Home size has a ceiling (`MAX_HOME_SQFT`, 10,000) shared by every square-footage
+input and by `plausibleVerifiedSqft`: a county record above it is a building or
+a mismatch and is never applied — even with no entered size to compare against —
+on the public flow, the admin form's records-only path, and the deposit link's
+address step. An address naming a unit (`looksLikeUnitAddress`) is an apartment
+whatever the toggle says: no lookup, and the quote and booking pages ask for the
+unit's exact square footage instead of auto-filling. The admin form's size cap
+moved from 20,000 to the same 10,000.
+
+The Services & Pricing tier editor (`shared/tierDraft.ts`) edits rows with their
+own min and max, inserts a tier between any two rows, and on save sorts by max
+sq ft, snaps each min to the previous max, and lists every boundary it
+straightened as a warning. The stored ladder shape and the server's strict
+validation are unchanged.

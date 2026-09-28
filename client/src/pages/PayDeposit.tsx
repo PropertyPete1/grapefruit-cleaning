@@ -80,6 +80,7 @@ const COPY = {
     notesTitle: "Anything we should know?",
     notesPlaceholder: "Gate codes, parking, pets, anything we should know?",
     basePrice: "Base price",
+    lockedPrice: "Your original price — locked in for you",
     extrasTotal: "Extras",
     estimatedTotal: "Estimated total",
     depositDue: "Deposit due today",
@@ -145,6 +146,7 @@ const COPY = {
     notesTitle: "¿Algo que debamos saber?",
     notesPlaceholder: "Códigos de acceso, estacionamiento, mascotas, ¿algo que debamos saber?",
     basePrice: "Precio base",
+    lockedPrice: "Su precio original — garantizado para usted",
     extrasTotal: "Extras",
     estimatedTotal: "Total estimado",
     depositDue: "Depósito a pagar hoy",
@@ -329,13 +331,15 @@ export default function PayDeposit() {
           frequency: booking.quote.frequency as never,
         },
         subtotalCents,
-        booking.pricing
+        booking.pricing,
+        booking.priceLock
       );
       let totalCents = quote.totalCents;
       if (booking.coupon?.percentOff) totalCents -= Math.round((totalCents * booking.coupon.percentOff) / 100);
       else if (booking.coupon?.amountOff) totalCents = Math.max(100, totalCents - dollarsToCents(booking.coupon.amountOff));
       return {
         base: quote.base,
+        grandfathered: quote.grandfathered,
         extrasTotal: quote.extrasTotal,
         total: centsToDollars(totalCents),
         // The per-type rate, exactly as the server prices it: Airbnb never deposits.
@@ -351,11 +355,13 @@ export default function PayDeposit() {
         extras: chosen as ExtraId[],
         frequency: booking.quote.frequency as never,
       },
-      booking.pricing
+      booking.pricing,
+      booking.priceLock
     );
     const withCoupon = applyCouponToTotal(quote.total, booking.coupon);
     return {
       base: quote.base,
+      grandfathered: quote.grandfathered,
       extrasTotal: quote.extrasTotal,
       total: withCoupon.total,
       deposit: depositFor(withCoupon.total, depositRateFor(booking.quote.type, booking.pricing)),
@@ -801,6 +807,9 @@ export default function PayDeposit() {
               <span>{c.basePrice}</span>
               <span>{money(preview.base)}</span>
             </div>
+            {preview.grandfathered && (
+              <p className="mt-1 text-xs font-semibold text-[#2f9e6e]">{c.lockedPrice}</p>
+            )}
             {preview.extrasTotal > 0 && (
               <div className="mt-1.5 flex justify-between text-[#7a716b]">
                 <span>{c.extrasTotal}</span>

@@ -40,7 +40,8 @@ import {
   parseAdminProvided,
 } from "../depositLinkRules";
 import { customerNotesOf, mergeCustomerNotes } from "../notesMerge";
-import { composeAddress, PROPERTY_TYPES } from "@shared/property";
+import { composeAddress, MAX_HOME_SQFT, MIN_HOME_SQFT, plausibleVerifiedSqft, PROPERTY_TYPES } from "@shared/property";
+import { grandfatheredColumns, lockForBooking } from "../priceLock";
 import { lookupPropertySqft } from "../property";
 import { publicOrigin } from "../publicOrigin";
 import { getStripe } from "../stripe";
@@ -129,6 +130,8 @@ async function openLinkBooking(token: string) {
  */
 async function priceWithExtras(
   booking: {
+    customerId: number;
+    grandfatheredCustomerId: number | null;
     serviceType: string | null;
     frequency: string;
     bedrooms: number;
@@ -140,10 +143,14 @@ async function priceWithExtras(
 ) {
   const pricing = await loadPricingConfig();
   const catalog = await loadAddonCatalog(false);
+  // The customer's grandfathered rate for this service, when they have one —
+  // read live, so a service picked on the link prices at it too.
+  const lock = await lockForBooking(booking, booking.serviceType);
   if (booking.serviceType == null || booking.sqft == null) {
     return {
       pricing,
       catalog,
+      lock,
       selectedCatalog: null,
       breakdown: null,
       total: null,
@@ -165,7 +172,8 @@ async function priceWithExtras(
         sqft: booking.sqft,
       },
       selectedCatalog.subtotalCents,
-      pricing
+      pricing,
+      lock
     );
     const coupon = await usableCoupon(booking.couponCode);
     let discountAppliedCents = 0;
@@ -177,6 +185,7 @@ async function priceWithExtras(
     return {
       pricing,
       catalog,
+      lock,
       selectedCatalog,
       breakdown,
       total: centsToDollars(totalCents),
@@ -200,7 +209,8 @@ async function priceWithExtras(
     },
     booking.sqft,
     pricing,
-    extras as ExtraId[]
+    extras as ExtraId[],
+    lock
   );
   const coupon = await applyCoupon(breakdown.total, booking.couponCode);
   const totalCents = dollarsToCents(coupon.total);
@@ -208,6 +218,7 @@ async function priceWithExtras(
   return {
     pricing,
     catalog,
+    lock,
     selectedCatalog: null,
     breakdown,
     total: coupon.total,
@@ -229,6 +240,7 @@ async function storeTotals(
     depositCents: number | null;
     discountApplied: number;
     discountAppliedCents: number;
+    lock: Awaited<ReturnType<typeof lockForBooking>>;
   }
 ) {
   if (money.total == null || money.totalCents == null || money.deposit == null || money.depositCents == null) return;
@@ -239,6 +251,7 @@ async function storeTotals(
     depositAmountCents: money.depositCents,
     discountApplied: money.discountApplied,
     discountAppliedCents: money.discountAppliedCents,
+    ...grandfatheredColumns(money.lock),
   });
 }
 
@@ -329,6 +342,12 @@ export const depositLinkRouter = router({
             frequency: booking.frequency,
           },
           coupon: coupon ? { percentOff: coupon.percentOff, amountOff: coupon.amountOff } : null,
+          /**
+           * The customer's own grandfathered rate, when they have one for the
+           * booked service — so the live preview shows the price the server
+           * will charge, not the catalog's.
+           */
+          priceLock: money.lock ? { basePriceCents: money.lock.basePriceCents, serviceType: money.lock.serviceType } : null,
           basePrice: money.breakdown?.base ?? null,
           total: money.total,
           deposit: money.deposit,
@@ -355,7 +374,7 @@ export const depositLinkRouter = router({
       z.object({
         token: z.string().min(1).max(128),
         serviceType: z.enum(CLEANING_TYPES).optional(),
-        sqft: z.number().min(200).max(10000).optional(),
+        sqft: z.number().min(MIN_HOME_SQFT).max(MAX_HOME_SQFT).optional(),
         address: z.string().min(3).max(255).optional(),
         /**
          * House verifies against county records; apartment/condo never does.
@@ -409,7 +428,9 @@ export const depositLinkRouter = router({
         patch.addressLine = input.address;
         patch.city = input.city;
         patch.zip = input.zip;
-        if (property.verified && property.sqft) {
+        // A record more than 4x the slider — or larger than any home — is the
+        // building or a mismatch: a failed lookup, never a size on its own.
+        if (property.verified && property.sqft && plausibleVerifiedSqft(input.sqft ?? booking.sqft, property.sqft)) {
           verified = property.sqft;
           sizeVerified = true;
           patch.verifiedSqft = property.sqft;
@@ -641,6 +662,7 @@ export const depositLinkRouter = router({
         depositAmountCents: money.depositCents,
         discountApplied: money.discountApplied,
         discountAppliedCents: money.discountAppliedCents,
+        ...grandfatheredColumns(money.lock),
         estimatedHours,
         ...(input.notes !== undefined ? { notes: mergeCustomerNotes(booking.notes, input.notes) } : {}),
       };
@@ -766,6 +788,7 @@ export const depositLinkRouter = router({
         depositAmountCents: 0,
         discountApplied: money.discountApplied,
         discountAppliedCents: money.discountAppliedCents,
+        ...grandfatheredColumns(money.lock),
         estimatedHours,
         ...(input.notes !== undefined ? { notes: mergeCustomerNotes(booking.notes, input.notes) } : {}),
       };
@@ -841,6 +864,7 @@ export const depositLinkRouter = router({
         depositAmountCents: 0,
         discountApplied: money.discountApplied,
         discountAppliedCents: money.discountAppliedCents,
+        ...grandfatheredColumns(money.lock),
         estimatedHours,
         paymentPreference: "cash" as const,
         cashChosenAt: new Date(),
