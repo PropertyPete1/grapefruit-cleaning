@@ -539,6 +539,6 @@
 - [x] Inspect migration 0034 and verify all additions are nullable with no backfill before applying it
 - [x] Apply migration 0034 only, then prove the applied journal record exists in `__drizzle_migrations`
 - [x] Run focused PR #21 regressions, TypeScript, the complete Vitest suite, and a production build
-- [ ] Save a release checkpoint and publish with a genuine production restart; do not change environment values
-- [ ] Fetch production `/api/version` and prove the fresh running build contains merged PR #21
-- [ ] Confirm private GitHub, managed source, and the production-tracked release are synchronized
+- [x] Save a release checkpoint and publish with a genuine production restart; do not change environment values
+- [x] Fetch production `/api/version` and prove the fresh running build contains merged PR #21
+- [x] Confirm private GitHub, managed source, and the production-tracked release are synchronized
