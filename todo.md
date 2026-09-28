@@ -548,7 +548,7 @@
 - [x] Inspect migration 0035 and verify its nullable column and zero-backfill production precondition
 - [x] Apply migration 0035 only, then prove the applied journal record exists in `__drizzle_migrations`
 - [x] Run focused PR #22 regressions, TypeScript, the complete Vitest suite, and a production build
-- [ ] Save a release checkpoint and publish with a genuine production restart; do not change environment values
-- [ ] Fetch production `/api/version` and prove the fresh running build contains merged PR #22
-- [ ] Fetch live EN and ES pricing pages and prove one-time pricing, no frequency toggle, and the returning-customer savings note
-- [ ] Confirm private GitHub, managed source, and the production-tracked release are synchronized
+- [x] Save a release checkpoint and publish with a genuine production restart; do not change environment values
+- [x] Fetch production `/api/version` and prove the fresh running build contains merged PR #22
+- [x] Fetch live EN and ES pricing pages and prove one-time pricing, no frequency toggle, and the returning-customer savings note
+- [x] Confirm private GitHub, managed source, and the production-tracked release are synchronized
