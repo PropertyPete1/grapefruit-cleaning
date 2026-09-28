@@ -42,7 +42,14 @@ import {
   type Frequency,
 } from "@shared/pricing";
 import { AddonCatalogPicker, CatalogAddonsSummary, selectedCatalogAddons } from "@/components/AddonCatalogPicker";
-import { plausibleVerifiedSqft } from "@shared/property";
+import {
+  acceptableSqft,
+  looksLikeUnitAddress,
+  MAX_HOME_SQFT,
+  MIN_HOME_SQFT,
+  plausibleVerifiedSqft,
+  type PropertyType,
+} from "@shared/property";
 import { usePricing } from "@/hooks/usePricing";
 import { formatPrice } from "@/lib/formatPrice";
 import { ENTRY_BATHROOMS, ENTRY_BEDROOMS, entrySqft } from "@/lib/quoteDefaults";
@@ -107,6 +114,15 @@ export default function Quote() {
    * reshapes the tiers.
    */
   const [enteredSqft, setEnteredSqft] = useState<number | null>(null);
+  /** The exact-size field's text, kept apart so a half-typed number is not a size yet. */
+  const [sqftText, setSqftText] = useState("");
+  /**
+   * House or apartment/condo. County parcels are BUILDING-level, so a unit
+   * never looks its size up — the lookup would return the whole complex — and
+   * its size has to be entered. An address that names a unit ("Apt 204",
+   * "#12") flips this to apartment on its own.
+   */
+  const [propertyType, setPropertyType] = useState<PropertyType>("house");
   const [extras, setExtras] = useState<string[]>([]);
   const [frequency, setFrequency] = useState<Frequency>("onetime");
   // Optional address — verifies sqft against public county records and locks the slider to it.
@@ -130,26 +146,44 @@ export default function Quote() {
       city: debouncedCity.trim() || undefined,
       zip: debouncedZip.trim() || undefined,
     },
-    { enabled: debouncedAddress.trim().length >= 6, staleTime: 1000 * 60 * 10 }
+    {
+      // Units never look up: the parcel is the building, not the apartment.
+      enabled:
+        propertyType === "house" && !looksLikeUnitAddress(debouncedAddress) && debouncedAddress.trim().length >= 6,
+      staleTime: 1000 * 60 * 10,
+    }
   );
-  const verifiedSqft =
-    propertyLookup.data?.verified &&
-    propertyLookup.data.sqft &&
-    // A record wildly larger than what the customer set is a complex parcel or
-    // a mismatched record — ignored, exactly as the server ignores it.
-    plausibleVerifiedSqft(enteredSqft, propertyLookup.data.sqft)
-      ? propertyLookup.data.sqft
-      : null;
-  // Auto-fill the slider from the verified record.
+  const unitAddress = looksLikeUnitAddress(address);
   useEffect(() => {
-    if (verifiedSqft) setEnteredSqft(Math.min(10000, Math.max(200, verifiedSqft)));
+    if (unitAddress) setPropertyType("apartment");
+  }, [unitAddress]);
+  const isUnit = propertyType === "apartment";
+  const recordSqft =
+    !isUnit && propertyLookup.data?.verified && propertyLookup.data.sqft ? propertyLookup.data.sqft : null;
+  // A record wildly larger than what the customer set — or larger than any
+  // home — is a complex parcel or a mismatched record: never auto-filled,
+  // exactly as the server never prices from it. The customer is asked instead.
+  const verifiedSqft = recordSqft && plausibleVerifiedSqft(enteredSqft, recordSqft) ? recordSqft : null;
+  const implausibleRecord = recordSqft && !verifiedSqft ? recordSqft : null;
+  // Auto-fill the slider from a believable verified record.
+  useEffect(() => {
+    if (verifiedSqft) {
+      const applied = Math.min(MAX_HOME_SQFT, Math.max(MIN_HOME_SQFT, verifiedSqft));
+      setEnteredSqft(applied);
+      setSqftText(String(applied));
+    }
   }, [verifiedSqft]);
+  /** Apartments price by the unit's own size, which only the customer knows. */
+  const needsUnitSqft = isUnit && enteredSqft == null;
 
   const pricing = usePricing();
   const catalogQuery = trpc.booking.addonCatalog.useQuery();
   const catalog = catalogQuery.data;
   const sqft = enteredSqft ?? entrySqft(type, pricing);
-  const setSqft = setEnteredSqft;
+  const setSqft = (value: number) => {
+    setEnteredSqft(value);
+    setSqftText(String(value));
+  };
   const breakdown = useMemo(() => {
     if (catalog?.enabled) {
       const subtotalCents = selectedCatalogAddons(catalog, extras).reduce(
@@ -210,6 +244,7 @@ export default function Quote() {
       sqft: String(sqft),
       extras: extras.join(","),
       frequency,
+      propertyType,
     });
     if (address.trim()) params.set("address", address.trim());
     if (city.trim()) params.set("city", city.trim());
@@ -366,6 +401,38 @@ export default function Quote() {
                     </div>
                     {/* Square footage */}
                     <div>
+                      {/* House or apartment — decides whether county records may size the home. */}
+                      <div className="mb-6">
+                        <label className="flex items-center gap-2 font-medium text-foreground">
+                          <HomeIcon className="h-5 w-5 text-primary" /> {t.quote.propertyTypeLabel}
+                        </label>
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          {(["house", "apartment"] as const).map(kind => (
+                            <button
+                              key={kind}
+                              type="button"
+                              aria-pressed={propertyType === kind}
+                              onClick={() => setPropertyType(kind)}
+                              className={`h-11 rounded-xl border-2 text-sm font-semibold transition-colors ${
+                                propertyType === kind
+                                  ? "border-primary bg-primary/5 text-foreground"
+                                  : "border-border bg-card text-muted-foreground hover:border-primary/40"
+                              }`}
+                            >
+                              {kind === "house" ? t.quote.propertyHouse : t.quote.propertyApartment}
+                            </button>
+                          ))}
+                        </div>
+                        {isUnit && (
+                          <p
+                            className="mt-2 rounded-xl bg-primary/10 p-3 text-xs leading-relaxed text-foreground"
+                            data-testid="unit-sqft-prompt"
+                          >
+                            {unitAddress ? `${t.quote.unitDetected} ` : ""}
+                            {t.quote.unitSqftPrompt}
+                          </p>
+                        )}
+                      </div>
                       {/* Address-based verification (optional) */}
                       <div className="mb-6">
                         <label className="flex items-center gap-2 font-medium text-foreground" htmlFor="quote-address">
@@ -432,21 +499,55 @@ export default function Quote() {
                                 : "This address is outside our automatic verification area — your quote uses the size you enter and will be confirmed at your appointment."}
                             </p>
                           )}
-                        <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
-                          {locale === "es"
-                            ? "Ingrese su dirección para verificar los pies cuadrados automáticamente. Las cotizaciones se confirman con registros públicos."
-                            : "Enter your address to verify square footage automatically. Quotes are confirmed against public records."}
-                        </p>
+                        {implausibleRecord && !propertyLookup.isFetching && (
+                          <p
+                            className="mt-2 rounded-xl bg-amber-50 p-3 text-xs leading-relaxed text-amber-900"
+                            data-testid="implausible-record"
+                          >
+                            {t.quote.implausibleRecord.replace("{sqft}", implausibleRecord.toLocaleString())}
+                          </p>
+                        )}
+                        {!isUnit && (
+                          <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+                            {locale === "es"
+                              ? "Ingrese su dirección para verificar los pies cuadrados automáticamente. Las cotizaciones se confirman con registros públicos."
+                              : "Enter your address to verify square footage automatically. Quotes are confirmed against public records."}
+                          </p>
+                        )}
                       </div>
-                      <div className="flex items-center justify-between">
-                        <label className="flex items-center gap-2 font-medium text-foreground">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <label className="flex items-center gap-2 font-medium text-foreground" htmlFor="quote-exact-sqft">
                           <Ruler className="h-5 w-5 text-primary" /> {t.quote.sqft}
                         </label>
-                        <span className="flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-sm font-bold text-primary">
-                          {verifiedSqft ? <ShieldCheck className="h-3.5 w-3.5" /> : null}
-                          {sqft.toLocaleString()} ft²
-                        </span>
+                        <div className="flex items-center gap-2">
+                          {/* Tap-to-type: the slider is for feel, the field is for the lease that says 743. */}
+                          <Input
+                            id="quote-exact-sqft"
+                            type="number"
+                            inputMode="numeric"
+                            min={MIN_HOME_SQFT}
+                            max={MAX_HOME_SQFT}
+                            step={1}
+                            aria-label={t.quote.exactSqft}
+                            placeholder={t.quote.exactSqft}
+                            className="h-10 w-28 rounded-xl text-right font-semibold"
+                            value={sqftText}
+                            disabled={Boolean(verifiedSqft)}
+                            onChange={e => {
+                              setSqftText(e.target.value);
+                              const exact = acceptableSqft(e.target.value);
+                              if (exact !== null) setEnteredSqft(exact);
+                            }}
+                          />
+                          <span className="flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-sm font-bold text-primary">
+                            {verifiedSqft ? <ShieldCheck className="h-3.5 w-3.5" /> : null}
+                            {sqft.toLocaleString()} ft²
+                          </span>
+                        </div>
                       </div>
+                      {sqftText.trim() !== "" && acceptableSqft(sqftText) === null && (
+                        <p className="mt-2 text-xs text-destructive">{t.quote.sqftOutOfRange}</p>
+                      )}
                       <Slider
                         className="mt-5"
                         min={400}
@@ -465,6 +566,11 @@ export default function Quote() {
                           {locale === "es"
                             ? "El tamaño se fijó según el registro verificado. Borre la dirección para ajustarlo manualmente."
                             : "Size locked to the verified record. Clear the address to adjust manually."}
+                        </p>
+                      )}
+                      {needsUnitSqft && (
+                        <p className="mt-2 text-xs font-semibold text-destructive" data-testid="unit-sqft-required">
+                          {t.quote.unitSqftRequired}
                         </p>
                       )}
                     </div>
@@ -663,6 +769,8 @@ export default function Quote() {
                 </Button>
                 <Button
                   onClick={() => go(step + 1)}
+                  // An apartment has no price until its unit size is entered.
+                  disabled={step === 1 && needsUnitSqft}
                   className="btn-press rounded-full px-8 font-semibold shadow-md shadow-primary/20"
                 >
                   {t.common.next} <ChevronRight className="ml-1 h-4 w-4" />

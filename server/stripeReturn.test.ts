@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mockSessionCreate = vi.fn();
 
 vi.mock("./db", () => ({
+  listGrandfatheredCustomers: vi.fn().mockResolvedValue([]),
   getSetting: vi.fn().mockResolvedValue(null),
   getOccupiedBookings: vi.fn().mockResolvedValue([]),
   getCouponByCode: vi.fn().mockResolvedValue(undefined),

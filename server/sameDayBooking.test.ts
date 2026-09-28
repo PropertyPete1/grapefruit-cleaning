@@ -24,6 +24,7 @@ const mockCreateBooking = vi.fn();
 const mockSessionCreate = vi.fn();
 
 vi.mock("./db", () => ({
+  listGrandfatheredCustomers: vi.fn().mockResolvedValue([]),
   getSetting: (...args: unknown[]) => mockGetSetting(...args),
   getOccupiedBookings: (...args: unknown[]) => mockGetOccupiedBookings(...args),
   createBooking: (...args: unknown[]) => mockCreateBooking(...args),

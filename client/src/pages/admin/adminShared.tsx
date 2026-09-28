@@ -293,6 +293,24 @@ export function PaymentStatusBadge({ status }: { status: BookingPaymentStatus })
   );
 }
 
+/**
+ * The one label for a price that came from a customer's grandfathered rate
+ * rather than the catalog — on the customer list, the customer record, and a
+ * booking's money block. Amber, like the other "this one is special" marks.
+ */
+export const GRANDFATHERED_BADGE_CLASS = "bg-amber-100 text-amber-900 ring-1 ring-amber-200";
+
+export function GrandfatheredBadge({ className = "" }: { className?: string }) {
+  return (
+    <span
+      className={`inline-block whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${GRANDFATHERED_BADGE_CLASS} ${className}`}
+      title="Priced at this customer's grandfathered rate, not the catalog"
+    >
+      Grandfathered price
+    </span>
+  );
+}
+
 export function fmtMoney(n: number | null | undefined): string {
   return `$${Number(n ?? 0).toLocaleString()}`;
 }

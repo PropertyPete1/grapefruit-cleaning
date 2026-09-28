@@ -377,6 +377,17 @@ export const en = {
     bedrooms: "Bedrooms",
     bathrooms: "Bathrooms",
     sqft: "Approximate square footage",
+    exactSqft: "Exact sq ft",
+    sqftOutOfRange: "Enter a size between 200 and 10,000 sq ft.",
+    propertyTypeLabel: "Property type",
+    propertyHouse: "House",
+    propertyApartment: "Apartment / Condo",
+    unitSqftPrompt:
+      "Apartments and condos: enter your unit's exact square footage — not the building's. County records size whole buildings, so we don't look this one up.",
+    unitSqftRequired: "Enter your unit's square footage to continue.",
+    unitDetected: "This looks like an apartment or condo address, so we're pricing by your unit's size.",
+    implausibleRecord:
+      "County records list {sqft} sq ft for this address — that's a whole building or a mismatched record, so we didn't apply it. Enter your home's exact square footage below.",
     extrasTitle: "Any extras?",
     extrasSubtitle: "Select everything that applies — watch your price update live.",
     frequencyTitle: "How often should we come?",
@@ -427,6 +438,10 @@ export const en = {
     apartmentNote:
       "County records size whole buildings, not units — so we take your square footage as entered and confirm at your appointment.",
     unitPlaceholder: "Unit #",
+    unitSqftLabel: "Your unit's square footage",
+    unitSqftHint: "Exact size of your unit, not the building — it's what your price is based on.",
+    unitSqftInvalid: "Enter your unit's square footage (200–10,000).",
+    unitDetected: "This looks like an apartment or condo address, so we won't check county records — enter your unit's size.",
     reviewTitle: "Review your booking",
     service: "Service",
     dateTime: "Date & time",

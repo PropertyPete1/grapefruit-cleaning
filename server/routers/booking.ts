@@ -37,7 +37,9 @@ import {
   STRIPE_CHECKOUT_SESSION_MINUTES,
 } from "../bookingRules";
 import { parseAdminProvided } from "../depositLinkRules";
-import { composeAddress, plausibleVerifiedSqft, PROPERTY_TYPES } from "@shared/property";
+import { composeAddress, MAX_HOME_SQFT, MIN_HOME_SQFT, plausibleVerifiedSqft, PROPERTY_TYPES } from "@shared/property";
+import { lockAppliesTo, lockFromCustomer } from "@shared/priceLock";
+import { findGrandfatheredCustomer, grandfatheredColumns } from "../priceLock";
 import { PAYMENT_PREFERENCES } from "@shared/paymentPreference";
 import { sendBookingEmails } from "../emails";
 import { lookupPropertySqft } from "../property";
@@ -53,7 +55,7 @@ const quoteInputSchema = z.object({
   type: z.enum(["residential", "commercial", "airbnb", "moveinout", "deep", "office"]),
   bedrooms: z.number().int().min(0).max(10),
   bathrooms: z.number().int().min(1).max(10),
-  sqft: z.number().min(200).max(10000),
+  sqft: z.number().min(MIN_HOME_SQFT).max(MAX_HOME_SQFT),
   extras: z.array(z.string().min(1).max(100)).max(50),
   frequency: z.enum(["onetime", "weekly", "biweekly", "monthly"]),
 });
@@ -351,6 +353,13 @@ export const bookingRouter = router({
       // arriving by another road — a record more than 4x the entered size is
       // a failed lookup, not a reprice.
       const pricing = await loadPricingConfig();
+      // Grandfathered pricing: an original client's locked rate, recognised by
+      // the contact details just typed (normalized email or phone) and applied
+      // only to the service it was set for. Nobody else has one, so for every
+      // other customer this is null and the catalog prices as always.
+      const lockedCustomer = await findGrandfatheredCustomer({ email: input.email, phone: input.phone });
+      const lockCandidate = lockFromCustomer(lockedCustomer);
+      const priceLock = lockAppliesTo(lockCandidate, input.quote.type) ? lockCandidate : null;
       const catalog = await loadAddonCatalog(false);
       const selectedCatalog = catalog.enabled ? await resolveSelectedAddons(input.quote.extras) : null;
       const calculateForSqft = (sqft: number) =>
@@ -364,16 +373,23 @@ export const bookingRouter = router({
                 frequency: input.quote.frequency,
               },
               selectedCatalog.subtotalCents,
-              pricing
+              pricing,
+              priceLock
             )
-          : calculateQuote({ ...input.quote, sqft, extras: legacyExtras(input.quote.extras) }, pricing);
+          : calculateQuote({ ...input.quote, sqft, extras: legacyExtras(input.quote.extras) }, pricing, priceLock);
       const property =
         input.propertyType === "apartment"
           ? ({ verified: false, addressVerified: false } as Awaited<ReturnType<typeof lookupPropertySqft>>)
           : await lookupPropertySqft(input.address, input.city, input.zip);
+      // A record that fails the plausibility guard (more than 4x the entered
+      // size, or bigger than any home) is a building or a mismatch: a failed
+      // lookup, not a reprice, and not a "verified" size on the booking either.
+      const believableRecord = Boolean(
+        property.verified && property.sqft && plausibleVerifiedSqft(input.quote.sqft, property.sqft)
+      );
       let effectiveSqft = input.quote.sqft;
       let sqftMismatch = false;
-      if (property.verified && property.sqft && plausibleVerifiedSqft(input.quote.sqft, property.sqft)) {
+      if (believableRecord && property.sqft) {
         const entered = calculateForSqft(input.quote.sqft);
         const verified = calculateForSqft(property.sqft);
         if (verified.total > entered.total) {
@@ -419,6 +435,8 @@ export const bookingRouter = router({
       const discountApplied = legacyWholeDollars(discountAppliedCents);
       const reference = generateBookingReference();
 
+      // A grandfathered client's booking lands on HER record even when she
+      // typed a new email or phone — that is what recognising her was for.
       const customerId = await db.findOrCreateCustomer({
         firstName: input.firstName,
         lastName: input.lastName,
@@ -428,6 +446,7 @@ export const bookingRouter = router({
         city: input.city,
         zip: input.zip,
         preferredLocale: input.locale,
+        customerId: lockedCustomer?.id,
       });
 
       // The unique index on slotKey is what finally decides an identical start
@@ -499,9 +518,10 @@ export const bookingRouter = router({
           couponCode,
           discountApplied,
           discountAppliedCents,
-          verifiedSqft: property.verified ? property.sqft : undefined,
+          verifiedSqft: believableRecord ? property.sqft : undefined,
           sqftSource: property.verified || property.addressVerified ? property.source : undefined,
           sqftMismatch,
+          ...grandfatheredColumns(priceLock),
         } as const;
         bookingId = selectedCatalog
           ? await db.createBookingWithAddons(
@@ -812,6 +832,23 @@ export async function applyConfirmationSideEffects(
       rescheduleUrl: rescheduleAccess.url,
       slotConflict,
       paymentPreference: booking.paymentPreference ?? null,
+      grandfathered: await grandfatheredEmailNote(booking, customer),
     });
   }
+}
+
+/**
+ * For the owner's notification: whose grandfathered rate priced this booking,
+ * when one did. Reads the rate holder by id so the manual fallback (a rate
+ * applied to a booking made under another contact) names the right person.
+ */
+async function grandfatheredEmailNote(
+  booking: { grandfatheredBaseCents: number | null; grandfatheredCustomerId: number | null; customerId: number },
+  customer: { id: number; firstName: string; lastName: string }
+): Promise<{ customerName: string; basePrice: number } | null> {
+  if (booking.grandfatheredBaseCents == null) return null;
+  const holderId = booking.grandfatheredCustomerId ?? booking.customerId;
+  const holder = holderId === customer.id ? customer : await db.getCustomerById(holderId);
+  const customerName = holder ? `${holder.firstName} ${holder.lastName}`.trim() : "this customer";
+  return { customerName, basePrice: centsToDollars(booking.grandfatheredBaseCents) };
 }

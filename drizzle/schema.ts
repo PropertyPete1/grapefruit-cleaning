@@ -71,6 +71,30 @@ export const customers = mysqlTable("customers", {
   marketingToken: varchar("marketingToken", { length: 64 }).unique(),
   lastMarketingEmailAt: timestamp("lastMarketingEmailAt"),
   marketingEmailCount: int("marketingEmailCount").default(0).notNull(),
+  /**
+   * Grandfathered pricing: an original client's per-cleaning price, kept while
+   * the catalog moves on. NULL for everyone else — and everyone else is the
+   * point: the lock lives on ONE customer row and is applied only when a new
+   * booking's contact details match this row (normalized email or phone), or
+   * when the owner applies it to a booking by hand. Nothing about the catalog,
+   * the tiers, or any other customer changes.
+   *
+   * The price is the whole per-visit figure for `grandfatheredServiceType`
+   * before extras, in cents. Extras and coupons still apply on top; recurring
+   * discounts do not stack — the locked figure already IS the rate.
+   */
+  grandfatheredPriceCents: int("grandfatheredPriceCents"),
+  grandfatheredServiceType: mysqlEnum("grandfatheredServiceType", [
+    "residential",
+    "commercial",
+    "airbnb",
+    "moveinout",
+    "deep",
+    "office",
+  ]),
+  grandfatheredNote: text("grandfatheredNote"),
+  grandfatheredAt: timestamp("grandfatheredAt"),
+  grandfatheredByUserId: int("grandfatheredByUserId"),
   repairNote: text("repairNote"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -134,6 +158,18 @@ export const bookings = mysqlTable("bookings", {
   couponCode: varchar("couponCode", { length: 40 }),
   discountApplied: int("discountApplied").default(0).notNull(),
   discountAppliedCents: int("discountAppliedCents"),
+  /**
+   * Set when this booking was priced at a customer's grandfathered rate rather
+   * than the catalog: the locked per-visit base that replaced the tier price,
+   * and whose record it came from. The admin pages label such a booking
+   * "Grandfathered price". NULL is the catalog — every other booking.
+   *
+   * `grandfatheredCustomerId` normally equals `customerId`; it differs when the
+   * owner applied a customer's rate to a booking made under another contact
+   * (the manual fallback for "she booked with a different email").
+   */
+  grandfatheredBaseCents: int("grandfatheredBaseCents"),
+  grandfatheredCustomerId: int("grandfatheredCustomerId"),
   stripeSessionId: varchar("stripeSessionId", { length: 255 }),
   stripePaymentIntentId: varchar("stripePaymentIntentId", { length: 255 }),
   /**

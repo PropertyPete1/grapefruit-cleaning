@@ -35,6 +35,7 @@ const mockListBookings = vi.fn();
 vi.mock("./db", async () => {
   const actual = await vi.importActual<typeof import("./db")>("./db");
   return {
+    listGrandfatheredCustomers: vi.fn().mockResolvedValue([]),
     stripPayToken: actual.stripPayToken,
     getSetting: (...a: unknown[]) => mockGetSetting(...a),
     getOccupiedBookings: (...a: unknown[]) => mockGetOccupiedBookings(...a),

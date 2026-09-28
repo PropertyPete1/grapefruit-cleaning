@@ -34,7 +34,7 @@ import { useSeo } from "@/hooks/useSeo";
 import { AnimatedPrice } from "@/components/AnimatedPrice";
 import { trpc } from "@/lib/trpc";
 import { todayInBookingZone } from "@shared/leadTime";
-import { plausibleVerifiedSqft } from "@shared/property";
+import { acceptableSqft, looksLikeUnitAddress, MAX_HOME_SQFT, MIN_HOME_SQFT, plausibleVerifiedSqft } from "@shared/property";
 import {
   calculateCatalogQuote,
   calculateQuote,
@@ -144,8 +144,24 @@ export default function Booking() {
    * parcels are building-level, and the complex's square footage must never
    * reprice a unit upward.
    */
-  const [propertyType, setPropertyType] = useState<"house" | "apartment">("house");
+  const [propertyType, setPropertyType] = useState<"house" | "apartment">(() =>
+    params.get("propertyType") === "apartment" ? "apartment" : "house"
+  );
   const [errors, setErrors] = useState<Record<string, string>>({});
+  // An address that names a unit ("Apt 204", "#12") is an apartment whatever
+  // the toggle says: the county would return the whole building for it.
+  const unitAddress = looksLikeUnitAddress(form.address);
+  useEffect(() => {
+    if (unitAddress) setPropertyType("apartment");
+  }, [unitAddress]);
+  const isUnit = propertyType === "apartment";
+  /**
+   * The unit's own square footage, typed by the customer. County records size
+   * the building, and the quote flow's figure (if any) is only a starting
+   * point — an apartment cannot be booked until this is a real size.
+   */
+  const [unitSqftText, setUnitSqftText] = useState(() => (sqftParam != null ? String(sqftParam) : ""));
+  const unitSqft = isUnit ? acceptableSqft(unitSqftText) : null;
   // Debounced copy of the address line used for public-records sqft verification.
   const [debouncedAddress, setDebouncedAddress] = useState("");
   const [debouncedCity, setDebouncedCity] = useState("");
@@ -188,7 +204,8 @@ export default function Booking() {
     },
     {
       // Apartments never verify: the parcel is the building, not the unit.
-      enabled: propertyType === "house" && debouncedAddress.trim().length >= 6,
+      enabled:
+        propertyType === "house" && !looksLikeUnitAddress(debouncedAddress) && debouncedAddress.trim().length >= 6,
       staleTime: 1000 * 60 * 10,
     }
   );
@@ -207,7 +224,7 @@ export default function Booking() {
   const pricing = usePricing();
   const catalogQuery = trpc.booking.addonCatalog.useQuery();
   const catalog = catalogQuery.data;
-  const sqft = sqftParam ?? entrySqft(type, pricing);
+  const sqft = unitSqft ?? sqftParam ?? entrySqft(type, pricing);
   // Match server behavior: price from the verified record when it lands in a higher tier.
   const { breakdown, sqftAdjusted } = useMemo(() => {
     const calculateFor = (candidateSqft: number) => {
@@ -334,6 +351,8 @@ export default function Booking() {
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(form.email)) errs.email = t.booking.validation.email;
       if (form.phone.trim().length < 7) errs.phone = t.booking.validation.phone;
       if (!form.address.trim()) errs.address = t.booking.validation.required;
+      // An apartment is priced by its unit's size, and only the customer knows it.
+      if (isUnit && unitSqft === null) errs.unitSqft = t.booking.unitSqftInvalid;
       if (!form.city.trim()) errs.city = t.booking.validation.required;
       if (!form.zip.trim()) errs.zip = t.booking.validation.required;
       setErrors(errs);
@@ -867,10 +886,31 @@ export default function Booking() {
                           </button>
                         ))}
                       </div>
-                      {propertyType === "apartment" && (
-                        <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
-                          {t.booking.apartmentNote}
-                        </p>
+                      {isUnit && (
+                        <div className="mt-2 rounded-xl bg-primary/10 p-3" data-testid="unit-sqft-block">
+                          {unitAddress && (
+                            <p className="mb-1.5 text-[11px] leading-relaxed text-foreground">{t.booking.unitDetected}</p>
+                          )}
+                          <Label htmlFor="unit-sqft" className="text-xs font-semibold">
+                            {t.booking.unitSqftLabel}
+                          </Label>
+                          <div className="mt-1.5 flex items-center gap-2">
+                            <Input
+                              id="unit-sqft"
+                              type="number"
+                              inputMode="numeric"
+                              min={MIN_HOME_SQFT}
+                              max={MAX_HOME_SQFT}
+                              step={1}
+                              className="h-11 w-32 rounded-xl text-right font-semibold"
+                              value={unitSqftText}
+                              onChange={e => setUnitSqftText(e.target.value)}
+                            />
+                            <span className="text-sm text-muted-foreground">ft²</span>
+                          </div>
+                          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{t.booking.unitSqftHint}</p>
+                          {errors.unitSqft && <p className="mt-1 text-xs text-destructive">{errors.unitSqft}</p>}
+                        </div>
                       )}
                     </div>
                     <div className="sm:col-span-2">

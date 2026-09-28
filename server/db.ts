@@ -193,32 +193,91 @@ export async function findOrCreateCustomer(data: {
   city?: string;
   zip?: string;
   preferredLocale?: "en" | "es";
+  /**
+   * Book against this exact row instead of matching by contact. The caller has
+   * already identified the customer — a grandfathered client recognised by her
+   * normalized phone under a new email, say — and her record, not a duplicate,
+   * must carry the booking. The row is refreshed exactly as a matched row is.
+   */
+  customerId?: number;
 }) {
   const db = requireDb(await getDb());
-  const match = data.email
-    ? eq(customers.email, data.email)
-    : data.phone
-      ? eq(customers.phone, data.phone)
-      : null;
+  const { customerId: pinnedId, ...fields } = data;
+  const match =
+    pinnedId != null
+      ? eq(customers.id, pinnedId)
+      : fields.email
+        ? eq(customers.email, fields.email)
+        : fields.phone
+          ? eq(customers.phone, fields.phone)
+          : null;
   const existing = match ? await db.select().from(customers).where(match).limit(1) : [];
   if (existing.length > 0) {
     await db
       .update(customers)
       .set({
-        firstName: data.firstName,
-        lastName: data.lastName || existing[0].lastName,
-        email: data.email ?? existing[0].email,
-        phone: data.phone ?? existing[0].phone,
-        address: data.address ?? existing[0].address,
-        city: data.city ?? existing[0].city,
-        zip: data.zip ?? existing[0].zip,
-        preferredLocale: data.preferredLocale ?? existing[0].preferredLocale,
+        firstName: fields.firstName,
+        lastName: fields.lastName || existing[0].lastName,
+        email: fields.email ?? existing[0].email,
+        phone: fields.phone ?? existing[0].phone,
+        address: fields.address ?? existing[0].address,
+        city: fields.city ?? existing[0].city,
+        zip: fields.zip ?? existing[0].zip,
+        preferredLocale: fields.preferredLocale ?? existing[0].preferredLocale,
       })
       .where(eq(customers.id, existing[0].id));
     return existing[0].id;
   }
-  const result = await db.insert(customers).values({ ...data, lastName: data.lastName ?? "" });
+  const result = await db.insert(customers).values({ ...fields, lastName: fields.lastName ?? "" });
   return Number(result[0].insertId);
+}
+
+/**
+ * Every customer with a grandfathered price — the whole set is small (it is
+ * the original clients the owner chose to keep at their old rate), so matching
+ * runs over it in memory, where the normalization rules live, rather than in
+ * SQL against however people happened to type their phone numbers.
+ */
+export async function listGrandfatheredCustomers() {
+  const db = requireDb(await getDb());
+  return db
+    .select()
+    .from(customers)
+    .where(isNotNull(customers.grandfatheredPriceCents))
+    .orderBy(asc(customers.lastName), asc(customers.firstName));
+}
+
+/** Sets, replaces, or (with null) removes a customer's grandfathered price. */
+export async function setCustomerGrandfathered(
+  id: number,
+  lock: {
+    priceCents: number;
+    serviceType: NonNullable<(typeof customers.$inferInsert)["grandfatheredServiceType"]>;
+    note: string | null;
+    byUserId: number;
+  } | null
+) {
+  const db = requireDb(await getDb());
+  await db
+    .update(customers)
+    .set(
+      lock
+        ? {
+            grandfatheredPriceCents: lock.priceCents,
+            grandfatheredServiceType: lock.serviceType,
+            grandfatheredNote: lock.note,
+            grandfatheredAt: new Date(),
+            grandfatheredByUserId: lock.byUserId,
+          }
+        : {
+            grandfatheredPriceCents: null,
+            grandfatheredServiceType: null,
+            grandfatheredNote: null,
+            grandfatheredAt: null,
+            grandfatheredByUserId: null,
+          }
+    )
+    .where(eq(customers.id, id));
 }
 
 /**

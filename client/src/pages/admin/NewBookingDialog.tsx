@@ -17,6 +17,7 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { CalendarDays, ChevronDown, Copy, Loader2 } from "lucide-react";
 import { CLEANING_TYPES, FREQUENCIES } from "@shared/pricing";
+import { MAX_HOME_SQFT, MIN_HOME_SQFT } from "@shared/property";
 import { todayInBookingZone } from "@shared/leadTime";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -39,6 +40,7 @@ type Result = {
   reference: string;
   payUrl: string;
   basePrice: number | null;
+  grandfathered?: { customerName: string; basePrice: number } | null;
   deposit: number | null;
   emailSent: boolean;
   sqftCorrected: boolean;
@@ -147,10 +149,12 @@ export function NewBookingDialog({ initialDate, open: controlledOpen, onOpenChan
   const [couponCode, setCouponCode] = useState("");
   const [sendEmail, setSendEmail] = useState(true);
 
-  // Exact figure, clamped to the range the server accepts (200–20,000): the
-  // owner types "1732", not a step on a slider.
-  const sqftNumber = Math.min(20000, Math.max(200, Number(sqft)));
-  const sqftValid = sqft.trim() !== "" && Number.isFinite(Number(sqft)) && Number(sqft) >= 200;
+  // Exact figure, clamped to the range the server accepts (200–10,000): the
+  // owner types "1732", not a step on a slider. Nothing bigger than a home is
+  // a home — the cap is what keeps a whole building out of a quote.
+  const sqftNumber = Math.min(MAX_HOME_SQFT, Math.max(MIN_HOME_SQFT, Number(sqft)));
+  const sqftValid =
+    sqft.trim() !== "" && Number.isFinite(Number(sqft)) && Number(sqft) >= MIN_HOME_SQFT && Number(sqft) <= MAX_HOME_SQFT;
 
   /**
    * Slot grid from the same public availability query the booking calendar
@@ -276,6 +280,12 @@ export function NewBookingDialog({ initialDate, open: controlledOpen, onOpenChan
               ) : (
                 <p className="mt-1 text-xs text-emerald-800">
                   Price appears once they finish choosing — it's computed live as they go.
+                </p>
+              )}
+              {result.grandfathered && (
+                <p className="mt-1 text-xs font-semibold text-emerald-900">
+                  Grandfathered price: ${result.grandfathered.basePrice.toFixed(2)} per cleaning — {result.grandfathered.customerName}'s
+                  locked rate, not the catalog.
                 </p>
               )}
               {result.sqftCorrected && result.sqft != null && (
@@ -455,12 +465,19 @@ export function NewBookingDialog({ initialDate, open: controlledOpen, onOpenChan
                 </Field>
               </div>
               <div className="grid gap-3 sm:grid-cols-3">
-                <Field label="Sq ft (if known)" hint="Exact number, 200–20,000.">
+                <Field
+                  label="Sq ft (if known)"
+                  hint={
+                    sqft.trim() !== "" && !sqftValid
+                      ? "Enter a whole number between 200 and 10,000 — a bigger figure is a building, not a home."
+                      : "Exact number, 200–10,000."
+                  }
+                >
                   <Input
                     type="number"
                     inputMode="numeric"
-                    min={200}
-                    max={20000}
+                    min={MIN_HOME_SQFT}
+                    max={MAX_HOME_SQFT}
                     step={1}
                     className="rounded-xl"
                     value={sqft}

@@ -25,12 +25,15 @@ import { TRPCError } from "@trpc/server";
 import { randomBytes } from "node:crypto";
 import {
   applyCouponToTotal,
+  calculateCatalogQuote,
   calculateQuote,
   depositFor,
   depositRateFor,
+  EXTRA_IDS,
   generateBookingReference,
   type PricingConfig,
 } from "@shared/pricing";
+import { depositCents, dollarsToCents } from "@shared/money";
 import { isSlotBookable, type AvailabilityContext } from "@shared/availability";
 import { durationHoursFor, type DurationConfig } from "@shared/duration";
 import { ADMIN_HOLD_SETTING_KEY, adminHoldMinutes } from "@shared/holdWindow";
@@ -44,6 +47,8 @@ import {
 } from "./depositLinkRules";
 import { lookupPropertySqft } from "./property";
 import { plausibleVerifiedSqft, type PropertyType } from "@shared/property";
+import { lockAppliesTo, lockFromCustomer, type PriceLock } from "@shared/priceLock";
+import { findGrandfatheredCustomer, grandfatheredColumns } from "./priceLock";
 import { loadPricingConfig, loadSchedulingRules, occupiedIntervals } from "./routers/booking";
 
 /** A deposit-link token: 24 random bytes, the same strength as an invoice's. */
@@ -113,6 +118,8 @@ export interface AdminBookingResult {
   sqft: number | null;
   /** The facts the customer will be asked for on the link. */
   customerWillChoose: string[];
+  /** Set when the price came from the customer's grandfathered rate, not the catalog. */
+  grandfathered: { customerName: string; basePrice: number } | null;
 }
 
 /** The one message the owner sees when the slot will not take this booking. */
@@ -168,7 +175,8 @@ export function computeBasePrice(
   input: { serviceType: CleaningType; frequency?: Frequency | null; bedrooms?: number | null; bathrooms?: number | null },
   sqft: number,
   pricing: PricingConfig,
-  extras: ExtraId[] = []
+  extras: ExtraId[] = [],
+  lock: PriceLock | null = null
 ) {
   return calculateQuote(
     {
@@ -179,7 +187,8 @@ export function computeBasePrice(
       extras,
       frequency: input.frequency ?? "onetime",
     },
-    pricing
+    pricing,
+    lock
   );
 }
 
@@ -221,21 +230,102 @@ export function resolveEffectiveSqft(args: {
   serviceType: CleaningType;
   frequency?: Frequency | null;
   pricing: PricingConfig;
+  /** A grandfathered rate: the size then changes nothing about the price. */
+  lock?: PriceLock | null;
 }): { sqft: number | null; corrected: boolean } {
-  const { enteredSqft, verifiedSqft } = args;
+  const { enteredSqft } = args;
+  // A record wildly larger than the entered figure — or larger than any home
+  // at all — is a complex parcel or a mismatch, not this home: a failed lookup,
+  // never a reprice, and never a size the booking takes on its own.
+  const verifiedSqft =
+    args.verifiedSqft != null && plausibleVerifiedSqft(enteredSqft, args.verifiedSqft) ? args.verifiedSqft : null;
   if (enteredSqft == null && verifiedSqft == null) return { sqft: null, corrected: false };
   if (enteredSqft == null) return { sqft: verifiedSqft, corrected: false };
   if (verifiedSqft == null) return { sqft: enteredSqft, corrected: false };
-  // A record wildly larger than the entered figure is a complex parcel or a
-  // mismatch, not this home — a failed lookup, never a reprice.
-  if (!plausibleVerifiedSqft(enteredSqft, verifiedSqft)) {
-    return { sqft: enteredSqft, corrected: false };
-  }
   const price = (sqft: number) =>
-    computeBasePrice({ serviceType: args.serviceType, frequency: args.frequency }, sqft, args.pricing).total;
+    computeBasePrice({ serviceType: args.serviceType, frequency: args.frequency }, sqft, args.pricing, [], args.lock ?? null)
+      .total;
   return price(verifiedSqft) > price(enteredSqft)
     ? { sqft: verifiedSqft, corrected: true }
     : { sqft: enteredSqft, corrected: false };
+}
+
+/**
+ * Re-prices an existing booking from its own facts — service, size, extras
+ * snapshot, frequency, coupon — at a grandfathered rate (or, with null, back at
+ * the catalog). The extras keep the amount they were booked at. A deposit the
+ * customer has already paid is kept as paid; one still owed follows the new
+ * total (and stays zero for a cash choice).
+ */
+export async function repriceBookingMoney(
+  booking: {
+    serviceType: string | null;
+    frequency: string;
+    bedrooms: number;
+    bathrooms: number;
+    sqft: number | null;
+    extras: string | null;
+    addonsAmountCents: number | null;
+    couponCode: string | null;
+    status: string;
+    depositAmount: number;
+    depositAmountCents: number | null;
+    stripePaymentIntentId: string | null;
+    paymentPreference: string | null;
+  },
+  lock: PriceLock | null
+): Promise<{
+  totalCents: number;
+  depositCents: number;
+  depositKept: boolean;
+  discountAppliedCents: number;
+  baseCents: number;
+} | null> {
+  if (!booking.serviceType || booking.sqft == null) return null;
+  const pricing = await loadPricingConfig();
+  const serviceType = booking.serviceType as CleaningType;
+  const frequency = booking.frequency as Frequency;
+  const quoteInput = {
+    type: serviceType,
+    bedrooms: booking.bedrooms,
+    bathrooms: booking.bathrooms,
+    sqft: booking.sqft,
+    frequency,
+  };
+  let baseCents: number;
+  let totalCents: number;
+  if (booking.addonsAmountCents != null) {
+    const breakdown = calculateCatalogQuote(quoteInput, booking.addonsAmountCents, pricing, lock);
+    baseCents = breakdown.baseCents;
+    totalCents = breakdown.totalCents;
+  } else {
+    // Rows older than the exact-cents columns: extras from their ids at today's
+    // catalog prices, the same arithmetic the legacy path has always run.
+    const ids: string[] = JSON.parse(booking.extras ?? "[]");
+    const allowed = new Set<string>(EXTRA_IDS);
+    const breakdown = calculateQuote(
+      { ...quoteInput, extras: ids.filter(id => allowed.has(id)) as ExtraId[] },
+      pricing,
+      lock
+    );
+    baseCents = dollarsToCents(breakdown.base);
+    totalCents = dollarsToCents(breakdown.total);
+  }
+  let discountAppliedCents = 0;
+  const coupon = await usableCoupon(booking.couponCode);
+  if (coupon?.percentOff) discountAppliedCents = Math.round((totalCents * coupon.percentOff) / 100);
+  else if (coupon?.amountOff) discountAppliedCents = Math.min(coupon.amountOff * 100, totalCents - 100);
+  totalCents = Math.max(100, totalCents - discountAppliedCents);
+
+  const paidDepositCents = booking.depositAmountCents ?? dollarsToCents(booking.depositAmount);
+  const depositKept =
+    booking.stripePaymentIntentId != null || (booking.status !== "pending_deposit" && paidDepositCents > 0);
+  const depositCentsNow = depositKept
+    ? paidDepositCents
+    : booking.paymentPreference === "cash"
+      ? 0
+      : depositCents(totalCents, depositRateFor(serviceType, pricing));
+  return { totalCents, depositCents: depositCentsNow, depositKept, discountAppliedCents, baseCents };
 }
 
 /**
@@ -265,6 +355,16 @@ export async function createAdminBooking(
 
   const pricing = await loadPricingConfig();
 
+  // Grandfathered pricing: the chosen record's rate, or the rate of whichever
+  // original client these contact details identify. Applies only to the
+  // service the rate was set for; everyone else prices from the catalog.
+  const lockedCustomer =
+    input.customerId != null
+      ? await db.getCustomerById(input.customerId)
+      : await findGrandfatheredCustomer({ email: input.email, phone: input.phone });
+  const lockCandidate = lockFromCustomer(lockedCustomer);
+  const priceLock = lockAppliesTo(lockCandidate, input.serviceType) ? lockCandidate : null;
+
   // County verification runs whenever there is an address to look up, exactly
   // as the public flow does — the verified figure can settle the size question
   // even when the owner left sqft blank. Never for apartments: parcels are
@@ -273,20 +373,26 @@ export async function createAdminBooking(
     input.address && input.propertyType !== "apartment"
       ? await lookupPropertySqft(input.address, input.city, input.zip)
       : ({ verified: false, addressVerified: false } as Awaited<ReturnType<typeof lookupPropertySqft>>);
+  // A record more than 4x the typed size, or larger than any home, is the
+  // building or a mismatch — a failed lookup, whether or not a size was typed.
+  const believableRecord = Boolean(
+    property.verified && property.sqft && plausibleVerifiedSqft(input.sqft ?? null, property.sqft)
+  );
 
   let effectiveSqft: number | null = input.sqft ?? null;
   let sqftMismatch = false;
-  if (input.serviceType && property.verified && property.sqft) {
+  if (input.serviceType && believableRecord && property.sqft) {
     const resolved = resolveEffectiveSqft({
       enteredSqft: input.sqft ?? null,
       verifiedSqft: property.sqft,
       serviceType: input.serviceType,
       frequency: input.frequency,
       pricing,
+      lock: priceLock,
     });
     effectiveSqft = resolved.sqft;
     sqftMismatch = resolved.corrected;
-  } else if (effectiveSqft == null && property.verified && property.sqft) {
+  } else if (effectiveSqft == null && believableRecord && property.sqft) {
     // Size known from records alone; without a service there is nothing to
     // price yet, but the fact itself is settled.
     effectiveSqft = property.sqft;
@@ -322,7 +428,9 @@ export async function createAdminBooking(
     ? computeBasePrice(
         { serviceType: input.serviceType!, frequency: input.frequency, bedrooms: input.bedrooms, bathrooms: input.bathrooms },
         effectiveSqft!,
-        pricing
+        pricing,
+        [],
+        priceLock
       )
     : null;
   const coupon = breakdown ? await applyCoupon(breakdown.total, input.couponCode) : null;
@@ -338,6 +446,8 @@ export async function createAdminBooking(
   // is at stake, and the stale-release machinery skips slotless rows entirely.
   const expiresAt = depositLinkExpiresAt(createdAt, holdMinutes);
 
+  // A recognised grandfathered client books on her own record, whatever
+  // contact she was entered under this time.
   const customerId =
     input.customerId ??
     (await db.findOrCreateCustomer({
@@ -349,6 +459,7 @@ export async function createAdminBooking(
       city: input.city,
       zip: input.zip,
       preferredLocale: input.locale ?? "en",
+      customerId: lockedCustomer?.id,
     }));
 
   // Provenance: the facts the OWNER locked. Everything else is the customer's
@@ -404,9 +515,10 @@ export async function createAdminBooking(
       status: "pending_deposit",
       couponCode: coupon?.couponCode ?? input.couponCode?.trim().toUpperCase(),
       discountApplied: coupon?.discountApplied ?? 0,
-      verifiedSqft: property.verified ? property.sqft : undefined,
+      verifiedSqft: believableRecord ? property.sqft : undefined,
       sqftSource: property.verified || property.addressVerified ? property.source : undefined,
       sqftMismatch,
+      ...grandfatheredColumns(priceLock),
       kind: "admin",
       holdMinutes,
       payToken,
@@ -434,5 +546,8 @@ export async function createAdminBooking(
     sqftCorrected: sqftMismatch,
     sqft: effectiveSqft != null ? Math.round(effectiveSqft) : null,
     customerWillChoose: missing,
+    grandfathered: priceLock
+      ? { customerName: priceLock.customerName, basePrice: priceLock.basePriceCents / 100 }
+      : null,
   };
 }

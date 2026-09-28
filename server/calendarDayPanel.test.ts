@@ -22,6 +22,7 @@ const mockListBalanceInvoices = vi.fn();
 vi.mock("./db", async () => {
   const actual = await vi.importActual<typeof import("./db")>("./db");
   return {
+    listGrandfatheredCustomers: vi.fn().mockResolvedValue([]),
     stripPayToken: actual.stripPayToken,
     getSetting: vi.fn().mockResolvedValue(null),
     listBookings: (...a: unknown[]) => mockListBookings(...a),

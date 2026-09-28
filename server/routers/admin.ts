@@ -22,7 +22,15 @@ import {
 } from "@shared/pricing";
 import { CLEANING_TYPES, FREQUENCIES } from "@shared/pricing";
 import * as db from "../db";
-import { createAdminBooking, generateDepositToken } from "../adminBooking";
+import { createAdminBooking, generateDepositToken, repriceBookingMoney } from "../adminBooking";
+import { grandfatheredColumns } from "../priceLock";
+import {
+  addressMatchesCustomer,
+  contactMatchesCustomer,
+  lockAppliesTo,
+  lockFromCustomer,
+  type PriceLock,
+} from "@shared/priceLock";
 import { depositLinkExpiresAt, depositLinkStatus, depositPayUrl } from "../depositLinkRules";
 import { holdMinutesFor } from "../bookingRules";
 import { syncConnectedProperty, validateIcalFeed } from "../icalSync";
@@ -33,7 +41,7 @@ import { CUSTOM_ITEM_MAX, CUSTOM_ITEM_MIN } from "@shared/invoiceItems";
 import { holdsCalendarSlot } from "@shared/bookingStatus";
 import { deriveInvoicePaymentStatus, derivePaymentStatus } from "@shared/paymentStatus";
 import { serviceReference } from "@shared/invoiceReference";
-import { composeAddress, PROPERTY_TYPES } from "@shared/property";
+import { composeAddress, MAX_HOME_SQFT, MIN_HOME_SQFT, PROPERTY_TYPES } from "@shared/property";
 import { applyCancellationSideEffectsSafely } from "../cancellation";
 import {
   approveBalanceInvoice,
@@ -135,6 +143,50 @@ function assertValidDurationConfig(raw: string): DurationConfig {
   return result.config;
 }
 
+function fullName(customer: { firstName: string; lastName: string } | null | undefined): string {
+  return customer ? `${customer.firstName} ${customer.lastName}`.trim() : "";
+}
+
+/** The statuses whose price can still change: nothing has been invoiced or finished. */
+const REPRICEABLE_STATUSES = new Set(["pending_deposit", "confirmed", "in_progress"]);
+
+/**
+ * The manual fallback's hint: a grandfathered customer whose rate this
+ * booking should probably carry but does not. Their own record under the
+ * booking (rate set after it was made), the same person under different
+ * contact details, or — the secondary signal — the same service address.
+ * Never applied here, only suggested; the owner decides on the booking.
+ */
+function grandfatheredSuggestionFor(
+  row: {
+    status: string;
+    serviceType: string | null;
+    customerId: number;
+    grandfatheredBaseCents: number | null;
+    addressLine: string | null;
+    zip: string | null;
+  },
+  customer: { email: string | null; phone: string | null } | undefined,
+  grandfathered: Awaited<ReturnType<typeof db.listGrandfatheredCustomers>>
+): { customerId: number; customerName: string; basePrice: number; reason: "same_customer" | "contact" | "address" } | null {
+  if (row.grandfatheredBaseCents != null || !REPRICEABLE_STATUSES.has(row.status) || !row.serviceType) return null;
+  for (const candidate of grandfathered) {
+    const lock = lockFromCustomer(candidate);
+    if (!lockAppliesTo(lock, row.serviceType)) continue;
+    const reason =
+      candidate.id === row.customerId
+        ? ("same_customer" as const)
+        : customer && contactMatchesCustomer(candidate, customer)
+          ? ("contact" as const)
+          : addressMatchesCustomer(candidate, row)
+            ? ("address" as const)
+            : null;
+    if (!reason) continue;
+    return { customerId: candidate.id, customerName: lock.customerName, basePrice: centsToDollars(lock.basePriceCents), reason };
+  }
+  return null;
+}
+
 const bookingStatusEnum = z.enum(["pending_deposit", "confirmed", "in_progress", "completed", "cancelled", "expired"]);
 
 /**
@@ -187,10 +239,17 @@ export const adminRouter = router({
       // language — so the customer rides along, fetched in one batch. Flat
       // fields rather than a nested object, so every existing consumer of
       // these rows keeps its shape.
-      const customerIds = Array.from(new Set(rows.map(row => row.customerId)));
+      const customerIds = Array.from(
+        new Set(rows.flatMap(row => [row.customerId, ...(row.grandfatheredCustomerId != null ? [row.grandfatheredCustomerId] : [])]))
+      );
       const customerById = new Map(
         (await db.getCustomersByIds(customerIds)).map(customer => [customer.id, customer])
       );
+      // The original clients with a locked rate — a handful of rows — so each
+      // booking can be labelled with whose rate priced it, and a booking that
+      // SHOULD have been (same person under another email, or the rate set
+      // after the booking) can carry the suggestion to apply it.
+      const grandfathered = await db.listGrandfatheredCustomers();
       // The payment position of each job, derived from its balance invoice in
       // one query for the whole page — what the calendar's day panel shows.
       const invoiceByBooking = new Map(
@@ -230,6 +289,12 @@ export const adminRouter = router({
           customerPhone: customer?.phone ?? null,
           customerEmail: customer?.email ?? null,
           customerLocale: (customer?.preferredLocale as "en" | "es") ?? "en",
+          /** Whose grandfathered rate priced this booking, when one did. */
+          grandfatheredCustomerName:
+            row.grandfatheredBaseCents != null
+              ? fullName(customerById.get(row.grandfatheredCustomerId ?? row.customerId)) || "grandfathered customer"
+              : null,
+          grandfatheredSuggestion: grandfatheredSuggestionFor(row, customer, grandfathered),
         };
       });
     }),
@@ -330,7 +395,7 @@ export const adminRouter = router({
           frequency: z.enum(FREQUENCIES).default("onetime"),
           bedrooms: z.number().int().min(0).max(10).optional(),
           bathrooms: z.number().int().min(1).max(10).optional(),
-          sqft: z.number().min(200).max(20000).optional(),
+          sqft: z.number().min(MIN_HOME_SQFT).max(MAX_HOME_SQFT).optional(),
           date: z
             .string()
             .regex(/^\d{4}-\d{2}-\d{2}$/)
@@ -406,6 +471,7 @@ export const adminRouter = router({
         sqft: result.sqft,
         sqftCorrected: result.sqftCorrected,
         customerWillChoose: result.customerWillChoose,
+        grandfathered: result.grandfathered,
         emailSent,
       };
     }),
@@ -1017,6 +1083,122 @@ export const adminRouter = router({
       const { id, ...data } = input;
       await db.updateCustomer(id, data);
       return { success: true } as const;
+    }),
+
+  // ---------- Grandfathered pricing ----------
+  /** The original clients with a locked rate — the picker for the manual fallback. */
+  grandfatheredCustomers: adminProcedure.query(async () =>
+    (await db.listGrandfatheredCustomers()).flatMap(customer => {
+      const lock = lockFromCustomer(customer);
+      if (!lock) return [];
+      return [
+        {
+          id: customer.id,
+          name: lock.customerName,
+          email: customer.email,
+          phone: customer.phone,
+          address: customer.address,
+          serviceType: lock.serviceType,
+          price: centsToDollars(lock.basePriceCents),
+          note: customer.grandfatheredNote,
+          since: customer.grandfatheredAt,
+        },
+      ];
+    })
+  ),
+
+  /**
+   * Sets (or, with a null price, removes) one customer's grandfathered price:
+   * their whole per-visit figure for one service, before extras. Nothing else
+   * changes — not the catalog, not any other customer, not the bookings this
+   * customer already has (those are re-priced one at a time, deliberately).
+   */
+  setGrandfatheredPrice: adminProcedure
+    .input(
+      z
+        .object({
+          customerId: z.number().int(),
+          /** Dollars per cleaning; null clears the rate. */
+          price: z.number().positive().max(100000).multipleOf(0.01).nullable(),
+          serviceType: z.enum(CLEANING_TYPES).optional(),
+          note: z.string().trim().max(500).optional(),
+        })
+        .refine(input => input.price === null || input.serviceType !== undefined, {
+          message: "Choose the service the grandfathered price is for.",
+        })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const customer = await db.getCustomerById(input.customerId);
+      if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Customer not found" });
+      if (input.price === null) {
+        await db.setCustomerGrandfathered(customer.id, null);
+        return { success: true as const, lock: null };
+      }
+      await db.setCustomerGrandfathered(customer.id, {
+        priceCents: dollarsToCents(input.price),
+        serviceType: input.serviceType!,
+        note: input.note?.trim() || null,
+        byUserId: ctx.user.id,
+      });
+      return { success: true as const, lock: { price: input.price, serviceType: input.serviceType! } };
+    }),
+
+  /**
+   * The manual fallback: re-price one booking at a chosen customer's
+   * grandfathered rate (she booked under a different email or phone, or the
+   * rate was set after she booked), or back at the catalog with null. Only
+   * while the price can still change — a finished job is billed through its
+   * invoice, which has its own adjustment. A deposit already paid stays paid;
+   * the balance invoice at completion absorbs the difference.
+   */
+  repriceBooking: adminProcedure
+    .input(z.object({ bookingId: z.number().int(), grandfatheredCustomerId: z.number().int().nullable() }))
+    .mutation(async ({ input }) => {
+      const booking = await db.getBookingById(input.bookingId);
+      if (!booking) throw new TRPCError({ code: "NOT_FOUND", message: "Booking not found" });
+      if (!REPRICEABLE_STATUSES.has(booking.status)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `This booking is ${booking.status.replace(/_/g, " ")} — a finished job is billed through its invoice, so adjust the invoice instead.`,
+        });
+      }
+      if (!booking.serviceType || booking.sqft == null) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "This booking has no service or size yet — the customer chooses them on their link, and the rate applies as they do.",
+        });
+      }
+      let lock: PriceLock | null = null;
+      if (input.grandfatheredCustomerId != null) {
+        const holder = await db.getCustomerById(input.grandfatheredCustomerId);
+        const candidate = lockFromCustomer(holder);
+        if (!candidate) throw new TRPCError({ code: "BAD_REQUEST", message: "That customer has no grandfathered price." });
+        if (candidate.serviceType !== booking.serviceType) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `${candidate.customerName}'s grandfathered price is for ${SERVICE_NAMES[candidate.serviceType]?.en ?? candidate.serviceType}; this booking is ${SERVICE_NAMES[booking.serviceType]?.en ?? booking.serviceType}.`,
+          });
+        }
+        lock = candidate;
+      }
+      const money = await repriceBookingMoney(booking, lock);
+      if (!money) throw new TRPCError({ code: "BAD_REQUEST", message: "This booking cannot be priced yet." });
+      await db.updateBooking(booking.id, {
+        totalAmountCents: money.totalCents,
+        totalAmount: centsToDollars(money.totalCents),
+        depositAmountCents: money.depositCents,
+        depositAmount: centsToDollars(money.depositCents),
+        discountAppliedCents: money.discountAppliedCents,
+        discountApplied: centsToDollars(money.discountAppliedCents),
+        ...grandfatheredColumns(lock),
+      });
+      return {
+        success: true as const,
+        total: centsToDollars(money.totalCents),
+        deposit: centsToDollars(money.depositCents),
+        depositKept: money.depositKept,
+        grandfathered: lock ? { customerName: lock.customerName, basePrice: centsToDollars(lock.basePriceCents) } : null,
+      };
     }),
 
   // ---------- Contact messages ----------
