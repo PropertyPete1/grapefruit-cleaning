@@ -1464,6 +1464,60 @@ export async function sendBalanceReminderEmail(
 }
 
 /**
+ * The customer's bank payment (ACH) was returned or failed days after they
+ * paid. They were told it was processing and there was nothing else to do,
+ * so they need to hear it did not go through — with their payment link. No
+ * invoice number (customer-facing), no blame, and the reassurance that
+ * nothing was taken.
+ */
+export function buildBankPaymentFailedEmail(data: BalanceEmailData): { subject: string; body: string } {
+  const ref = referenceOf(data);
+  if (data.locale === "es") {
+    return {
+      subject: `Su pago bancario no se completó | Grapefruit Cleaning Co.`,
+      body: [
+        `Hola ${data.customerName},`,
+        ``,
+        `Su banco nos informó que el pago bancario de ${ref} (${fmtUsd(data.balance)}) no se completó, así que no se cobró nada.`,
+        `Puede pagar de nuevo cuando le convenga, con tarjeta o cuenta bancaria:`,
+        data.payUrl,
+        ``,
+        data.bizPhone
+          ? `¿Preguntas? Responda a este correo o llámenos al ${data.bizPhone}.`
+          : `¿Preguntas? Simplemente responda a este correo.`,
+        ``,
+        `Con aprecio,`,
+        `El equipo de Grapefruit Cleaning Co.`,
+      ].join("\n"),
+    };
+  }
+  return {
+    subject: `Your bank payment didn't go through | Grapefruit Cleaning Co.`,
+    body: [
+      `Hi ${data.customerName},`,
+      ``,
+      `Your bank let us know that the bank payment for ${ref} (${fmtUsd(data.balance)}) didn't go through, so nothing was taken.`,
+      `You can pay again whenever it suits you, by card or bank account:`,
+      data.payUrl,
+      ``,
+      data.bizPhone ? `Questions? Reply to this email or call us at ${data.bizPhone}.` : `Questions? Just reply to this email.`,
+      ``,
+      `Warmly,`,
+      `The Grapefruit Cleaning Co. Team`,
+    ].join("\n"),
+  };
+}
+
+/** Tells the customer their bank payment failed, with their link. Returns true when delivered. */
+export async function sendBankPaymentFailedEmail(data: BalanceEmailData, context?: EmailContext): Promise<boolean> {
+  const email = buildBankPaymentFailedEmail(data);
+  return deliverEmail(data.customerEmail, email.subject, email.body, undefined, {
+    ...context,
+    emailType: "balance_payment_failed",
+  });
+}
+
+/**
  * The hand-off to the owner: both automatic reminders went out and the balance
  * is still open, so the machine stops emailing the customer and a person takes
  * over. Sent once per sequence.
@@ -1549,7 +1603,7 @@ function originalPaymentLines(original: DuplicatePaymentFacts["original"]): stri
     case "processing":
       return [
         `Original payment (keep): ${original.intentId ?? "(no payment id on file)"} — bank payment, STILL PROCESSING`,
-        `If the original later fails, this duplicate becomes the payment instead — you will get an alert saying so. Stripe only refunds a bank payment once it has succeeded.`,
+        `Wait for the original to clear before refunding: you will get a "Balance paid" notice and a reminder to refund this one. If the original fails instead, this payment becomes the payment and there is nothing to refund — you will get an alert saying so.`,
       ];
     case "settled_by_hand":
       return [`Original payment (keep): recorded by hand in Admin${original.method ? ` (${original.method})` : ""} — no Stripe payment id`];
@@ -1572,17 +1626,21 @@ export function buildRefundNeededAlert(
   payment?: DuplicatePaymentFacts
 ): { title: string; content: string } {
   const what = paymentWord(payment?.duplicateMethod ?? "card");
+  const waiting = payment?.original.kind === "processing";
+  const duplicateId = payment?.duplicateIntentId ?? "(Stripe sent no payment id — search Stripe by the amount and customer)";
   return {
     title: `⚠️ REFUND NEEDED — duplicate balance payment on ${data.invoiceNumber} (${data.reference})`,
     content: [
-      payment?.original.kind === "processing"
+      waiting
         ? `⚠️ A second ${what} of ${fmtUsd(data.balance)} arrived while the customer's first payment for this invoice was still processing.`
         : `⚠️ A ${what} of ${fmtUsd(data.balance)} arrived for an invoice that was ALREADY settled.`,
-      `The invoice was left as-is (the earlier payment stands) — please refund this ${what} in Stripe.`,
+      waiting
+        ? `The invoice was left as-is (the first payment owns it). Do NOT refund yet — see below.`
+        : `The invoice was left as-is (the earlier payment stands) — please refund this ${what} in Stripe.`,
       ``,
       ...(payment
         ? [
-            `REFUND THIS: ${payment.duplicateIntentId ?? "(Stripe sent no payment id — search Stripe by the amount and customer)"}`,
+            waiting ? `REFUND ONCE THE ORIGINAL CLEARS: ${duplicateId}` : `REFUND THIS: ${duplicateId}`,
             ...originalPaymentLines(payment.original),
             ``,
           ]

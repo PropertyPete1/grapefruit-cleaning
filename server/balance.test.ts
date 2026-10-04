@@ -519,11 +519,20 @@ describe("resendBalanceLink", () => {
 
   it("refuses to resend while the customer's bank payment is processing — a second link is a second debit", async () => {
     mockGetInvoiceById.mockResolvedValue({ ...INVOICE, paymentProcessingAt: new Date(), paymentProcessingIntentId: "pi_ach" });
+    mockIntentRetrieve.mockResolvedValue({ id: "pi_ach", status: "processing" });
     const result = await resendBalanceLink(501, ORIGIN);
     expect(result.outcome).toBe("payment_processing");
-    // Refused off the row itself, before any Stripe call at all.
-    expect(mockSessionRetrieve).not.toHaveBeenCalled();
-    expect(mockIntentRetrieve).not.toHaveBeenCalled();
+    // Stripe was asked — Resend doubles as the owner's sync — and said still processing.
+    expect(mockIntentRetrieve).toHaveBeenCalledWith("pi_ach", expect.anything());
+    expect(mockSessionCreate).not.toHaveBeenCalled();
+    expect(mockSendMail).not.toHaveBeenCalled();
+  });
+
+  it("refuses too when Stripe cannot be read about the processing payment", async () => {
+    mockGetInvoiceById.mockResolvedValue({ ...INVOICE, paymentProcessingAt: new Date(), paymentProcessingIntentId: "pi_ach" });
+    mockIntentRetrieve.mockRejectedValue(new Error("Stripe timeout"));
+    const result = await resendBalanceLink(501, ORIGIN);
+    expect(result.outcome).toBe("payment_processing");
     expect(mockSessionCreate).not.toHaveBeenCalled();
     expect(mockSendMail).not.toHaveBeenCalled();
   });

@@ -857,3 +857,38 @@ returns exact `totalAmount`/`depositAmount`; `booking.confirm` and
 balance-approval context, the brain ticker and the resent deposit-link email
 all read through it. Emails already did. The client never reads the legacy
 figure any more; the confirmation page formats the total with `formatPrice`.
+
+## One live checkout per invoice; ACH settles, never double-charges — October 4, 2026
+
+Production case (Sept 28): a customer paying her balance by ACH was debited twice, a minute apart. ACH
+completes Checkout with `payment_status: "unpaid"` and stays that way for days; the webhook acted only on
+`"paid"` and never handled `checkout.session.async_payment_succeeded/failed`, so the invoice read unpaid
+and the pay link — which minted a fresh session on every visit, and was also Stripe's `cancel_url` —
+handed her a second payable checkout. Migration 0036 (additive).
+
+Invariants a payment change must keep:
+- **One live Checkout Session per invoice** (`server/invoiceCheckout.ts → openInvoiceCheckout`). Every
+  way into checkout for an invoice — pay link, approve, resend, manual issue — goes through it. It decides
+  from Stripe's record of the invoice's current session (open → reopen its url; complete+paid → settle;
+  complete+unpaid → processing, refuse; expired/failed → mint), never from `invoices.status` alone. Minting
+  is claimed first (`claimInvoiceCheckoutAttempt`: CAS on `checkoutAttempt` AND the session pointer), the
+  attempt rides in the Stripe idempotency key, and a session about to lapse is closed before its
+  replacement exists. Do not add a path that calls `createBalanceCheckoutSession` directly.
+- **Processing is a real state** (`invoices.paymentProcessingAt` / `paymentProcessingIntentId`). While set:
+  the pay link says "your bank payment is processing" (or "confirm your bank account" for microdeposits),
+  reminders, the cash choice, Record payment and Paid in Cash all refuse, and Resend only syncs. Only THAT
+  intent's success settles the invoice and only its failure clears it — and both read the intent's LIVE
+  status first, because Stripe does not order events and a declined card and the ACH payment after it share
+  one PaymentIntent. A failure renews the window, restarts the reminders and emails the customer.
+- **Settlement is idempotent per payment intent.** A second payment on a paid or processing invoice is a
+  `payments.duplicate` row, never applied; `stripePaymentIntentId` keeps naming the payment that settled
+  the invoice; the owner alert names both ids (and says "wait" while the original processes). A duplicate is
+  promoted to pay the invoice only if the original then fails AND Stripe shows it unrefunded.
+- **The daily payments check reads Stripe, not just our ledger** (`server/paymentHealth.ts`) — the incident's
+  two debits produced no rows at all. It is read-only; Resend is the owner's sync.
+- **Webhook subscription is part of the deploy:** the endpoint must receive
+  `checkout.session.async_payment_succeeded` / `async_payment_failed` (payment_intent.* optional). Without them a
+  bank payment settles only on the next link visit or Resend, and the daily check says so.
+- Invoices last touched by the old per-visit code (`checkoutAttempt` 0 with a stored session) are reconciled on
+  first touch: all their sessions are read from Stripe and stray open ones closed. No backfill was run.
+- Deposits and tips still have the same ACH blindness — open follow-up.

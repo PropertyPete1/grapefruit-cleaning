@@ -693,6 +693,12 @@ export const adminRouter = router({
                 ? "This booking's invoice was voided — nothing is owed on it."
                 : `This booking is already paid${result.paidMethod === "cash" ? " in cash" : ""}.`,
           });
+        case "payment_processing":
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "The customer's bank payment for this balance is still processing — recording money now would collect it twice. It settles (or fails and reopens) on its own within a few business days.",
+          });
         case "tip_already_recorded":
           throw new TRPCError({
             code: "CONFLICT",
@@ -1555,6 +1561,12 @@ export const adminRouter = router({
           throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found." });
         case "already_settled":
           throw new TRPCError({ code: "CONFLICT", message: `This invoice is already ${result.status}.` });
+        case "payment_processing":
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "The customer's bank payment for this balance is still processing — recording money now would collect it twice. It settles (or fails and reopens) on its own within a few business days.",
+          });
         case "amount_mismatch":
           throw new TRPCError({
             code: "BAD_REQUEST",

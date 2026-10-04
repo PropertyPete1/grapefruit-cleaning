@@ -273,6 +273,31 @@ describe("Test F — Paid in Cash on a completed booking", () => {
     expect(mockRecordOffline).not.toHaveBeenCalled();
   });
 
+  it("refuses Paid in Cash while the customer's bank payment is processing — collecting twice is the double charge", async () => {
+    mockGetBalanceInvoice.mockResolvedValue({ ...INVOICE, paymentProcessingAt: new Date(), paymentProcessingIntentId: "pi_ach" });
+    expect(await payBookingInCash({ bookingId: 42, recordedByUserId: 9, origin: ORIGIN })).toEqual({ outcome: "payment_processing", invoiceId: 501 });
+    expect(mockRecordOffline).not.toHaveBeenCalled();
+    await expect(adminCaller().markPaidInCash({ bookingId: 42 })).rejects.toThrow(/bank payment for this balance is still processing/);
+  });
+
+  it("maps the ledger's own processing refusal too (a payment that started processing mid-tap)", async () => {
+    mockRecordOffline.mockResolvedValue({ outcome: "payment_processing", paymentIntentId: "pi_ach" });
+    expect(await payBookingInCash({ bookingId: 42, recordedByUserId: 9, origin: ORIGIN })).toEqual({ outcome: "payment_processing", invoiceId: 501 });
+  });
+
+  it("a booking whose balance is being paid by bank reads 'Bank payment processing' and offers no Paid in Cash", () => {
+    const status = derivePaymentStatus({
+      status: "completed",
+      depositAmount: 68,
+      depositAmountCents: 6800,
+      stripePaymentIntentId: "pi_1",
+      paymentPreference: "cash",
+      invoice: { status: "sent", paymentPreference: "cash", paymentProcessingAt: new Date() },
+    });
+    expect(status).toBe("payment_processing");
+    expect(canMarkPaidInCash({ status: "completed", paymentStatus: status })).toBe(false);
+  });
+
   it("a tip already on file is refused rather than recorded twice", async () => {
     mockRecordOffline.mockResolvedValue({ outcome: "tip_already_recorded" });
     expect(await payBookingInCash({ bookingId: 42, tipAmount: 10, recordedByUserId: 9, origin: ORIGIN })).toEqual({ outcome: "tip_already_recorded", invoiceId: 501 });

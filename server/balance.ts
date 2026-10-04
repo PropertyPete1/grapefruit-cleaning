@@ -46,6 +46,7 @@ import {
   sendBalanceReminderExhaustedAlert,
   sendPaymentReceiptEmail,
   sendRefundNeededAlert,
+  sendBankPaymentFailedEmail,
   sendOwnerAlert,
   lastEmailError,
   type DuplicatePaymentFacts,
@@ -56,7 +57,7 @@ import { EXTRA_NAMES, loadPricingConfig, SERVICE_NAMES } from "./routers/booking
 import type { CleaningType } from "@shared/pricing";
 import { getStripe } from "./stripe";
 import { sendTipRequestEmailSafely } from "./tip";
-import { openInvoiceCheckout, type CheckoutResolution } from "./invoiceCheckout";
+import { openInvoiceCheckout, readPaymentIntent, type CheckoutResolution, type LivePaymentIntent } from "./invoiceCheckout";
 import {
   baseAmountOf,
   isV2LineItem,
@@ -826,7 +827,11 @@ export async function resendBalanceLink(invoiceId: number, origin: string): Prom
   if (invoice.status === "awaiting_approval") return { outcome: "awaiting_approval" };
   if (invoice.status === "paid") return { outcome: "already_paid" };
   if (invoice.status === "void") return { outcome: "voided" };
-  if (invoice.paymentProcessingAt) return { outcome: "payment_processing" };
+  // A payment marked processing is NOT refused here: the open below asks
+  // Stripe first. Still processing → refused; settled since → "already paid"
+  // (and recorded); failed since → reopened and the link goes out. That makes
+  // Resend the owner's way to sync an invoice whose bank answer the webhook
+  // missed.
   // A manual invoice legitimately has no booking; a balance invoice that lost
   // its booking is a broken row and still refuses.
   const booking = invoice.bookingId ? await db.getBookingById(invoice.bookingId) : undefined;
@@ -937,13 +942,11 @@ export async function applyBalancePayment(
     const invoice = await db.getInvoiceById(invoiceId);
     if (!invoice) return { outcome: "not_found" };
     if (invoice.status === "paid" || invoice.status === "void") {
-      return settleAgainstPaidInvoice(invoice, paymentIntentId, options.method ?? "card");
+      return settleAgainstPaidInvoice(invoice, paymentIntentId, options.method);
     }
 
     const inFlight = invoice.paymentProcessingIntentId;
-    // A bank payment that went through processing is a bank payment, whichever
-    // event reports its success.
-    const method: StripeSettlementMethod = options.method ?? (inFlight && inFlight === paymentIntentId ? "bank" : "card");
+    const method = await settlementMethod(paymentIntentId, options.method, Boolean(inFlight && inFlight === paymentIntentId));
     if (inFlight && inFlight !== paymentIntentId) {
       // Another payment is already processing on this invoice. That one owns
       // it; this one is the second.
@@ -996,6 +999,20 @@ export async function applyBalancePayment(
     if (invoice.kind === "balance" && invoice.bookingId) {
       await sendTipRequestEmailSafely(invoice.bookingId, publicOrigin(undefined));
     }
+    // A duplicate was set aside while this payment processed, with the owner
+    // told to wait. This payment has cleared: now is the time to refund it.
+    if (invoice.refundNeeded && invoice.lastDuplicateIntentId) {
+      const duplicate = await db.findInvoicePaymentByIntent(invoiceId, invoice.lastDuplicateIntentId);
+      if (duplicate?.duplicate && duplicate.status === "succeeded") {
+        await notifyOwnerOfBalance(invoice, data =>
+          sendRefundNeededAlert(data, {
+            duplicateIntentId: invoice.lastDuplicateIntentId,
+            duplicateMethod: duplicate.method === "bank" ? "bank" : "card",
+            original: { kind: "settled", intentId: paymentIntentId, method },
+          })
+        );
+      }
+    }
     return { outcome: "paid" };
   }
   // Three lost claims in a row: whatever won has recorded this payment or
@@ -1014,14 +1031,38 @@ export async function applyBalancePayment(
 async function settleAgainstPaidInvoice(
   invoice: Invoice,
   paymentIntentId: string | null,
-  method: StripeSettlementMethod
+  hint: StripeSettlementMethod | undefined
 ): Promise<BalancePaymentOutcome> {
   const samePayment = paymentIntentId != null && invoice.stripePaymentIntentId === paymentIntentId;
   // A paid session with no intent id predates intent tracking; only a
   // Stripe settlement could have produced it, so it is that settlement again.
   const untrackedStripePayment = paymentIntentId == null && invoice.paidVia === "stripe";
   if (samePayment || untrackedStripePayment) return { outcome: "duplicate" };
-  return recordDuplicatePayment(invoice, paymentIntentId, method);
+  return recordDuplicatePayment(invoice, paymentIntentId, await settlementMethod(paymentIntentId, hint, false));
+}
+
+/**
+ * How the money moved, from Stripe's own record of the charge whenever it can
+ * be read — never guessed from which event happened to report it, since an
+ * ACH success can arrive as payment_intent.succeeded or be seen first by the
+ * pay link. A payment that went through processing is a bank payment; a
+ * failed read falls back to the event's hint, then to "card".
+ */
+async function settlementMethod(
+  paymentIntentId: string | null,
+  hint: StripeSettlementMethod | undefined,
+  wentThroughProcessing: boolean
+): Promise<StripeSettlementMethod> {
+  if (hint === "bank" || wentThroughProcessing) return "bank";
+  if (paymentIntentId) {
+    try {
+      const live = await readPaymentIntent(paymentIntentId);
+      if (live.method) return live.method;
+    } catch {
+      // Stripe unreadable: the hint is all there is.
+    }
+  }
+  return hint ?? "card";
 }
 
 /**
@@ -1096,13 +1137,23 @@ export type BalanceProcessingOutcome =
   /** The invoice is settled already; if this payment lands it is recorded as a duplicate then. */
   | { outcome: "settled" }
   /** Another payment is already processing; if this one lands too it is the duplicate. */
-  | { outcome: "second_payment" };
+  | { outcome: "second_payment" }
+  /** A stale event: Stripe says this payment has already succeeded, so it was settled instead. */
+  | { outcome: "already_succeeded" }
+  /** A stale event: Stripe says this payment has already failed, so nothing was marked. */
+  | { outcome: "already_failed" };
 
 /**
  * A delayed payment (ACH, bank transfer) has started: Checkout completed with
  * payment_status "unpaid", or payment_intent.processing arrived. The invoice is
  * marked processing so the pay link says so and refuses a second checkout,
  * and the reminder sweep leaves the customer alone until the bank answers.
+ *
+ * Stripe neither orders nor promptly redelivers events, so the payment's LIVE
+ * status decides, not the event's snapshot: a late "processing" for a payment
+ * that has since succeeded settles it, and one that has since failed marks
+ * nothing. If Stripe cannot be read, the event is trusted — marking processing
+ * is the safe direction (it refuses a checkout; it never takes money).
  */
 export async function markBalancePaymentProcessing(
   invoiceId: number,
@@ -1111,6 +1162,20 @@ export async function markBalancePaymentProcessing(
   const invoice = await db.getInvoiceById(invoiceId);
   if (!invoice) return { outcome: "not_found" };
   if (invoice.paymentProcessingIntentId === paymentIntentId) return { outcome: "already_processing" };
+  let live: LivePaymentIntent | null = null;
+  try {
+    live = await readPaymentIntent(paymentIntentId);
+  } catch (error) {
+    console.warn(`[Balance] Could not read ${paymentIntentId}; trusting the processing event:`, error);
+  }
+  if (live?.state === "succeeded") {
+    await applyBalancePayment(invoiceId, paymentIntentId, { method: live.method ?? "bank" });
+    return { outcome: "already_succeeded" };
+  }
+  if (live?.state === "failed") {
+    console.warn(`[Balance] Invoice ${invoiceId}: ignoring a stale processing event — ${paymentIntentId} has already failed`);
+    return { outcome: "already_failed" };
+  }
   if (invoice.status === "paid" || invoice.status === "void") {
     if (invoice.stripePaymentIntentId === paymentIntentId) return { outcome: "already_processing" };
     console.warn(`[Balance] Invoice ${invoiceId} is ${invoice.status} but payment ${paymentIntentId} started processing — it will be recorded as a duplicate if it lands`);
@@ -1134,21 +1199,32 @@ export type BalanceProcessingFailureOutcome =
   | { outcome: "not_found" }
   /** Not the payment the invoice is waiting on — a failed duplicate, or a card declined mid-checkout. */
   | { outcome: "not_processing" }
-  /** Cleared: the link works again and the customer can pay. */
+  /** A stale failure event: Stripe says the payment is still processing (or has since succeeded and was settled). */
+  | { outcome: "still_processing" }
+  | { outcome: "succeeded" }
+  /** Cleared: the link works again, the customer has been told, and the reminders restart. */
   | { outcome: "cleared" }
-  /** Cleared, and a duplicate that had already succeeded now pays the invoice. */
+  /** A duplicate that had already succeeded (and was not refunded) now pays the invoice. */
   | { outcome: "duplicate_promoted" };
 
 /**
  * The processing payment failed (checkout.session.async_payment_failed or
- * payment_intent.payment_failed): clear the state so the customer can try
- * again. Only THAT payment's failure clears it. The link's window reopens for
- * the full seven days, since bank failures land days after the payment and
- * the old window may have lapsed while it processed.
+ * payment_intent.payment_failed, or the pay link seeing it fail on Stripe).
  *
- * One more case: a second payment, set aside as a duplicate while this one
- * processed, may already have succeeded. Then the invoice is not unpaid at
- * all — that payment settles it, and the owner is told not to refund it.
+ * The payment's LIVE status decides — a declined card and the ACH payment that
+ * follows it in one Checkout share a PaymentIntent, and a late "failed" for
+ * the decline must not reopen the live bank payment. If Stripe cannot be read
+ * this throws: the webhook answers 500 and Stripe retries, rather than reopen
+ * an invoice whose money may still be on its way.
+ *
+ * Once the failure is real, one of three things happens:
+ *   - the invoice was settled by hand or voided meanwhile: nothing reopens;
+ *   - a second payment, set aside as a duplicate while this one processed,
+ *     already succeeded and Stripe shows it unrefunded: it pays the invoice,
+ *     in the same write that clears the processing state;
+ *   - otherwise the invoice reopens: the window renews for the full seven
+ *     days, the reminder sequence restarts, and the customer is emailed that
+ *     the payment did not go through, with their link.
  */
 export async function clearBalancePaymentProcessing(
   invoiceId: number,
@@ -1157,50 +1233,121 @@ export async function clearBalancePaymentProcessing(
   const invoice = await db.getInvoiceById(invoiceId);
   if (!invoice) return { outcome: "not_found" };
   if (invoice.paymentProcessingIntentId !== paymentIntentId) return { outcome: "not_processing" };
+
+  const live = await readPaymentIntent(paymentIntentId);
+  if (live.state === "succeeded") {
+    await applyBalancePayment(invoiceId, paymentIntentId, { method: live.method ?? "bank" });
+    return { outcome: "succeeded" };
+  }
+  if (live.state !== "failed") {
+    console.warn(`[Balance] Invoice ${invoiceId}: ignoring a stale failure event — ${paymentIntentId} is ${live.state} on Stripe`);
+    return { outcome: "still_processing" };
+  }
   const now = new Date();
+
+  // Settled some other way while the bank payment was in flight — recorded by
+  // hand (cash, Zelle) or voided. Nothing reopens; the owner just hears that
+  // the Stripe payment they may have been counting on did not go through.
+  if (invoice.status === "paid" || invoice.status === "void") {
+    const window = { linkExpiresAt: invoice.linkExpiresAt ?? now, dueDate: invoice.dueDate ?? now.toISOString().slice(0, 10) };
+    if (!(await db.clearInvoicePaymentProcessing(invoiceId, paymentIntentId, window))) return { outcome: "not_processing" };
+    await sendOwnerAlertSafely(
+      `Bank payment failed on a settled invoice — ${invoice.number}`,
+      [
+        `The customer's bank payment ${paymentIntentId} on invoice ${invoice.number} failed.`,
+        invoice.status === "void"
+          ? `The invoice had already been voided, so nothing is owed and nothing reopens.`
+          : `The invoice had already been recorded as paid by hand${invoice.paidMethod ? ` (${invoice.paidMethod})` : ""}, so it stays paid and nothing reopens. If that record was made because of this bank payment rather than money in hand, the customer has not actually paid.`,
+      ].join("\n")
+    );
+    return { outcome: "cleared" };
+  }
+
+  // A duplicate already holds the customer's money? Stripe's word, not the
+  // ledger's: the owner may have refunded it, and the app learns of refunds
+  // only by asking.
+  let refundedDuplicate: string | null = null;
+  const duplicateId = invoice.refundNeeded ? invoice.lastDuplicateIntentId : null;
+  if (duplicateId) {
+    const row = await db.findInvoicePaymentByIntent(invoiceId, duplicateId);
+    if (row?.duplicate && row.status === "succeeded") {
+      const duplicate = await readPaymentIntent(duplicateId);
+      if (duplicate.state === "succeeded" && !duplicate.refunded) {
+        const method: StripeSettlementMethod = duplicate.method ?? (row.method === "bank" ? "bank" : "card");
+        if (await db.promoteDuplicatePayment(invoiceId, duplicateId, paymentIntentId, { paidAt: now, paidMethod: method })) {
+          await sendOwnerAlertSafely(
+            `Payment failed, duplicate now pays — DO NOT refund ${duplicateId} (${invoice.number})`,
+            [
+              `The bank payment ${paymentIntentId} on invoice ${invoice.number} failed.`,
+              `The second payment ${duplicateId}, which had been set aside as a duplicate, succeeded and has not been refunded — it now settles this invoice.`,
+              ``,
+              `Do NOT refund ${duplicateId}: it is now the customer's only payment.`,
+            ].join("\n")
+          );
+          await sendPaymentReceiptSafely({ ...invoice, paidAt: now }, method);
+          if (invoice.kind === "balance" && invoice.bookingId) {
+            await sendTipRequestEmailSafely(invoice.bookingId, publicOrigin(undefined));
+          }
+          return { outcome: "duplicate_promoted" };
+        }
+        // Lost a race to something that settled or reopened the invoice — re-read on the next event or visit.
+        return { outcome: "not_processing" };
+      }
+      if (duplicate.refunded) {
+        await db.markDuplicatePaymentRefunded(invoiceId, duplicateId);
+        refundedDuplicate = duplicateId;
+      }
+    }
+  }
+
   const expiresAt = balanceLinkExpiresAt(now);
   const cleared = await db.clearInvoicePaymentProcessing(invoiceId, paymentIntentId, {
     linkExpiresAt: expiresAt,
     dueDate: expiresAt.toISOString().slice(0, 10),
+    restartRemindersAt: now,
   });
   if (!cleared) return { outcome: "not_processing" };
 
-  const after = await db.getInvoiceById(invoiceId);
-  if (after && after.status !== "paid" && after.status !== "void" && after.refundNeeded && after.lastDuplicateIntentId) {
-    const duplicate = await db.findInvoicePaymentByIntent(invoiceId, after.lastDuplicateIntentId);
-    if (duplicate?.duplicate && duplicate.status === "succeeded") {
-      const method = duplicate.method === "bank" ? "bank" : "card";
-      const promoted = await db.promoteDuplicatePayment(invoiceId, after.lastDuplicateIntentId, {
-        paidAt: now,
-        paidMethod: method,
-      });
-      if (promoted) {
-        await sendOwnerAlertSafely(
-          `Payment failed, duplicate now pays — DO NOT refund ${after.lastDuplicateIntentId} (${after.number})`,
-          [
-            `The bank payment ${paymentIntentId} on invoice ${after.number} failed.`,
-            `The second payment ${after.lastDuplicateIntentId}, which had been flagged as a duplicate to refund, already succeeded — it now settles this invoice.`,
-            ``,
-            `Do NOT refund ${after.lastDuplicateIntentId}. If you already refunded it, the customer has paid nothing: resend the invoice from Admin → Invoices.`,
-          ].join("\n")
-        );
-        await sendPaymentReceiptSafely({ ...after, paidAt: now }, method);
-        if (after.kind === "balance" && after.bookingId) {
-          await sendTipRequestEmailSafely(after.bookingId, publicOrigin(undefined));
-        }
-        return { outcome: "duplicate_promoted" };
-      }
-    }
-  }
+  // The customer was told their payment was processing and there was nothing
+  // else to do. They hear that it did not go through, with their link.
+  const emailed = await sendBankPaymentFailedSafely(invoice, expiresAt);
 
   await sendOwnerAlertSafely(
     `Bank payment failed — ${invoice.number}`,
     [
       `The customer's bank payment ${paymentIntentId} on invoice ${invoice.number} failed (declined, returned, or bank verification did not complete).`,
-      `The invoice is open again: the customer can pay from the same link, which now works for another ${BALANCE_LINK_DAYS} days, and the automatic reminders resume.`,
+      ...(refundedDuplicate
+        ? [`The duplicate payment ${refundedDuplicate} had already been refunded, so the customer has now paid nothing on this invoice.`]
+        : []),
+      emailed
+        ? `The customer has been emailed that it did not go through, with their payment link (it works for another ${BALANCE_LINK_DAYS} days). The automatic reminders restart from today.`
+        : `The customer could NOT be emailed (no email on file, or no public site address configured) — resend the invoice from Admin → Invoices. The automatic reminders restart from today.`,
     ].join("\n")
   );
   return { outcome: "cleared" };
+}
+
+/** The customer's "your bank payment didn't go through" email. Never throws; true when it went out. */
+async function sendBankPaymentFailedSafely(invoice: Invoice, expiresAt: Date): Promise<boolean> {
+  try {
+    const origin = publicOrigin(undefined);
+    if (!origin || !invoice.payToken) return false;
+    const booking = invoice.bookingId ? await db.getBookingById(invoice.bookingId) : undefined;
+    const customer = await db.getCustomerById(invoice.customerId);
+    if (!customer?.email) return false;
+    const data = toInvoiceEmailData(
+      booking,
+      customer,
+      invoiceFacts(invoice),
+      balancePayUrl(origin, invoice.payToken),
+      expiresAt,
+      (await db.getSetting("business_phone"))?.trim() || undefined
+    );
+    return await sendBankPaymentFailedEmail(data, { invoiceId: invoice.id, bookingId: invoice.bookingId ?? null });
+  } catch (error) {
+    console.error(`[Balance] Could not email the bank-payment failure for invoice ${invoice.id}:`, error);
+    return false;
+  }
 }
 
 /** An owner alert that can never fail the payment path that raised it. */

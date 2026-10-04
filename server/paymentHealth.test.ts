@@ -69,6 +69,14 @@ describe("overlapping sessions in the app's history", () => {
       ["cs_1", "cs_3"],
     ]);
   });
+  it("never counts a superseded session — its url never reached anyone", () => {
+    expect(findOverlappingSessions([{ ...row("cs_1", 0, 24, 3), endReason: "superseded" }, row("cs_2", 1, 25)])).toEqual([]);
+  });
+  it("reports an overlap once: only for sessions minted since the last run", () => {
+    const rows = [row("cs_1", 0, 24), row("cs_2", 1, 25)];
+    expect(findOverlappingSessions(rows, t(0.5))).toHaveLength(1);
+    expect(findOverlappingSessions(rows, t(2))).toEqual([]);
+  });
   it("keeps invoices apart", () => {
     expect(findOverlappingSessions([row("cs_1", 0, 24), { ...row("cs_2", 1, 25), invoiceId: 10 }])).toEqual([]);
   });
@@ -165,12 +173,59 @@ describe("Stripe's record against the app's", () => {
   });
 });
 
+describe("bank answers the webhook never delivered", () => {
+  it("flags an invoice still 'processing' after Stripe has the bank's answer — and says how to sync it", async () => {
+    const s1 = await stripeSession(9);
+    customerPays(s1, "ach", "pi_ach");
+    seedInvoice({ ...kit.invoices.get(9)!, paymentProcessingAt: new Date(Date.now() - 3 * HOUR), paymentProcessingIntentId: "pi_ach" });
+    bankSettles("pi_ach", "succeeded");
+
+    const f = await inspectPaymentIntegrity(new Date());
+
+    expect(f.bankAnswersNotRecorded).toEqual([{ invoiceId: 9, invoiceNumber: "INV-9", intentId: "pi_ach", stripeState: "succeeded" }]);
+    const text = formatPaymentFindings(f).join("\n");
+    expect(text).toContain("STRIPE HAS ANSWERED BUT THE APP WAS NEVER TOLD");
+    expect(text).toContain("press Resend");
+  });
+  it("flags a failure the app never heard about", async () => {
+    const s1 = await stripeSession(9);
+    customerPays(s1, "ach", "pi_ach");
+    seedInvoice({ ...kit.invoices.get(9)!, paymentProcessingAt: new Date(), paymentProcessingIntentId: "pi_ach" });
+    bankSettles("pi_ach", "failed");
+    expect((await inspectPaymentIntegrity(new Date())).bankAnswersNotRecorded[0]).toMatchObject({ stripeState: "failed" });
+  });
+  it("a payment still processing on Stripe is not flagged", async () => {
+    const s1 = await stripeSession(9);
+    customerPays(s1, "ach", "pi_ach");
+    seedInvoice({ ...kit.invoices.get(9)!, paymentProcessingAt: new Date(), paymentProcessingIntentId: "pi_ach" });
+    expect((await inspectPaymentIntegrity(new Date())).bankAnswersNotRecorded).toEqual([]);
+  });
+});
+
+describe("advice the owner can act on", () => {
+  it("never tells the owner to record an unrecorded Stripe payment by hand, and splits the advice by state", async () => {
+    const s1 = await stripeSession(9);
+    const s2 = await stripeSession(9);
+    customerPays(s1, "ach", "pi_done");
+    bankSettles("pi_done", "succeeded");
+    customerPays(s2, "ach", "pi_moving");
+    const text = formatPaymentFindings(await inspectPaymentIntegrity(new Date())).join("\n");
+    expect(text).toContain("Do NOT record these by hand");
+    expect(text).toMatch(/pi_done \(succeeded\): press Resend/);
+    expect(text).toMatch(/pi_moving \(still processing\): press Resend once/);
+  });
+});
+
 describe("stuck processing", () => {
   it("flags a bank payment processing for longer than any bank takes", async () => {
     seedInvoice({ ...kit.invoices.get(9)!, paymentProcessingAt: new Date(Date.now() - 20 * 24 * HOUR), paymentProcessingIntentId: "pi_slow" });
     const f = await inspectPaymentIntegrity(new Date());
     expect(f.stuckPaymentProcessing).toEqual([expect.objectContaining({ invoiceNumber: "INV-9", intentId: "pi_slow", days: 20 })]);
     expect(formatPaymentFindings(f).join("\n")).toContain("checkout.session.async_payment_succeeded");
+  });
+  it("leaves a microdeposit customer who verified late (day 16) alone", async () => {
+    seedInvoice({ ...kit.invoices.get(9)!, paymentProcessingAt: new Date(Date.now() - 16 * 24 * HOUR), paymentProcessingIntentId: "pi_late" });
+    expect((await inspectPaymentIntegrity(new Date())).stuckPaymentProcessing).toEqual([]);
   });
   it("leaves a normal four-day ACH alone", async () => {
     seedInvoice({ ...kit.invoices.get(9)!, paymentProcessingAt: new Date(Date.now() - 4 * 24 * HOUR), paymentProcessingIntentId: "pi_ok" });

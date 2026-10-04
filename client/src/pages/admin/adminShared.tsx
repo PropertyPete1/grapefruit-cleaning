@@ -253,6 +253,8 @@ export const PAYMENT_STATUS_STYLES: Record<BookingPaymentStatus, string> = {
   cash_pending: "bg-lime-100 text-lime-800",
   balance_pending_approval: "bg-amber-100 text-amber-800",
   balance_due: "bg-blue-100 text-blue-700",
+  // Paid by bank, money in flight: neither owed (blue) nor settled (emerald).
+  payment_processing: "bg-violet-100 text-violet-700",
   unpaid: "bg-red-100 text-red-600",
   paid: "bg-emerald-100 text-emerald-700",
   paid_cash: "bg-emerald-100 text-emerald-700",

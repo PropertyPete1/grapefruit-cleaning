@@ -147,16 +147,24 @@ export const fakeDb = {
     return true;
   },
   // WHERE id AND processing = intent
-  clearInvoicePaymentProcessing: async (id: number, intent: string, window: { linkExpiresAt: Date; dueDate: string }) => {
+  clearInvoicePaymentProcessing: async (
+    id: number,
+    intent: string,
+    window: { linkExpiresAt: Date; dueDate: string; restartRemindersAt?: Date }
+  ) => {
     const invoice = kit.invoices.get(id);
     if (!invoice || invoice.paymentProcessingIntentId !== intent) return false;
-    Object.assign(invoice, { paymentProcessingAt: null, paymentProcessingIntentId: null, ...window });
+    const { restartRemindersAt, ...rest } = window;
+    Object.assign(invoice, { paymentProcessingAt: null, paymentProcessingIntentId: null, ...rest });
+    if (restartRemindersAt) {
+      Object.assign(invoice, { linkSentAt: restartRemindersAt, reminderCount: 0, lastReminderAt: null, reminderExhaustedAlertAt: null });
+    }
     return true;
   },
-  // WHERE id AND status NOT IN (paid, void) AND lastDuplicate = intent AND processing IS NULL
-  promoteDuplicatePayment: async (id: number, intent: string, data: { paidAt: Date; paidMethod?: string }) => {
+  // WHERE id AND status NOT IN (paid, void) AND lastDuplicate = intent AND processing = failed
+  promoteDuplicatePayment: async (id: number, intent: string, failedIntent: string, data: { paidAt: Date; paidMethod?: string }) => {
     const invoice = kit.invoices.get(id);
-    if (!invoice || settled(invoice) || invoice.lastDuplicateIntentId !== intent || invoice.paymentProcessingIntentId) {
+    if (!invoice || settled(invoice) || invoice.lastDuplicateIntentId !== intent || invoice.paymentProcessingIntentId !== failedIntent) {
       return false;
     }
     Object.assign(invoice, {
@@ -167,14 +175,27 @@ export const fakeDb = {
       stripePaymentIntentId: intent,
       refundNeeded: false,
       lastDuplicateIntentId: null,
+      paymentProcessingAt: null,
+      paymentProcessingIntentId: null,
     });
     for (const p of kit.payments) if (p.invoiceId === id && p.stripePaymentIntentId === intent) p.duplicate = false;
+    if (kit.payments.some(p => p.invoiceId === id && p.duplicate && p.status === "succeeded")) invoice.refundNeeded = true;
     return true;
   },
-  // WHERE id AND checkoutAttempt = expected AND status NOT IN (paid, void) AND processing IS NULL
-  claimInvoiceCheckoutAttempt: async (id: number, expected: number, now: Date = new Date()) => {
+  markDuplicatePaymentRefunded: async (id: number, intent: string) => {
+    for (const p of kit.payments) if (p.invoiceId === id && p.stripePaymentIntentId === intent && p.duplicate) p.status = "refunded";
     const invoice = kit.invoices.get(id);
-    if (!invoice || invoice.checkoutAttempt !== expected || settled(invoice) || invoice.paymentProcessingIntentId) return false;
+    if (invoice && !kit.payments.some(p => p.invoiceId === id && p.duplicate && p.status === "succeeded")) {
+      Object.assign(invoice, { refundNeeded: false, lastDuplicateIntentId: null });
+    }
+  },
+  // Offline settlement: refused while a bank payment processes.
+  recordOfflineInvoicePayment: async () => ({ outcome: "not_found" as const }),
+  // WHERE id AND checkoutAttempt = expected AND stripeSessionId <=> expectedSession AND status NOT IN (paid, void) AND processing IS NULL
+  claimInvoiceCheckoutAttempt: async (id: number, expected: number, expectedSession: string | null, now: Date = new Date()) => {
+    const invoice = kit.invoices.get(id);
+    if (!invoice || invoice.checkoutAttempt !== expected || invoice.stripeSessionId !== expectedSession) return false;
+    if (settled(invoice) || invoice.paymentProcessingIntentId) return false;
     Object.assign(invoice, { checkoutAttempt: expected + 1, checkoutClaimedAt: now, stripeSessionId: null, stripeSessionExpiresAt: null });
     return true;
   },
@@ -199,7 +220,7 @@ export const fakeDb = {
       endedAt: null,
       endReason: null,
     });
-    if (!invoice || invoice.checkoutAttempt !== attempt) return false;
+    if (!invoice || invoice.checkoutAttempt !== attempt || settled(invoice) || invoice.paymentProcessingIntentId) return false;
     invoice.stripeSessionId = session.stripeSessionId;
     invoice.stripeSessionExpiresAt = session.expiresAt;
     return true;
@@ -263,7 +284,16 @@ type FakeSession = {
   metadata: Record<string, string>;
   client_reference_id: string | null;
 };
-type FakeIntent = { id: string; object: "payment_intent"; status: string; metadata: Record<string, string>; refunded?: boolean };
+type FakeIntent = {
+  id: string;
+  object: "payment_intent";
+  status: string;
+  metadata: Record<string, string>;
+  refunded?: boolean;
+  /** The instrument on the charge, as Stripe names it ("card", "us_bank_account"). */
+  methodType?: string;
+  next_action?: { type: string } | null;
+};
 
 export const stripeKit = {
   sessions: new Map<string, FakeSession>(),
@@ -295,14 +325,24 @@ function lineTotal(params: Record<string, unknown>): number {
   return lines.reduce((sum, line) => sum + line.price_data.unit_amount * line.quantity, 0);
 }
 
+function intentWithCharge(intent: FakeIntent): Record<string, unknown> {
+  return {
+    ...intent,
+    latest_charge: {
+      id: `ch_${intent.id}`,
+      refunded: Boolean(intent.refunded),
+      amount_refunded: intent.refunded ? 1 : 0,
+      payment_method_details: intent.methodType ? { type: intent.methodType } : null,
+    },
+  };
+}
+
 function expandIntent(session: FakeSession, expand: string[] = []): Record<string, unknown> {
   const out: Record<string, unknown> = { ...session };
   const wantIntent = expand.some(e => e === "payment_intent" || e.startsWith("data.payment_intent"));
   if (wantIntent && session.payment_intent) {
     const intent = stripeKit.intents.get(session.payment_intent);
-    out.payment_intent = intent
-      ? { ...intent, latest_charge: { id: `ch_${intent.id}`, refunded: Boolean(intent.refunded) } }
-      : session.payment_intent;
+    out.payment_intent = intent ? intentWithCharge(intent) : session.payment_intent;
   }
   return out;
 }
@@ -378,7 +418,7 @@ export const fakeStripe = {
     retrieve: async (id: string) => {
       const intent = stripeKit.intents.get(id);
       if (!intent) throw missing("payment_intent", id);
-      return { ...intent };
+      return intentWithCharge(intent);
     },
   },
   webhooks: {
@@ -386,8 +426,12 @@ export const fakeStripe = {
   },
 };
 
-/** The customer completes checkout on a session: a card pays at once, a bank (ACH) debit starts processing. */
-export function customerPays(sessionId: string, method: "card" | "ach", intentId: string): void {
+/**
+ * The customer completes checkout on a session: a card pays at once, a bank
+ * (ACH) debit starts processing, and an ACH customer who typed their account
+ * in by hand ("ach_microdeposits") first has to confirm two microdeposits.
+ */
+export function customerPays(sessionId: string, method: "card" | "ach" | "ach_microdeposits", intentId: string): void {
   const session = stripeKit.sessions.get(sessionId);
   if (!session || session.status !== "open") throw new Error(`session ${sessionId} is not payable`);
   session.status = "complete";
@@ -397,8 +441,10 @@ export function customerPays(sessionId: string, method: "card" | "ach", intentId
   stripeKit.intents.set(intentId, {
     id: intentId,
     object: "payment_intent",
-    status: method === "card" ? "succeeded" : "processing",
+    status: method === "card" ? "succeeded" : method === "ach" ? "processing" : "requires_action",
     metadata: { payment_type: "balance", invoice_id: session.metadata.invoice_id ?? "" },
+    methodType: method === "card" ? "card" : "us_bank_account",
+    next_action: method === "ach_microdeposits" ? { type: "verify_with_microdeposits" } : null,
   });
 }
 
@@ -407,6 +453,7 @@ export function bankSettles(intentId: string, outcome: "succeeded" | "failed"): 
   const intent = stripeKit.intents.get(intentId);
   if (!intent) throw new Error(`no intent ${intentId}`);
   intent.status = outcome === "succeeded" ? "succeeded" : "requires_payment_method";
+  intent.next_action = null;
   if (outcome === "succeeded") {
     for (const session of Array.from(stripeKit.sessions.values())) {
       if (session.payment_intent === intentId) session.payment_status = "paid";

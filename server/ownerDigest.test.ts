@@ -207,7 +207,7 @@ describe("the daily health check", () => {
     ]);
     await runDailyHealthCheck(NOW);
     const body = mockOwnerAlert.mock.calls[0]![1] as string;
-    expect(body).toContain("BANK PAYMENTS PROCESSING FOR OVER 14 DAYS");
+    expect(body).toContain("BANK PAYMENTS PROCESSING FOR OVER 20 DAYS");
     expect(body).toContain("pi_slow");
   });
 

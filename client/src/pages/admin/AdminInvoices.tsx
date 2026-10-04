@@ -866,7 +866,7 @@ export default function AdminInvoices() {
                             </SelectContent>
                           </Select>
                         )}
-                        {inv.status !== "paid" && inv.status !== "void" && (
+                        {inv.status !== "paid" && inv.status !== "void" && inv.linkStatus !== "processing" && (
                           <Button size="sm" variant="outline" className="h-8 rounded-lg px-2 text-xs" onClick={() => setRecording(inv)}>
                             <Banknote className="mr-1 h-3 w-3" /> Record payment
                           </Button>
@@ -946,7 +946,7 @@ export default function AdminInvoices() {
                         </SelectContent>
                       </Select>
                     )}
-                    {inv.status !== "paid" && inv.status !== "void" && (
+                    {inv.status !== "paid" && inv.status !== "void" && inv.linkStatus !== "processing" && (
                       <Button size="sm" variant="outline" className="h-9 rounded-lg text-xs" onClick={() => setRecording(inv)}>
                         <Banknote className="mr-1 h-3.5 w-3.5" /> Record payment
                       </Button>

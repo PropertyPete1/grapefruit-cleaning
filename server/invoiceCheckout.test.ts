@@ -75,8 +75,15 @@ describe("classifying a session", () => {
         payment_status: "unpaid",
         payment_intent: { id: "pi_1", status } as never,
       });
-      expect(view).toEqual({ kind: "processing", paymentIntentId: "pi_1" });
+      expect(view).toMatchObject({ kind: "processing", paymentIntentId: "pi_1" });
     }
+    const verifying = classifySession({
+      ...base,
+      status: "complete",
+      payment_status: "unpaid",
+      payment_intent: { id: "pi_1", status: "requires_action", next_action: { type: "verify_with_microdeposits" } } as never,
+    });
+    expect(verifying).toEqual({ kind: "processing", paymentIntentId: "pi_1", awaitingVerification: true });
   });
   it("complete + unpaid with an unreadable intent errs on the side of processing", () => {
     expect(classifySession({ ...base, status: "complete", payment_status: "unpaid", payment_intent: "pi_1" }).kind).toBe("processing");
@@ -159,7 +166,7 @@ describe("openInvoiceCheckout", () => {
     const result = await openInvoiceCheckout(INVOICE_ID, hooks());
 
     spy.mockRestore();
-    expect(result).toEqual({ kind: "processing", paymentIntentId: "pi_race" });
+    expect(result).toMatchObject({ kind: "processing", paymentIntentId: "pi_race" });
     expect(stripeKit.createCalls).toHaveLength(1);
     expect(invoice().paymentProcessingIntentId).toBe("pi_race");
   });
@@ -191,7 +198,7 @@ describe("openInvoiceCheckout", () => {
   it("keeps refusing while Stripe cannot be reached about a processing payment", async () => {
     seedInvoice({ ...invoice(), paymentProcessingAt: new Date(), paymentProcessingIntentId: "pi_unknown" });
     const result = await openInvoiceCheckout(INVOICE_ID, hooks());
-    expect(result).toEqual({ kind: "processing", paymentIntentId: "pi_unknown" });
+    expect(result).toMatchObject({ kind: "processing", paymentIntentId: "pi_unknown" });
     expect(stripeKit.createCalls).toHaveLength(0);
   });
 
@@ -238,6 +245,21 @@ describe("openInvoiceCheckout", () => {
     const result = await openInvoiceCheckout(INVOICE_ID, hooks());
     expect(result).toMatchObject({ kind: "redirect" });
     expect(stripeKit.createCalls[0]!.options?.idempotencyKey).toBe("gf-invoice-77-INV-SM-1-checkout-2");
+  });
+
+  it("closes its own session and sends no one to it when the invoice was paid while Stripe was answering", async () => {
+    const paidMeanwhile: CheckoutHooks = {
+      ...hooks(),
+      mint: async args => {
+        const session = await hooks().mint(args);
+        Object.assign(kit.invoices.get(INVOICE_ID)!, { status: "paid", paidVia: "manual", paidMethod: "cash" });
+        return session;
+      },
+    };
+    const result = await openInvoiceCheckout(INVOICE_ID, paidMeanwhile);
+    expect(result).toEqual({ kind: "paid" });
+    expect(stripeKit.sessions.get("cs_test_1")!.status).toBe("expired");
+    expect(invoice().stripeSessionId).toBeNull();
   });
 
   it("closes its own session when a newer attempt took over while Stripe was answering", async () => {

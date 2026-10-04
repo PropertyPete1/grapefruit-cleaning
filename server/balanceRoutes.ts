@@ -30,7 +30,7 @@ import { publicOrigin } from "./publicOrigin";
 const BRAND_CORAL = "#F26D5B";
 const BRAND_CREAM = "#FDF8F3";
 
-type NoticeKind = "paid" | "processing" | "confirming" | "expired" | "notFound" | "error";
+type NoticeKind = "paid" | "processing" | "verifying" | "confirming" | "expired" | "notFound" | "error";
 
 const NOTICES: Record<NoticeKind, Record<"en" | "es", { title: string; body: string }>> = {
   paid: {
@@ -51,6 +51,18 @@ const NOTICES: Record<NoticeKind, Record<"en" | "es", { title: string; body: str
     es: {
       title: "Su pago bancario está en proceso",
       body: "Gracias — su pago bancario ya está en camino. Los pagos bancarios tardan algunos días hábiles en completarse y le enviaremos el recibo por correo en cuanto se acredite. No tiene que hacer nada más ni volver a pagar.",
+    },
+  },
+  // ACH by manually entered account: the debit only starts once the customer
+  // confirms Stripe's two microdeposits, so "nothing else to do" would be wrong.
+  verifying: {
+    en: {
+      title: "Almost done — confirm your bank account",
+      body: "Thank you! To finish your bank payment, confirm the two small deposits Stripe is sending to your bank account — look for Stripe's email with the link (the deposits take 1–2 business days to show up). Your payment starts as soon as you confirm. There's no need to pay again.",
+    },
+    es: {
+      title: "Casi listo — confirme su cuenta bancaria",
+      body: "¡Gracias! Para completar su pago bancario, confirme los dos pequeños depósitos que Stripe está enviando a su cuenta — busque el correo de Stripe con el enlace (los depósitos tardan 1–2 días hábiles en aparecer). Su pago comienza en cuanto confirme. No tiene que volver a pagar.",
     },
   },
   confirming: {
@@ -291,7 +303,7 @@ async function payBalanceHandler(req: Request, res: Response) {
       try {
         const look = await openBalanceCheckout({ ...checkoutArgs, mint: false });
         if (look.kind === "paid") return notice("paid", locale);
-        if (look.kind === "processing") return notice("processing", locale);
+        if (look.kind === "processing") return notice(look.awaitingVerification ? "verifying" : "processing", locale);
       } catch (error) {
         console.error(`[Balance] Could not read checkout state for invoice ${invoice.id}:`, error);
       }
@@ -318,7 +330,7 @@ async function payBalanceHandler(req: Request, res: Response) {
       case "redirect":
         return res.redirect(303, checkout.url);
       case "processing":
-        return notice("processing", locale);
+        return notice(checkout.awaitingVerification ? "verifying" : "processing", locale);
       case "paid":
         return notice("paid", locale);
       case "closed":

@@ -17,8 +17,11 @@
  *   - unrecordedStripePayments: Stripe has the customer's money (or has it in
  *     flight) but the invoice still reads unpaid — the customer is being
  *     reminded to pay something they paid;
+ *   - bankAnswersNotRecorded: Stripe has the bank's answer (succeeded or
+ *     failed) for a payment the invoice still calls processing — the webhook
+ *     is not receiving the async events;
  *   - stuckPaymentProcessing: a bank payment "processing" longer than any bank
- *     takes, which means the async events are not reaching the webhook.
+ *     takes.
  */
 import type Stripe from "stripe";
 import { BALANCE_PAYMENT_TYPE } from "./balanceRules";
@@ -27,14 +30,21 @@ import { getStripe } from "./stripe";
 
 /** How far back Stripe's sessions are read. ACH settles within days; a month covers any duplicate still worth refunding. */
 export const PAYMENT_HEALTH_WINDOW_DAYS = 30;
-/** Longer than any bank takes: up to 10 days of microdeposit verification plus about 4 business days of settlement. */
-export const STUCK_PROCESSING_DAYS = 14;
+/**
+ * Longer than any bank takes: up to 10 days of microdeposit verification plus
+ * about 4 business days of settlement — which can run past 14 calendar days
+ * over a weekend, so the line sits well beyond it.
+ */
+export const STUCK_PROCESSING_DAYS = 20;
+/** Overlaps are reported once: only for sessions minted since about the previous daily run. */
+const OVERLAP_REPORT_WINDOW_MS = 26 * 60 * 60 * 1000;
 /** A payment this fresh may simply be ahead of its webhook. */
 const WEBHOOK_GRACE_MS = 60 * 60 * 1000;
 const MAX_STRIPE_SESSIONS = 2000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type StripePaymentHealthState = "succeeded" | "processing";
+type StripeSessionPaymentState = StripePaymentHealthState | "failed";
 
 export interface PaymentIntegrityFindings {
   duplicatePayments: Array<{
@@ -55,6 +65,12 @@ export interface PaymentIntegrityFindings {
     intentId: string;
     state: StripePaymentHealthState;
   }>;
+  bankAnswersNotRecorded: Array<{
+    invoiceId: number;
+    invoiceNumber: string;
+    intentId: string;
+    stripeState: "succeeded" | "failed";
+  }>;
   stuckPaymentProcessing: Array<{
     invoiceNumber: string;
     intentId: string | null;
@@ -69,6 +85,7 @@ export const EMPTY_PAYMENT_FINDINGS: PaymentIntegrityFindings = {
   duplicatePayments: [],
   overlappingCheckoutSessions: [],
   unrecordedStripePayments: [],
+  bankAnswersNotRecorded: [],
   stuckPaymentProcessing: [],
   paymentInspectionError: null,
 };
@@ -80,6 +97,7 @@ type SessionHistoryRow = {
   createdAt: Date;
   expiresAt: Date;
   endedAt: Date | null;
+  endReason?: string | null;
 };
 
 const ms = (value: Date | string) => new Date(value).getTime();
@@ -89,8 +107,16 @@ const ms = (value: Date | string) => new Date(value).getTime();
  * earlier session for the same invoice was still payable — still unexpired
  * and not yet seen to end. The one-live-session rule makes this impossible;
  * finding one means a race or a code path got around it.
+ *
+ * A "superseded" session never counts: it was closed by the request that
+ * minted it, before its url reached anyone. `reportSince` limits the report
+ * to sessions minted since then (the daily run passes about a day), so one
+ * overlap is reported once rather than every day for a month.
  */
-export function findOverlappingSessions(rows: SessionHistoryRow[]): PaymentIntegrityFindings["overlappingCheckoutSessions"] {
+export function findOverlappingSessions(
+  rows: SessionHistoryRow[],
+  reportSince?: Date
+): PaymentIntegrityFindings["overlappingCheckoutSessions"] {
   const byInvoice = new Map<number, SessionHistoryRow[]>();
   for (const row of rows) {
     const list = byInvoice.get(row.invoiceId) ?? [];
@@ -98,11 +124,12 @@ export function findOverlappingSessions(rows: SessionHistoryRow[]): PaymentInteg
     byInvoice.set(row.invoiceId, list);
   }
   const found: PaymentIntegrityFindings["overlappingCheckoutSessions"] = [];
-  byInvoice.forEach(list => {
-    list.sort((a, b) => ms(a.createdAt) - ms(b.createdAt));
+  byInvoice.forEach(all => {
+    const list = all.filter(row => row.endReason !== "superseded").sort((a, b) => ms(a.createdAt) - ms(b.createdAt));
     for (let j = 1; j < list.length; j += 1) {
       const later = list[j]!;
       const opened = ms(later.createdAt);
+      if (reportSince && opened < reportSince.getTime()) continue;
       const live = list
         .slice(0, j)
         .find(earlier => opened < ms(earlier.expiresAt) && (earlier.endedAt == null || ms(earlier.endedAt) > opened));
@@ -127,23 +154,23 @@ export function findOverlappingSessions(rows: SessionHistoryRow[]): PaymentInteg
  */
 export function sessionPaymentState(
   session: Pick<Stripe.Checkout.Session, "status" | "payment_intent">
-): { intentId: string; state: StripePaymentHealthState } | null {
+): { intentId: string; state: StripeSessionPaymentState } | null {
   const intent = session.payment_intent;
   if (!intent || typeof intent === "string") return null;
   if (intent.status === "succeeded") {
     const charge = intent.latest_charge;
-    if (charge && typeof charge === "object" && charge.refunded) return null;
+    if (charge && typeof charge === "object" && (charge.refunded || (charge.amount_refunded ?? 0) > 0)) return null;
     return { intentId: intent.id, state: "succeeded" };
   }
-  if (session.status === "complete" && (intent.status === "processing" || intent.status === "requires_action")) {
-    return { intentId: intent.id, state: "processing" };
-  }
+  if (session.status !== "complete") return null;
+  if (intent.status === "processing" || intent.status === "requires_action") return { intentId: intent.id, state: "processing" };
+  if (intent.status === "requires_payment_method" || intent.status === "canceled") return { intentId: intent.id, state: "failed" };
   return null;
 }
 
 type StripeInvoiceView = {
   invoiceNumber: string | null;
-  payments: Map<string, { state: StripePaymentHealthState; createdMs: number }>;
+  payments: Map<string, { state: StripeSessionPaymentState; createdMs: number }>;
   openSessionIds: string[];
 };
 
@@ -189,6 +216,7 @@ export async function inspectPaymentIntegrity(now: Date = new Date()): Promise<P
     duplicatePayments: [],
     overlappingCheckoutSessions: [],
     unrecordedStripePayments: [],
+    bankAnswersNotRecorded: [],
     stuckPaymentProcessing: [],
     paymentInspectionError: null,
   };
@@ -199,7 +227,9 @@ export async function inspectPaymentIntegrity(now: Date = new Date()): Promise<P
       db.listInvoiceCheckoutSessionsSince(new Date(now.getTime() - PAYMENT_HEALTH_WINDOW_DAYS * DAY_MS)),
       db.listStuckProcessingInvoices(new Date(now.getTime() - STUCK_PROCESSING_DAYS * DAY_MS)),
     ]);
-    findings.overlappingCheckoutSessions.push(...findOverlappingSessions(history));
+    findings.overlappingCheckoutSessions.push(
+      ...findOverlappingSessions(history, new Date(now.getTime() - OVERLAP_REPORT_WINDOW_MS))
+    );
     findings.stuckPaymentProcessing = stuck.map(row => ({
       invoiceNumber: row.invoiceNumber,
       intentId: row.paymentProcessingIntentId,
@@ -225,7 +255,16 @@ export async function inspectPaymentIntegrity(now: Date = new Date()): Promise<P
       invoices.forEach((view, invoiceId) => {
         const invoice = invoiceById.get(invoiceId);
         const invoiceNumber = invoice?.number ?? view.invoiceNumber ?? `#${invoiceId}`;
-        const payments = Array.from(view.payments.entries()).map(([intentId, p]) => ({ intentId, ...p }));
+        const all = Array.from(view.payments.entries()).map(([intentId, p]) => ({ intentId, ...p }));
+        // Money taken or in flight; a failed payment took nothing.
+        const payments = all.flatMap(p => (p.state === "failed" ? [] : [{ ...p, state: p.state as StripePaymentHealthState }]));
+
+        // The invoice still waits on a payment Stripe has already answered for.
+        const waitingOn = invoice?.paymentProcessingIntentId;
+        const answer = waitingOn ? all.find(p => p.intentId === waitingOn) : undefined;
+        if (answer && answer.state !== "processing" && now.getTime() - answer.createdMs >= WEBHOOK_GRACE_MS) {
+          findings.bankAnswersNotRecorded.push({ invoiceId, invoiceNumber, intentId: answer.intentId, stripeState: answer.state });
+        }
 
         if (payments.length >= 2) {
           findings.duplicatePayments.push({
@@ -274,6 +313,7 @@ export function paymentProblemCount(f: PaymentIntegrityFindings): number {
     f.duplicatePayments.length +
     f.overlappingCheckoutSessions.length +
     f.unrecordedStripePayments.length +
+    (f.bankAnswersNotRecorded?.length ?? 0) +
     f.stuckPaymentProcessing.length +
     (f.paymentInspectionError ? 1 : 0)
   );
@@ -293,9 +333,24 @@ export function formatPaymentFindings(f: PaymentIntegrityFindings): string[] {
   if (f.unrecordedStripePayments.length > 0) {
     lines.push(`STRIPE PAYMENTS THE APP NEVER RECORDED (${f.unrecordedStripePayments.length})`);
     lines.push("Stripe has this money (or is moving it), but the invoice still reads unpaid — the customer may be getting");
-    lines.push("reminders for a bill they paid. Check the payment in Stripe and settle the invoice:");
+    lines.push("reminders for a bill they paid. Do NOT record these by hand: a hand-recorded payment turns the real Stripe");
+    lines.push("payment into a 'refund' duplicate when its event arrives.");
     for (const u of f.unrecordedStripePayments) {
-      lines.push(`  • ${u.invoiceNumber} — ${u.intentId} (${u.state})`);
+      lines.push(
+        u.state === "succeeded"
+          ? `  • ${u.invoiceNumber} — ${u.intentId} (succeeded): press Resend on the invoice in Admin → Invoices — it checks Stripe first and records this payment, sending nothing.`
+          : `  • ${u.invoiceNumber} — ${u.intentId} (still processing): press Resend once — it checks Stripe, marks the invoice processing and stops the reminders; the payment records itself when the bank answers.`
+      );
+    }
+    lines.push("");
+  }
+  if ((f.bankAnswersNotRecorded?.length ?? 0) > 0) {
+    lines.push(`BANK PAYMENTS STRIPE HAS ANSWERED BUT THE APP WAS NEVER TOLD (${f.bankAnswersNotRecorded.length})`);
+    lines.push("The webhook is not receiving checkout.session.async_payment_succeeded / async_payment_failed — subscribe the");
+    lines.push("endpoint to them in the Stripe Dashboard. Meanwhile press Resend on each invoice: it reads Stripe and records");
+    lines.push("the payment, or reopens a failed one and emails the customer:");
+    for (const b of f.bankAnswersNotRecorded) {
+      lines.push(`  • ${b.invoiceNumber} — ${b.intentId} ${b.stripeState} on Stripe; the invoice still says processing`);
     }
     lines.push("");
   }
@@ -310,7 +365,7 @@ export function formatPaymentFindings(f: PaymentIntegrityFindings): string[] {
   if (f.stuckPaymentProcessing.length > 0) {
     lines.push(`BANK PAYMENTS PROCESSING FOR OVER ${STUCK_PROCESSING_DAYS} DAYS (${f.stuckPaymentProcessing.length})`);
     lines.push("No bank takes this long. Check each payment in Stripe — if it settled or failed there, the webhook is");
-    lines.push("not receiving checkout.session.async_payment_succeeded / async_payment_failed:");
+    lines.push("not receiving checkout.session.async_payment_succeeded / async_payment_failed (press Resend to sync it):");
     for (const s of f.stuckPaymentProcessing) {
       lines.push(`  • ${s.invoiceNumber} — ${s.intentId ?? "(no payment id)"} — processing since ${s.since} (${s.days} days)`);
     }

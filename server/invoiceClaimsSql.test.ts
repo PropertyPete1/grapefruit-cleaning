@@ -293,6 +293,28 @@ describe("processing state", () => {
     Object.assign(inv(), { status: "void" });
     expect(await db.markInvoicePaymentProcessing(1, "pi_A")).toBe(false);
   });
+  it("a clear can restart the reminder sequence in the same write", async () => {
+    Object.assign(inv(), { paymentProcessingIntentId: "pi_A", reminderCount: 2, lastReminderAt: new Date(), reminderExhaustedAlertAt: new Date() });
+    const now = new Date("2026-10-04T15:00:00Z");
+    await db.clearInvoicePaymentProcessing(1, "pi_A", { linkExpiresAt: new Date(), dueDate: "2026-10-11", restartRemindersAt: now });
+    expect(inv()).toMatchObject({ linkSentAt: now, reminderCount: 0, lastReminderAt: null, reminderExhaustedAlertAt: null });
+  });
+
+  it("refuses to record money by hand while a bank payment is processing", async () => {
+    Object.assign(inv(), { amount: 180, amountCents: 18000, paymentProcessingAt: new Date(), paymentProcessingIntentId: "pi_ach" });
+    const result = await db.recordOfflineInvoicePayment({
+      invoiceId: 1,
+      amountCents: 18000,
+      method: "cash",
+      tipAmountCents: 0,
+      receivedOn: "2026-10-04",
+      recordedByUserId: 9,
+    });
+    expect(result).toEqual({ outcome: "payment_processing", paymentIntentId: "pi_ach" });
+    expect(inv().status).toBe("sent");
+    expect(sqlHarness.tables.payments).toHaveLength(0);
+  });
+
   it("only THAT payment's failure clears it, and the clear renews the link window", async () => {
     await db.markInvoicePaymentProcessing(1, "pi_A");
     const window = { linkExpiresAt: new Date(Date.now() + 7 * 86_400_000), dueDate: "2026-10-11" };
@@ -301,39 +323,70 @@ describe("processing state", () => {
     expect(await db.clearInvoicePaymentProcessing(1, "pi_A", window)).toBe(true);
     expect(inv()).toMatchObject({ paymentProcessingAt: null, paymentProcessingIntentId: null, dueDate: "2026-10-11" });
   });
-  it("promotes only the duplicate on file, only once nothing is processing", async () => {
-    Object.assign(inv(), { refundNeeded: true, lastDuplicateIntentId: "pi_B", paymentProcessingIntentId: "pi_A" });
+  it("promotes only the duplicate on file, only while the failed payment is still the one processing — clearing it in the same write", async () => {
+    Object.assign(inv(), { refundNeeded: true, lastDuplicateIntentId: "pi_B", paymentProcessingAt: new Date(), paymentProcessingIntentId: "pi_A" });
     sqlHarness.tables.payments.push({ id: 1, invoiceId: 1, stripePaymentIntentId: "pi_B", duplicate: true, status: "succeeded" });
-    expect(await db.promoteDuplicatePayment(1, "pi_B", { paidAt: new Date() })).toBe(false); // still processing
-    Object.assign(inv(), { paymentProcessingIntentId: null });
-    expect(await db.promoteDuplicatePayment(1, "pi_X", { paidAt: new Date() })).toBe(false); // not the one on file
-    expect(await db.promoteDuplicatePayment(1, "pi_B", { paidAt: new Date(), paidMethod: "card" })).toBe(true);
-    expect(inv()).toMatchObject({ status: "paid", stripePaymentIntentId: "pi_B", refundNeeded: false, lastDuplicateIntentId: null });
+    expect(await db.promoteDuplicatePayment(1, "pi_B", "pi_other", { paidAt: new Date() })).toBe(false); // a different payment is processing
+    expect(await db.promoteDuplicatePayment(1, "pi_X", "pi_A", { paidAt: new Date() })).toBe(false); // not the one on file
+    expect(await db.promoteDuplicatePayment(1, "pi_B", "pi_A", { paidAt: new Date(), paidMethod: "card" })).toBe(true);
+    expect(inv()).toMatchObject({
+      status: "paid",
+      stripePaymentIntentId: "pi_B",
+      refundNeeded: false,
+      lastDuplicateIntentId: null,
+      paymentProcessingAt: null,
+      paymentProcessingIntentId: null,
+    });
     expect(sqlHarness.tables.payments[0]!.duplicate).toBe(false);
+  });
+
+  it("keeps the refund flag up when another duplicate still waits on a refund", async () => {
+    Object.assign(inv(), { refundNeeded: true, lastDuplicateIntentId: "pi_C", paymentProcessingIntentId: "pi_A" });
+    sqlHarness.tables.payments.push(
+      { id: 1, invoiceId: 1, stripePaymentIntentId: "pi_B", duplicate: true, status: "succeeded" },
+      { id: 2, invoiceId: 1, stripePaymentIntentId: "pi_C", duplicate: true, status: "succeeded" }
+    );
+    expect(await db.promoteDuplicatePayment(1, "pi_C", "pi_A", { paidAt: new Date() })).toBe(true);
+    expect(inv().refundNeeded).toBe(true);
+  });
+
+  it("marks a refunded duplicate and drops the flag once none is left waiting", async () => {
+    Object.assign(inv(), { status: "paid", refundNeeded: true, lastDuplicateIntentId: "pi_B" });
+    sqlHarness.tables.payments.push({ id: 1, invoiceId: 1, stripePaymentIntentId: "pi_B", duplicate: true, status: "succeeded" });
+    await db.markDuplicatePaymentRefunded(1, "pi_B");
+    expect(sqlHarness.tables.payments[0]!.status).toBe("refunded");
+    expect(inv()).toMatchObject({ refundNeeded: false, lastDuplicateIntentId: null });
   });
 });
 
 describe("the minting claim", () => {
   it("is a compare-and-set on the attempt: of two racers reading attempt 0, exactly one wins", async () => {
-    const [a, b] = await Promise.all([db.claimInvoiceCheckoutAttempt(1, 0), db.claimInvoiceCheckoutAttempt(1, 0)]);
+    const [a, b] = await Promise.all([db.claimInvoiceCheckoutAttempt(1, 0, null), db.claimInvoiceCheckoutAttempt(1, 0, null)]);
     expect([a, b].filter(Boolean)).toHaveLength(1);
     expect(inv().checkoutAttempt).toBe(1);
   });
   it("clears the old session pointer, so a loser sees 'being minted', not 'reuse this'", async () => {
     Object.assign(inv(), { stripeSessionId: "cs_old", stripeSessionExpiresAt: new Date() });
-    await db.claimInvoiceCheckoutAttempt(1, 0);
+    expect(await db.claimInvoiceCheckoutAttempt(1, 0, "cs_old")).toBe(true);
     expect(inv()).toMatchObject({ stripeSessionId: null, stripeSessionExpiresAt: null });
+  });
+  it("is also a compare-and-set on the session pointer: a session recorded since the read is never dropped", async () => {
+    // A visit read the row with no session (a claim's lease had lapsed); before it
+    // claimed, the slow original minter recorded cs_live at the same attempt.
+    Object.assign(inv(), { checkoutAttempt: 1, stripeSessionId: "cs_live" });
+    expect(await db.claimInvoiceCheckoutAttempt(1, 1, null)).toBe(false);
+    expect(inv().stripeSessionId).toBe("cs_live");
   });
   it("is refused while a payment is processing, or once the invoice is settled", async () => {
     Object.assign(inv(), { paymentProcessingIntentId: "pi_ach" });
-    expect(await db.claimInvoiceCheckoutAttempt(1, 0)).toBe(false);
+    expect(await db.claimInvoiceCheckoutAttempt(1, 0, null)).toBe(false);
     Object.assign(inv(), { paymentProcessingIntentId: null, status: "paid" });
-    expect(await db.claimInvoiceCheckoutAttempt(1, 0)).toBe(false);
+    expect(await db.claimInvoiceCheckoutAttempt(1, 0, null)).toBe(false);
     Object.assign(inv(), { status: "void" });
-    expect(await db.claimInvoiceCheckoutAttempt(1, 0)).toBe(false);
+    expect(await db.claimInvoiceCheckoutAttempt(1, 0, null)).toBe(false);
   });
   it("stores the minted session only while its attempt is current, and always logs it", async () => {
-    await db.claimInvoiceCheckoutAttempt(1, 0);
+    await db.claimInvoiceCheckoutAttempt(1, 0, null);
     const expiresAt = new Date(Date.now() + 86_400_000);
     expect(await db.recordInvoiceCheckoutSession(1, 1, { stripeSessionId: "cs_1", expiresAt })).toBe(true);
     expect(inv()).toMatchObject({ stripeSessionId: "cs_1" });
@@ -341,8 +394,18 @@ describe("the minting claim", () => {
     expect(inv().stripeSessionId).toBe("cs_1");
     expect(sqlHarness.tables.invoice_checkout_sessions.map(r => r.stripeSessionId)).toEqual(["cs_1", "cs_stale"]);
   });
+  it("never stores a fresh session on an invoice that was settled, voided or started processing while Stripe answered", async () => {
+    const expiresAt = new Date(Date.now() + 86_400_000);
+    for (const change of [{ status: "paid" }, { status: "void" }, { paymentProcessingIntentId: "pi_ach" }]) {
+      sqlHarness.tables.invoices = [invoiceRow()];
+      await db.claimInvoiceCheckoutAttempt(1, 0, null);
+      Object.assign(inv(), change);
+      expect(await db.recordInvoiceCheckoutSession(1, 1, { stripeSessionId: "cs_late", expiresAt })).toBe(false);
+      expect(inv().stripeSessionId).toBeNull();
+    }
+  });
   it("a released claim frees only the claimant's own, still-empty attempt", async () => {
-    await db.claimInvoiceCheckoutAttempt(1, 0);
+    await db.claimInvoiceCheckoutAttempt(1, 0, null);
     await db.releaseInvoiceCheckoutClaim(1, 1);
     expect(inv().checkoutClaimedAt).toBeNull();
     Object.assign(inv(), { checkoutClaimedAt: new Date(), stripeSessionId: "cs_1" });
