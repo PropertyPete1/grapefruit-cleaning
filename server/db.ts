@@ -26,6 +26,7 @@ import {
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { blocksSlot, STALE_DEPOSIT_MINUTES } from "./bookingRules";
+import { MAX_BALANCE_REMINDERS } from "./balanceRules";
 import { customerFillsFor } from "./brainWriteRules";
 import { dollarsToCents, exactDollars, legacyWholeDollars } from "@shared/money";
 import { contactMatchesCustomer, normalizeEmail, normalizePhone } from "@shared/priceLock";
@@ -1637,6 +1638,20 @@ export async function restartBalanceReminders(id: number, now: Date): Promise<bo
   return affectedRows(result) > 0;
 }
 
+/**
+ * Stops the automatic reminders on an open invoice, as if both had gone out
+ * and the owner had been told — for a bill only a person can sort out now (a
+ * payment the owner refunded, a disputed duplicate, a check that could not
+ * run). A manual Resend restarts the sequence.
+ */
+export async function holdBalanceReminders(id: number, now: Date): Promise<void> {
+  const db = requireDb(await getDb());
+  await db
+    .update(invoices)
+    .set({ reminderCount: MAX_BALANCE_REMINDERS, reminderExhaustedAlertAt: now })
+    .where(and(eq(invoices.id, id), notInArray(invoices.status, ["paid", "void"])));
+}
+
 /** The payments row this intent already produced on this invoice, if any — a recorded duplicate's redelivery guard. */
 export async function findInvoicePaymentByIntent(invoiceId: number, stripePaymentIntentId: string) {
   const db = requireDb(await getDb());
@@ -1879,7 +1894,7 @@ export async function recordInvoiceCheckoutSession(
  */
 export async function endInvoiceCheckoutSession(
   stripeSessionId: string,
-  reason: "expired" | "payment_failed" | "closed" | "superseded",
+  reason: "expired" | "payment_failed" | "closed" | "superseded" | "refunded",
   at: Date = new Date()
 ): Promise<void> {
   const db = requireDb(await getDb());

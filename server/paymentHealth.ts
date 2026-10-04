@@ -165,8 +165,9 @@ export function sessionPaymentState(
   if (!intent || typeof intent === "string") return null;
   if (intent.status === "succeeded") {
     const charge = intent.latest_charge;
-    // Fully refunded: no money held. A partial refund still holds money.
-    if (charge && typeof charge === "object" && charge.refunded) return null;
+    // Fully refunded, or taken back by a dispute: no money held. A partial
+    // refund still holds money.
+    if (charge && typeof charge === "object" && (charge.refunded || charge.disputed)) return null;
     return { intentId: intent.id, state: "succeeded" };
   }
   if (session.status !== "complete") return null;

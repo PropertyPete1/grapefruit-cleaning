@@ -160,6 +160,10 @@ export const fakeDb = {
     Object.assign(invoice, { linkSentAt: now, reminderCount: 0, lastReminderAt: null, reminderExhaustedAlertAt: null });
     return true;
   },
+  holdBalanceReminders: async (id: number, now: Date) => {
+    const invoice = kit.invoices.get(id);
+    if (invoice && !settled(invoice)) Object.assign(invoice, { reminderCount: 2, reminderExhaustedAlertAt: now });
+  },
   listHeldDuplicatePayments: async (invoiceId: number) =>
     kit.payments
       .filter(p => p.invoiceId === invoiceId && p.duplicate && p.status === "succeeded")

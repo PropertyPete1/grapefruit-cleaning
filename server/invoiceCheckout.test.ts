@@ -47,6 +47,11 @@ function hooks(amountCents = 12000): CheckoutHooks {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The real hook settles the invoice; the stand-in does just that, so the
+  // machine's "believe the invoice" re-read sees it.
+  onPaymentSucceeded.mockImplementation(async (id: number, intentId: string | null) => {
+    Object.assign(kit.invoices.get(id)!, { status: "paid", stripePaymentIntentId: intentId, paymentProcessingAt: null, paymentProcessingIntentId: null });
+  });
   resetKit();
   seedInvoice({ id: INVOICE_ID, number: "INV-SM-1", customerId: 1, amount: 120, amountCents: 12000, payToken: "tok" });
 });
@@ -185,6 +190,15 @@ describe("openInvoiceCheckout", () => {
     expect(result).toEqual({ kind: "paid" });
     expect(onPaymentSucceeded).toHaveBeenCalledWith(INVOICE_ID, "pi_card");
     expect(stripeKit.createCalls).toHaveLength(1);
+  });
+
+  it("never reports paid when settlement refused the payment — the session is treated as gone", async () => {
+    await openInvoiceCheckout(INVOICE_ID, hooks());
+    customerPays("cs_test_1", "card", "pi_refunded");
+    onPaymentSucceeded.mockImplementationOnce(async () => undefined); // refused: refunded, or already in the ledger
+    const result = await openInvoiceCheckout(INVOICE_ID, hooks());
+    expect(result).toMatchObject({ kind: "redirect", reused: false, sessionId: "cs_test_2" });
+    expect(kit.sessionLog.find(r => r.stripeSessionId === "cs_test_1")!.endReason).toBe("refunded");
   });
 
   it("asks Stripe about a processing payment and settles it once the bank has cleared it", async () => {

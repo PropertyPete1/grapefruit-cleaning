@@ -121,6 +121,17 @@ describe("Stripe's record against the app's", () => {
     expect((await inspectPaymentIntegrity(new Date())).duplicatePayments).toEqual([]);
   });
 
+  it("counts a disputed payment as money taken back, not held", async () => {
+    const s1 = await stripeSession(9);
+    const s2 = await stripeSession(9);
+    customerPays(s1, "card", "pi_keep");
+    customerPays(s2, "card", "pi_charged_back");
+    seedInvoice({ ...kit.invoices.get(9)!, status: "paid", stripePaymentIntentId: "pi_keep" });
+    expect((await inspectPaymentIntegrity(new Date())).duplicatePayments).toHaveLength(1);
+    stripeKit.intents.get("pi_charged_back")!.disputed = true;
+    expect((await inspectPaymentIntegrity(new Date())).duplicatePayments).toEqual([]);
+  });
+
   it("one payment per invoice is silent", async () => {
     const s1 = await stripeSession(9);
     customerPays(s1, "card", "pi_card");

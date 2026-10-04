@@ -949,6 +949,8 @@ export type BalancePaymentOutcome =
   | { outcome: "duplicate" }
   /** Stripe shows this payment fully refunded: no money is held, so nothing is applied or recorded. */
   | { outcome: "refunded" }
+  /** Disputed or partly refunded on Stripe: the money is not cleanly held, so it settles nothing. */
+  | { outcome: "unclear" }
   /** A second real payment: recorded as a duplicate, never applied, owner alerted. */
   | { outcome: "refund_needed" }
   | { outcome: "paid" };
@@ -990,6 +992,10 @@ export async function applyBalancePayment(
   if (live?.fullyRefunded) {
     console.warn(`[Balance] Invoice ${invoiceId}: ignoring ${paymentIntentId} — Stripe shows it fully refunded`);
     return { outcome: "refunded" };
+  }
+  if (live && (live.disputed || live.refunded)) {
+    console.warn(`[Balance] Invoice ${invoiceId}: not settling with ${paymentIntentId} — Stripe shows it disputed or partly refunded`);
+    return { outcome: "unclear" };
   }
 
   // Bounded retries: each failed claim re-reads what the winner left behind.
@@ -1306,9 +1312,26 @@ export async function clearBalancePaymentProcessing(
   if (invoice.paymentProcessingIntentId !== paymentIntentId) return { outcome: "not_processing" };
 
   const live = await readPaymentIntent(paymentIntentId);
-  if (live.state === "succeeded") {
+  if (live.state === "succeeded" && !live.refunded && !live.disputed) {
     await applyBalancePayment(invoiceId, paymentIntentId, { method: live.method ?? "bank" });
     return { outcome: "succeeded" };
+  }
+  // It succeeded, but the owner refunded it (or the customer disputed it)
+  // before the app was told: it pays nothing. The invoice must not sit in
+  // "processing" forever — clear it, pause the reminders, and let the owner
+  // decide (they may have collected another way). No "pay again" email.
+  if (live.state === "succeeded") {
+    const window = { linkExpiresAt: invoice.linkExpiresAt ?? new Date(), dueDate: invoice.dueDate ?? new Date().toISOString().slice(0, 10) };
+    if (!(await db.clearInvoicePaymentProcessing(invoiceId, paymentIntentId, window))) return { outcome: "not_processing" };
+    await db.holdBalanceReminders(invoiceId, new Date());
+    await sendOwnerAlertSafely(
+      `Bank payment ${live.fullyRefunded ? "refunded" : "disputed or part-refunded"} — ${invoice.number}`,
+      [
+        `The bank payment ${paymentIntentId} on invoice ${invoice.number} went through, but Stripe shows it ${live.fullyRefunded ? "refunded in full" : "disputed or partly refunded"}, so it no longer pays the invoice.`,
+        `The invoice is open again with the automatic reminders paused, and the customer was not emailed. Record the payment by hand if it was settled another way, or resend the link.`,
+      ].join("\n")
+    );
+    return { outcome: "cleared" };
   }
   if (live.state !== "failed") {
     console.warn(`[Balance] Invoice ${invoiceId}: ignoring a stale failure event — ${paymentIntentId} is ${live.state} on Stripe`);
@@ -1389,8 +1412,9 @@ export async function clearBalancePaymentProcessing(
   if (!cleared) return { outcome: "not_processing" };
 
   // Money may still be held (part-refunded or disputed duplicates): the owner
-  // decides; the customer is not told to pay again.
+  // decides; the customer is not told to pay again — and not reminded either.
   if (unclear.length > 0) {
+    await db.holdBalanceReminders(invoiceId, now);
     await sendOwnerAlertSafely(
       `Bank payment failed — check the duplicate by hand (${invoice.number})`,
       [
@@ -1406,17 +1430,35 @@ export async function clearBalancePaymentProcessing(
   // or landed on a session it no longer points at: ask Stripe before telling
   // the customer to pay again.
   if (invoice.checkoutAttempt === 0 && invoice.stripeSessionId) {
-    const look = await openBalanceCheckout({
-      invoiceId,
-      customerEmail: (await db.getCustomerById(invoice.customerId))?.email ?? "",
-      origin: publicOrigin(undefined),
-      mint: false,
-    });
-    if (look.kind === "paid" || look.kind === "processing") {
+    try {
+      await openBalanceCheckout({
+        invoiceId,
+        customerEmail: (await db.getCustomerById(invoice.customerId))?.email ?? "",
+        origin: publicOrigin(undefined),
+        mint: false,
+      });
+    } catch (error) {
+      // The processing state is already cleared, so a webhook retry would not
+      // come back here: say so now, and do not tell the customer to pay again
+      // on a check that did not run.
+      console.error(`[Balance] Invoice ${invoiceId}: could not check Stripe for other payments:`, error);
+      await db.holdBalanceReminders(invoiceId, now);
+      await sendOwnerAlertSafely(
+        `Bank payment failed — check Stripe before chasing (${invoice.number})`,
+        [
+          `The customer's bank payment ${paymentIntentId} on invoice ${invoice.number} failed, and Stripe could not be read to see whether another payment of theirs covers it.`,
+          `The customer was NOT emailed and the reminders are paused. Press "Check with Stripe" on the invoice in Admin → Invoices, then resend if nothing covers it.`,
+        ].join("\n")
+      );
+      return { outcome: "cleared" };
+    }
+    // What the invoice now says decides — not what the look reported.
+    const after = await db.getInvoiceById(invoiceId);
+    if (after && (after.status === "paid" || after.paymentProcessingIntentId)) {
       await sendOwnerAlertSafely(
         `Bank payment failed, another payment covers it — ${invoice.number}`,
         [
-          `The customer's bank payment ${paymentIntentId} on invoice ${invoice.number} failed, but another payment of theirs on this invoice ${look.kind === "paid" ? "has already landed and now settles it" : "is still processing and now owns it"}.`,
+          `The customer's bank payment ${paymentIntentId} on invoice ${invoice.number} failed, but another payment of theirs on this invoice ${after.status === "paid" ? "has already landed and now settles it" : "is still processing and now owns it"}.`,
           `The customer was not asked to pay again.`,
         ].join("\n")
       );

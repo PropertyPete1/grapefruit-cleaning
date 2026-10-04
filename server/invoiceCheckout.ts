@@ -316,23 +316,53 @@ async function reconcileLegacySessions(
   mayClose: boolean
 ): Promise<"done" | "rescan"> {
   const since = Math.floor((new Date(invoice.createdAt).getTime() - 2 * DAY_MS) / 1000);
-  const completed = await listLegacySessions(invoice.id, {
-    status: "complete",
-    created: { gte: since },
-    expand: ["data.payment_intent.latest_charge"],
-    ...(hooks.customerEmail ? { customer_details: { email: hooks.customerEmail } } : {}),
-  });
+  // The old code prefilled each session with the customer's email of the
+  // day. Read under today's address and under the one on the stored session,
+  // so an email corrected after the link went out does not hide a payment.
+  const stored = invoice.stripeSessionId ? await retrieveSession(invoice.stripeSessionId) : null;
+  const emails = Array.from(
+    new Set([hooks.customerEmail, stored?.customer_details?.email ?? stored?.customer_email].filter((e): e is string => Boolean(e)))
+  );
+  const byId = new Map<string, Stripe.Checkout.Session>();
+  for (const email of emails.length > 0 ? emails : [null]) {
+    const found = await listLegacySessions(invoice.id, {
+      status: "complete",
+      created: { gte: since },
+      expand: ["data.payment_intent.latest_charge"],
+      ...(email ? { customer_details: { email } } : {}),
+    });
+    for (const session of found) byId.set(session.id, session);
+  }
+  const completed = Array.from(byId.values()).sort((a, b) => a.created - b.created);
   const inFlight: string[] = [];
+  const unclear: string[] = [];
   for (const session of completed) {
     const view = classifySession(session);
     const intent = typeof session.payment_intent === "object" && session.payment_intent ? session.payment_intent : null;
     if (view.kind === "paid") {
-      if (intent && describeIntent(intent as IntentLike).fullyRefunded) continue;
+      const facts = intent ? describeIntent(intent as IntentLike) : null;
+      // Refunded in full: no money held. Disputed or part-refunded: the money
+      // is not cleanly held, so it never settles the bill — a clean payment
+      // after it may, and the owner hears about it.
+      if (facts?.fullyRefunded) continue;
+      if (facts && (facts.disputed || facts.refunded)) {
+        if (view.paymentIntentId) unclear.push(view.paymentIntentId);
+        continue;
+      }
       await hooks.onPaymentSucceeded(invoice.id, view.paymentIntentId);
     } else if (view.kind === "processing" && view.paymentIntentId) {
       inFlight.push(view.paymentIntentId);
       await db.markInvoicePaymentProcessing(invoice.id, view.paymentIntentId, now);
     }
+  }
+  if (unclear.length > 0 && hooks.alertOwner) {
+    await hooks.alertOwner(
+      `Disputed or part-refunded payment — ${invoice.number}`,
+      [
+        `Invoice ${invoice.number} has a payment from before the one-checkout fix that is disputed or partly refunded on Stripe: ${unclear.join(", ")}.`,
+        `It was not used to settle the invoice. Check it in Stripe and settle the invoice by hand if the customer has in fact paid.`,
+      ].join("\n")
+    );
   }
   if (inFlight.length > 1 && hooks.alertOwner) {
     await hooks.alertOwner(
@@ -384,6 +414,10 @@ export async function openInvoiceCheckout(
   const sleep = options.sleep ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
   const mayMint = options.mint !== false;
   let waitedMs = 0;
+  /** Stored sessions whose payment settlement refused this call — treated as gone. */
+  const dead = new Set<string>();
+  /** Processing intents already acted on this call — a second look returns what the invoice says. */
+  const handled = new Set<string>();
 
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     const invoice = await db.getInvoiceById(invoiceId);
@@ -400,13 +434,16 @@ export async function openInvoiceCheckout(
       if (mayMint && invoice.checkoutAttempt === 0 && invoice.stripeSessionId) {
         if ((await closeLegacySessions(invoice, now(), null)) === "rescan") continue;
       }
-      const live = await readIntentSafely(invoice.paymentProcessingIntentId);
-      if (live.state === "succeeded") {
-        await hooks.onPaymentSucceeded(invoice.id, invoice.paymentProcessingIntentId);
-        return { kind: "paid" };
-      }
-      if (live.state === "failed") {
-        await hooks.onPaymentFailed(invoice.id, invoice.paymentProcessingIntentId);
+      const processingId = invoice.paymentProcessingIntentId;
+      const live = await readIntentSafely(processingId);
+      if ((live.state === "succeeded" || live.state === "failed") && !handled.has(processingId)) {
+        handled.add(processingId);
+        // Succeeded settles it — unless Stripe shows it refunded since, which
+        // the failure path clears like a failure. Either way the next round
+        // reads what the invoice now says, never what we hoped.
+        if (live.state === "succeeded") await hooks.onPaymentSucceeded(invoice.id, processingId);
+        const after = await db.getInvoiceById(invoiceId);
+        if (after?.paymentProcessingIntentId === processingId) await hooks.onPaymentFailed(invoice.id, processingId);
         continue;
       }
       return {
@@ -427,7 +464,10 @@ export async function openInvoiceCheckout(
 
     const expectedCents = options.expectedAmountCents ?? amountCentsOf(invoice);
 
-    if (invoice.stripeSessionId) {
+    if (invoice.stripeSessionId && dead.has(invoice.stripeSessionId)) {
+      // Its payment was refused (refunded, or a recorded duplicate): nothing
+      // live to reopen. Fall through to mint a fresh session.
+    } else if (invoice.stripeSessionId) {
       const session = await retrieveSession(invoice.stripeSessionId);
       if (!session) {
         // Stripe has never heard of it (a test-mode id in live, say): nothing
@@ -448,8 +488,16 @@ export async function openInvoiceCheckout(
           if ((await closeSession(session.id)) === "completed") continue;
           await db.endInvoiceCheckoutSession(session.id, "closed", now());
         } else if (view.kind === "paid") {
+          // Settle — and then believe the invoice, not the session: a session
+          // still reads "paid" after a full refund, and a recorded duplicate is
+          // refused. Such a session is dead for this invoice.
           await hooks.onPaymentSucceeded(invoice.id, view.paymentIntentId);
-          return { kind: "paid" };
+          const after = await db.getInvoiceById(invoiceId);
+          if (after?.status === "paid") return { kind: "paid" };
+          if (after?.paymentProcessingIntentId || after?.status === "void") continue;
+          dead.add(session.id);
+          await db.endInvoiceCheckoutSession(session.id, "refunded", now());
+          continue;
         } else if (view.kind === "processing") {
           // Checkout finished with a bank payment and the webhook has not said
           // so yet: record it now, so the reminders stop and the next visit
