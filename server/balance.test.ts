@@ -20,6 +20,7 @@ const mockUpdateBooking = vi.fn();
 const mockSessionCreate = vi.fn();
 const mockSessionExpire = vi.fn();
 const mockSessionRetrieve = vi.fn();
+const mockIntentRetrieve = vi.fn();
 const mockClaimCheckout = vi.fn();
 const mockRecordCheckoutSession = vi.fn();
 const mockFindPaymentByIntent = vi.fn();
@@ -57,6 +58,7 @@ vi.mock("./stripe", () => ({
         retrieve: (...args: unknown[]) => mockSessionRetrieve(...args),
       },
     },
+    paymentIntents: { retrieve: (...args: unknown[]) => mockIntentRetrieve(...args) },
   }),
 }));
 
@@ -519,8 +521,26 @@ describe("resendBalanceLink", () => {
     mockGetInvoiceById.mockResolvedValue({ ...INVOICE, paymentProcessingAt: new Date(), paymentProcessingIntentId: "pi_ach" });
     const result = await resendBalanceLink(501, ORIGIN);
     expect(result.outcome).toBe("payment_processing");
+    // Refused off the row itself, before any Stripe call at all.
+    expect(mockSessionRetrieve).not.toHaveBeenCalled();
+    expect(mockIntentRetrieve).not.toHaveBeenCalled();
     expect(mockSessionCreate).not.toHaveBeenCalled();
     expect(mockSendMail).not.toHaveBeenCalled();
+  });
+
+  it("Admin → Invoices reads a processing invoice as 'processing' / 'Bank payment processing'", async () => {
+    const dbModule = await import("./db");
+    vi.mocked(dbModule.listInvoices).mockResolvedValueOnce([
+      {
+        invoice: { ...INVOICE, paymentProcessingAt: new Date(), paymentProcessingIntentId: "pi_ach" },
+        booking: null,
+        customer: null,
+      },
+    ] as never);
+    const caller = adminRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+    const [row] = await caller.invoices();
+    expect(row).toMatchObject({ linkStatus: "processing", paymentStatus: "payment_processing" });
+    expect(row).not.toHaveProperty("payToken");
   });
 
   it("says why through the admin router when a payment is processing", async () => {

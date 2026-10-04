@@ -410,6 +410,19 @@ describe("PAY WITH CASH on the balance email", () => {
     expect(mockNotifyOwner).toHaveBeenCalledTimes(1);
   });
 
+  it("a customer whose bank payment is processing is told so — nothing to choose, nothing recorded", async () => {
+    mockGetInvoiceByPayToken.mockResolvedValue({ ...INVOICE, paymentProcessingAt: new Date(), paymentProcessingIntentId: "pi_ach" });
+    const routes = captureRoutes();
+    for (const method of ["GET", "POST"] as const) {
+      const res = fakeRes();
+      await routes[`${method} /api/pay/balance/:token/cash`]!(request(method), res as unknown as Response);
+      expect(res.body).toContain("Your bank payment is processing");
+      expect(res.body).not.toContain('method="post"');
+    }
+    expect(mockClaimCashPreference).not.toHaveBeenCalled();
+    expect(mockNotifyOwner).not.toHaveBeenCalled();
+  });
+
   it("a customer who already chose cash sees they are set, in their language", async () => {
     mockGetInvoiceByPayToken.mockResolvedValue({ ...INVOICE, paymentPreference: "cash" });
     mockGetBookingById.mockResolvedValue({ ...BOOKING, locale: "es" });

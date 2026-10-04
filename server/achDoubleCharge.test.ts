@@ -250,6 +250,23 @@ describe("ACH pending, then the customer retries", () => {
     expect(String((await visit()).body)).toContain("Payment received");
   });
 
+  it("labels the settlement a bank payment when only payment_intent.succeeded reports it", async () => {
+    await visit();
+    const sessionId = invoice().stripeSessionId!;
+    customerPays(sessionId, "ach", "pi_ach_1");
+    await deliver(intentEvent("payment_intent.processing", "pi_ach_1"));
+    expect(invoice().paymentProcessingIntentId).toBe("pi_ach_1");
+
+    bankSettles("pi_ach_1", "succeeded");
+    await deliver(intentEvent("payment_intent.succeeded", "pi_ach_1"));
+
+    expect(invoice()).toMatchObject({ status: "paid", paidMethod: "bank", stripePaymentIntentId: "pi_ach_1" });
+    expect(kit.payments[0]).toMatchObject({ method: "bank" });
+    // The session family arriving afterwards is a redelivery.
+    await deliver(sessionEvent("checkout.session.async_payment_succeeded", sessionId));
+    expect(kit.payments).toHaveLength(1);
+  });
+
   it("lands Stripe's Back button on a page whose button reopens the same session", async () => {
     const first = await visit();
     const back = await visit({ cancelled: "1" });
