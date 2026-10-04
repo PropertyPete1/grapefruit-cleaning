@@ -25,6 +25,7 @@ const row = {
   bookingStatus: "pending_deposit" as string,
   invoiceStatus: "sent" as string,
   invoiceRefundNeeded: false,
+  lastDuplicateIntentId: null as string | null,
 };
 
 const BOOKING = {
@@ -76,6 +77,7 @@ vi.mock("./db", () => ({
     ...INVOICE,
     status: row.invoiceStatus,
     refundNeeded: row.invoiceRefundNeeded,
+    lastDuplicateIntentId: row.lastDuplicateIntentId,
     paidVia: row.invoiceStatus === "paid" ? "stripe" : null,
     stripePaymentIntentId: row.invoiceStatus === "paid" ? "pi_race" : null,
   })),
@@ -98,12 +100,15 @@ vi.mock("./db", () => ({
     row.invoiceStatus = "paid";
     return true;
   }),
-  // UPDATE invoices SET refundNeeded=1 WHERE id=? AND refundNeeded=0
-  flagInvoiceRefundNeeded: vi.fn(async () => {
-    if (row.invoiceRefundNeeded) return false;
+  // UPDATE invoices SET refundNeeded=1, lastDuplicateIntentId=?
+  //   WHERE id=? AND lastDuplicateIntentId <=> ? IS NOT TRUE AND stripePaymentIntentId <=> ? IS NOT TRUE
+  flagInvoiceDuplicatePayment: vi.fn(async (_id: number, intentId: string) => {
+    if (row.lastDuplicateIntentId === intentId) return false;
     row.invoiceRefundNeeded = true;
+    row.lastDuplicateIntentId = intentId;
     return true;
   }),
+  findInvoicePaymentByIntent: vi.fn(async () => undefined),
 }));
 
 vi.mock("./emails", () => ({
@@ -125,6 +130,7 @@ beforeEach(() => {
   row.bookingStatus = "pending_deposit";
   row.invoiceStatus = "sent";
   row.invoiceRefundNeeded = false;
+  row.lastDuplicateIntentId = null;
   mockCreatePayment.mockReset();
   mockIncrementCoupon.mockReset();
   mockSendBookingEmails.mockReset();

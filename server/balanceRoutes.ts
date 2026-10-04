@@ -3,8 +3,12 @@
  *
  * A Stripe Checkout Session may live at most 24 hours, so the emailed link
  * points here instead of straight at Stripe. While the invoice's own 7-day
- * window is open this mints a fresh session and redirects; once the balance is
- * settled or the window closes it renders a short bilingual notice.
+ * window is open this opens the invoice's ONE live session — reopening it on
+ * every visit, minting a replacement only after it has expired or its payment
+ * failed — and redirects. A bank payment that is processing gets a "your
+ * payment is processing" page and no checkout at all; a settled, voided or
+ * lapsed link renders a short bilingual notice. See invoiceCheckout.ts for
+ * why: minting per visit is how an ACH customer was charged twice.
  *
  * PAY WITH CASH lives next to it: GET /api/pay/balance/:token/cash shows the
  * customer what they would be paying and asks them to confirm; the POST records
@@ -17,7 +21,7 @@
  */
 import type { Express, Request, Response } from "express";
 import { assertRateLimit } from "./antiSpam";
-import { balancePayUrl, createBalanceCheckoutSession, invoiceFacts, toInvoiceEmailData } from "./balance";
+import { balancePayUrl, invoiceFacts, openBalanceCheckout, toInvoiceEmailData } from "./balance";
 import { balanceLinkStatus } from "./balanceRules";
 import * as db from "./db";
 import { sendCashPreferenceAlert, type BalanceEmailData } from "./emails";
@@ -26,7 +30,7 @@ import { publicOrigin } from "./publicOrigin";
 const BRAND_CORAL = "#F26D5B";
 const BRAND_CREAM = "#FDF8F3";
 
-type NoticeKind = "paid" | "expired" | "notFound" | "error";
+type NoticeKind = "paid" | "processing" | "confirming" | "expired" | "notFound" | "error";
 
 const NOTICES: Record<NoticeKind, Record<"en" | "es", { title: string; body: string }>> = {
   paid: {
@@ -37,6 +41,26 @@ const NOTICES: Record<NoticeKind, Record<"en" | "es", { title: string; body: str
     es: {
       title: "Pago recibido — ¡gracias!",
       body: "Su saldo está pagado por completo. Le enviaremos el recibo por correo. ¡Fue un gusto limpiar para usted!",
+    },
+  },
+  processing: {
+    en: {
+      title: "Your bank payment is processing",
+      body: "Thank you — your bank payment is on its way. Bank payments take a few business days to clear, and we'll email your receipt as soon as it does. There's nothing else to do, and no need to pay again.",
+    },
+    es: {
+      title: "Su pago bancario está en proceso",
+      body: "Gracias — su pago bancario ya está en camino. Los pagos bancarios tardan algunos días hábiles en completarse y le enviaremos el recibo por correo en cuanto se acredite. No tiene que hacer nada más ni volver a pagar.",
+    },
+  },
+  confirming: {
+    en: {
+      title: "Thank you — we're confirming your payment",
+      body: "We haven't seen your payment come through yet. If you completed checkout, your receipt will arrive by email shortly. If you didn't finish, you can return to the payment page from the link in your invoice email.",
+    },
+    es: {
+      title: "Gracias — estamos confirmando su pago",
+      body: "Todavía no vemos su pago. Si completó el pago, recibirá el recibo por correo en breve. Si no terminó, puede volver a la página de pago con el enlace del correo de su factura.",
     },
   },
   expired: {
@@ -109,6 +133,35 @@ export function renderBalanceNotice(kind: NoticeKind, locale: "en" | "es"): stri
     locale,
     title,
     `<p style="margin:0;font-size:15px;line-height:1.65;color:#3d3733;">${esc(body)}</p>`
+  );
+}
+
+const CANCELLED_COPY = {
+  en: {
+    title: "Your payment wasn't completed",
+    body: "No payment was taken. Whenever you're ready, you can go back to the secure payment page.",
+    button: "Return to payment",
+  },
+  es: {
+    title: "Su pago no se completó",
+    body: "No se realizó ningún cobro. Cuando esté listo, puede volver a la página de pago segura.",
+    button: "Volver al pago",
+  },
+} as const;
+
+/**
+ * Where Stripe's Back/cancel lands. A page with a button, never a redirect:
+ * the pay link now reopens the invoice's live session, so redirecting from
+ * here would bounce the customer straight back into the checkout they just
+ * left.
+ */
+export function renderCancelledPage(locale: "en" | "es", payUrl: string): string {
+  const copy = CANCELLED_COPY[locale];
+  return renderStandalonePage(
+    locale,
+    copy.title,
+    `<p style="margin:0;font-size:15px;line-height:1.65;color:#3d3733;">${esc(copy.body)}</p>
+      <a href="${esc(payUrl)}" style="display:inline-block;margin-top:22px;padding:13px 28px;border-radius:999px;background:${BRAND_CORAL};color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;">${esc(copy.button)}</a>`
   );
 }
 
@@ -218,29 +271,62 @@ async function payBalanceHandler(req: Request, res: Response) {
     const locale =
       (booking?.locale as "en" | "es") ?? (customerForLocale?.preferredLocale as "en" | "es") ?? "en";
 
-    // Stripe sends the customer back here after a successful payment; the
-    // webhook may not have landed yet, so never re-open checkout in that case.
-    if (req.query.paid !== undefined) return notice("paid", locale);
+    const origin = requestOrigin(req);
+    const customer = customerForLocale;
+    const checkoutArgs = {
+      invoiceId: invoice.id,
+      booking,
+      customerEmail: customer?.email ?? "",
+      origin,
+      locale,
+    };
+
+    // Stripe sends the customer back here after checkout. Never re-open
+    // checkout from this URL — and never take "?paid" on faith either: a bank
+    // payment completes checkout without being paid. Stripe's own record of
+    // the session decides which page they see (and settles a card payment the
+    // webhook has not delivered yet).
+    if (req.query.paid !== undefined) {
+      if (invoice.status === "paid") return notice("paid", locale);
+      try {
+        const look = await openBalanceCheckout({ ...checkoutArgs, mint: false });
+        if (look.kind === "paid") return notice("paid", locale);
+        if (look.kind === "processing") return notice("processing", locale);
+      } catch (error) {
+        console.error(`[Balance] Could not read checkout state for invoice ${invoice.id}:`, error);
+      }
+      return notice("confirming", locale);
+    }
 
     const linkState = balanceLinkStatus(invoice);
     if (linkState === "paid") return notice("paid", locale);
-    // A balance invoice whose booking vanished is broken, not payable; a
-    // manual invoice never had one and is fine.
-    if (linkState !== "sent" || (invoice.kind === "balance" && !booking)) return notice("expired", locale);
-
-    const customer = customerForLocale;
+    // Back from Stripe without paying: a page with a way back, not a redirect
+    // loop into the same live session.
+    if (req.query.cancelled !== undefined && linkState === "sent") {
+      return res.type("html").send(renderCancelledPage(locale, balancePayUrl(origin, invoice.payToken ?? token)));
+    }
+    // "processing" still asks Stripe below — the bank may have answered since.
+    // A voided invoice, a lapsed window, or a balance invoice whose booking
+    // vanished is not payable; a manual invoice never had a booking and is fine.
+    if ((linkState !== "sent" && linkState !== "processing") || (invoice.kind === "balance" && !booking)) {
+      return notice("expired", locale);
+    }
     if (!customer) return notice("error", locale, 500);
 
-    const session = await createBalanceCheckoutSession({
-      invoice,
-      booking,
-      customerEmail: customer.email ?? "",
-      origin: requestOrigin(req),
-      locale,
-    });
-    await db.updateInvoice(invoice.id, { stripeSessionId: session.id });
-    if (!session.url) return notice("error", locale, 500);
-    return res.redirect(303, session.url);
+    const checkout = await openBalanceCheckout(checkoutArgs);
+    switch (checkout.kind) {
+      case "redirect":
+        return res.redirect(303, checkout.url);
+      case "processing":
+        return notice("processing", locale);
+      case "paid":
+        return notice("paid", locale);
+      case "closed":
+        return notice("expired", locale);
+      default:
+        // Another visit is opening this invoice's checkout right now.
+        return notice("error", locale, 503);
+    }
   } catch (error) {
     console.error("[Balance] Payment link handler error:", error);
     return notice("error", "en", 500);
@@ -277,6 +363,8 @@ async function cashChoiceHandler(req: Request, res: Response) {
 
     if (invoice.status === "paid") return notice("paid", locale);
     if (invoice.status === "void" || (invoice.kind === "balance" && !booking)) return notice("expired", locale);
+    // Paid by bank and waiting on it to clear: there is nothing to choose.
+    if (invoice.paymentProcessingAt) return notice("processing", locale);
     if (!customer) return notice("error", locale, 500);
 
     const origin = requestOrigin(req);

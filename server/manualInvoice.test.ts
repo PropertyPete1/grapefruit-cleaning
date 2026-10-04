@@ -28,6 +28,14 @@ const mockNotifyOwner = vi.fn();
 const mockSendTipRequest = vi.fn();
 
 vi.mock("./db", () => ({
+  // One-live-session checkout (invoiceCheckout.ts): this caller wins every
+  // claim and the stored session has always died, so each open mints.
+  claimInvoiceCheckoutAttempt: async () => true,
+  recordInvoiceCheckoutSession: async () => true,
+  releaseInvoiceCheckoutClaim: async () => undefined,
+  endInvoiceCheckoutSession: async () => undefined,
+  markInvoicePaymentProcessing: async () => true,
+  findInvoicePaymentByIntent: async () => undefined,
   getSetting: (...a: unknown[]) => mockGetSetting(...a),
   getCustomerById: (...a: unknown[]) => mockGetCustomerById(...a),
   getBookingById: (...a: unknown[]) => mockGetBookingById(...a),
@@ -35,7 +43,7 @@ vi.mock("./db", () => ({
   createInvoice: (...a: unknown[]) => mockCreateInvoice(...a),
   updateInvoice: (...a: unknown[]) => mockUpdateInvoice(...a),
   settleUnpaidInvoice: (...a: unknown[]) => mockSettleUnpaidInvoice(...a),
-  flagInvoiceRefundNeeded: vi.fn().mockResolvedValue(true),
+  flagInvoiceDuplicatePayment: vi.fn().mockResolvedValue(true),
   createPayment: (...a: unknown[]) => mockCreatePayment(...a),
   updateBooking: vi.fn(),
   listInvoices: vi.fn().mockResolvedValue([]),
@@ -44,7 +52,7 @@ vi.mock("./db", () => ({
 
 vi.mock("./stripe", () => ({
   getStripe: () => ({
-    checkout: { sessions: { create: (...a: unknown[]) => mockSessionCreate(...a), expire: vi.fn() } },
+    checkout: { sessions: { create: (...a: unknown[]) => mockSessionCreate(...a), retrieve: async (id: string) => ({ id, status: "expired", payment_status: "unpaid" }), expire: vi.fn() } },
   }),
 }));
 

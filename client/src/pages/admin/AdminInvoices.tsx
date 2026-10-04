@@ -58,11 +58,22 @@ const INVOICE_STATUSES = ["draft", "sent", "overdue", "void"] as const;
 /** Payment-link state → an existing StatusBadge colour. */
 const LINK_BADGE_STATUS: Record<string, string> = {
   sent: "sent",
+  processing: "processing",
   paid: "paid",
   expired: "expired",
+  void: "void",
   none: "draft",
   awaiting_approval: "pending_deposit",
 };
+
+/**
+ * Resend makes sense only for a link the customer could still be asked to
+ * use. Never while a bank payment is processing (a second link is how a
+ * second debit happens) and never on a paid, voided or unapproved invoice.
+ */
+function canResendLink(linkStatus: string): boolean {
+  return linkStatus === "sent" || linkStatus === "expired";
+}
 
 type PendingInvoice = {
   id: number;
@@ -814,12 +825,12 @@ export default function AdminInvoices() {
                           {inv.refundNeeded && (
                             <span
                               className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700"
-                              title="A card payment arrived after this invoice was already settled — refund it in Stripe."
+                              title="A second payment arrived for this invoice — refund the duplicate in Stripe (the owner alert names both payment ids)."
                             >
                               <AlertTriangle className="h-3 w-3" /> Refund needed
                             </span>
                           )}
-                          {inv.linkStatus !== "paid" && inv.linkStatus !== "awaiting_approval" && (
+                          {canResendLink(inv.linkStatus) && (
                             <Button
                               size="sm"
                               variant="ghost"
@@ -940,7 +951,7 @@ export default function AdminInvoices() {
                         <Banknote className="mr-1 h-3.5 w-3.5" /> Record payment
                       </Button>
                     )}
-                    {inv.linkStatus !== "paid" && inv.linkStatus !== "awaiting_approval" && inv.linkStatus !== "none" && (
+                    {canResendLink(inv.linkStatus) && (
                       <Button
                         size="sm"
                         variant="outline"

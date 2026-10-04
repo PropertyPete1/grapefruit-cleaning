@@ -4,14 +4,21 @@
  * are unit-testable (same shape as bookingRules.ts).
  */
 
+/**
+ * Metadata tag that marks a Checkout Session (and, since 0036, its
+ * PaymentIntent) as an invoice payment — balance or manual alike.
+ */
+export const BALANCE_PAYMENT_TYPE = "balance";
+
 /** Days an emailed balance payment link stays valid. */
 export const BALANCE_LINK_DAYS = 7;
 
 /**
  * Maximum lifetime Stripe allows for a single Checkout Session (30 minutes to
  * 24 hours from creation). The customer-facing link outlives this: it points at
- * /api/pay/balance/:token, which mints a fresh session on each visit for as
- * long as the invoice's own BALANCE_LINK_DAYS window is open.
+ * /api/pay/balance/:token, which reopens the invoice's one live session and
+ * mints a replacement only after that session has expired or its payment
+ * failed, for as long as the invoice's own BALANCE_LINK_DAYS window is open.
  */
 export const STRIPE_SESSION_MAX_SECONDS = 24 * 60 * 60;
 
@@ -62,7 +69,7 @@ export function stripeSessionExpiresAt(now: Date = new Date()): number {
   return Math.floor(now.getTime() / 1000) + STRIPE_SESSION_MAX_SECONDS;
 }
 
-export type BalanceLinkStatus = "none" | "awaiting_approval" | "sent" | "paid" | "expired";
+export type BalanceLinkStatus = "none" | "awaiting_approval" | "sent" | "processing" | "paid" | "expired" | "void";
 
 /**
  * Payment-link state shown in Admin → Invoices.
@@ -70,11 +77,19 @@ export type BalanceLinkStatus = "none" | "awaiting_approval" | "sent" | "paid" |
  * - "none": no link was ever generated (zero-balance invoices, or an invoice
  *   created before manual invoices became billable).
  * - "paid": settled, by card or in person — a paid invoice is never "expired".
+ * - "void": the invoice was voided; its link is dead whatever its window says.
+ * - "processing": the customer paid by bank (ACH) and the money is in flight.
+ *   The link refuses a second checkout and reminders are paused.
  * - "expired": the 7-day window closed with the balance still outstanding.
  * - "sent": link is live and payable.
  */
 export function balanceLinkStatus(
-  invoice: { status: string; payToken?: string | null; linkExpiresAt?: Date | string | null },
+  invoice: {
+    status: string;
+    payToken?: string | null;
+    linkExpiresAt?: Date | string | null;
+    paymentProcessingAt?: Date | string | null;
+  },
   now: Date = new Date()
 ): BalanceLinkStatus {
   // Checked first: an invoice pending review has no link yet, but "awaiting
@@ -84,6 +99,12 @@ export function balanceLinkStatus(
   // ever issuing a link — doesn't claim a link was paid.
   if (!invoice.payToken) return "none";
   if (invoice.status === "paid") return "paid";
+  // Voiding keeps the token and the window, so it must be read off the
+  // status — otherwise a voided invoice's link would still open checkout.
+  if (invoice.status === "void") return "void";
+  // Before the window: a bank payment in flight outlives the 7 days, and
+  // "expired, press Resend" is exactly the wrong thing to show for it.
+  if (invoice.paymentProcessingAt) return "processing";
   if (!invoice.linkExpiresAt) return "sent";
   const expires = new Date(invoice.linkExpiresAt).getTime();
   if (!Number.isFinite(expires)) return "sent";
@@ -121,6 +142,7 @@ export function balanceReminderAction(
     linkSentAt?: Date | string | null;
     reminderCount?: number | null;
     reminderExhaustedAlertAt?: Date | string | null;
+    paymentProcessingAt?: Date | string | null;
   },
   now: Date = new Date()
 ): BalanceReminderAction {
@@ -129,6 +151,9 @@ export function balanceReminderAction(
   // schedule; what disqualifies a row is having nothing to point the customer
   // at (no token) or having left "sent" (the money moved, or the invoice died).
   if (invoice.status !== "sent" || !invoice.payToken) return null;
+  // A customer whose bank payment is processing has paid; chasing them with
+  // the pay link is how a second debit happens.
+  if (invoice.paymentProcessingAt) return null;
   if (!invoice.linkSentAt) return null;
   const sentAt = new Date(invoice.linkSentAt).getTime();
   if (!Number.isFinite(sentAt)) return null;
@@ -143,9 +168,14 @@ export function balanceReminderAction(
   return { action: "remind", reminderNumber: (count + 1) as 1 | 2 };
 }
 
-/** True while the emailed link may still mint a Checkout Session. */
+/** True while the emailed link may still open checkout. */
 export function isBalanceLinkPayable(
-  invoice: { status: string; payToken?: string | null; linkExpiresAt?: Date | string | null },
+  invoice: {
+    status: string;
+    payToken?: string | null;
+    linkExpiresAt?: Date | string | null;
+    paymentProcessingAt?: Date | string | null;
+  },
   now: Date = new Date()
 ): boolean {
   return balanceLinkStatus(invoice, now) === "sent";

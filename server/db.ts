@@ -2,6 +2,7 @@ import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, like, lte, ne, not
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
+  type Invoice,
   addonCategories,
   addons,
   blogPosts,
@@ -16,6 +17,7 @@ import {
   emailLog,
   employees,
   galleryItems,
+  invoiceCheckoutSessions,
   invoices,
   payments,
   reviews,
@@ -1550,36 +1552,261 @@ export async function updateInvoice(id: number, data: Partial<typeof invoices.$i
 }
 
 /**
- * Marks an invoice paid, but only if it has not been settled already.
+ * Marks an invoice paid, but only if it has not been settled already — and,
+ * while a delayed payment is processing, only by THAT payment.
  *
  * Same shape as confirmUnpaidBooking: the status test lives in the WHERE, so
  * two deliveries of the same checkout.session.completed event cannot both
- * record a payment and both notify the owner. Returns true for the caller that
- * made the change.
+ * record a payment and both notify the owner. The processing test lives there
+ * too, so a second payment racing the one in flight can never settle the
+ * invoice in its place. The processing state clears in the same write.
+ * Returns true for the caller that made the change.
  */
 export async function settleUnpaidInvoice(
   id: number,
   data: { paidAt: Date; paidVia: "stripe"; paidMethod?: string; stripePaymentIntentId?: string }
 ): Promise<boolean> {
   const db = requireDb(await getDb());
+  const intentId = data.stripePaymentIntentId;
   const result = await db
     .update(invoices)
-    .set({ status: "paid", ...data })
-    .where(and(eq(invoices.id, id), notInArray(invoices.status, ["paid", "void"])));
+    .set({ status: "paid", ...data, paymentProcessingAt: null, paymentProcessingIntentId: null })
+    .where(
+      and(
+        eq(invoices.id, id),
+        notInArray(invoices.status, ["paid", "void"]),
+        intentId
+          ? or(isNull(invoices.paymentProcessingIntentId), eq(invoices.paymentProcessingIntentId, intentId))
+          : isNull(invoices.paymentProcessingIntentId)
+      )
+    );
   return affectedRows(result) > 0;
 }
 
 /**
- * Flags an already-settled invoice as needing a refund, at most once, so a
- * redelivered duplicate payment doesn't raise a second owner alert.
+ * Records a second Stripe payment against an invoice — at most once per
+ * payment intent, so a redelivered event never raises a second alert.
+ *
+ * Never touches stripePaymentIntentId: that column names the payment that
+ * settled the invoice, and a duplicate must not overwrite it. The guard is
+ * lastDuplicateIntentId — the same intent arriving twice loses here — plus the
+ * settling intent itself, which is a redelivery, not a duplicate. A THIRD
+ * distinct payment still claims (lastDuplicateIntentId moves on), so it is
+ * recorded and alerted rather than silently dropped.
  */
-export async function flagInvoiceRefundNeeded(id: number, stripePaymentIntentId?: string): Promise<boolean> {
+export async function flagInvoiceDuplicatePayment(id: number, stripePaymentIntentId: string | null): Promise<boolean> {
+  const db = requireDb(await getDb());
+  // A payment with no intent id (pre-tracking sessions) has nothing to key
+  // on; it claims the refund flag itself, once, as the old guard did.
+  const unclaimed =
+    stripePaymentIntentId == null
+      ? eq(invoices.refundNeeded, false)
+      : and(
+          or(isNull(invoices.lastDuplicateIntentId), ne(invoices.lastDuplicateIntentId, stripePaymentIntentId)),
+          or(isNull(invoices.stripePaymentIntentId), ne(invoices.stripePaymentIntentId, stripePaymentIntentId))
+        );
+  const result = await db
+    .update(invoices)
+    .set({ refundNeeded: true, ...(stripePaymentIntentId != null ? { lastDuplicateIntentId: stripePaymentIntentId } : {}) })
+    .where(and(eq(invoices.id, id), unclaimed));
+  return affectedRows(result) > 0;
+}
+
+/** The payments row this intent already produced on this invoice, if any — a recorded duplicate's redelivery guard. */
+export async function findInvoicePaymentByIntent(invoiceId: number, stripePaymentIntentId: string) {
+  const db = requireDb(await getDb());
+  const rows = await db
+    .select()
+    .from(payments)
+    .where(and(eq(payments.invoiceId, invoiceId), eq(payments.stripePaymentIntentId, stripePaymentIntentId)))
+    .limit(1);
+  return rows[0];
+}
+
+/**
+ * Marks a delayed payment (ACH, bank transfer) as in flight on an open
+ * invoice: Checkout completed, the money has not landed. Claimed once — only
+ * while nothing else is processing and the invoice is neither paid nor void —
+ * so it is the FIRST payment to start processing that owns the invoice; a
+ * second one is a duplicate. Returns true for the caller that set it.
+ */
+export async function markInvoicePaymentProcessing(
+  id: number,
+  stripePaymentIntentId: string,
+  now: Date = new Date()
+): Promise<boolean> {
   const db = requireDb(await getDb());
   const result = await db
     .update(invoices)
-    .set({ refundNeeded: true, stripePaymentIntentId })
-    .where(and(eq(invoices.id, id), eq(invoices.refundNeeded, false)));
+    .set({ paymentProcessingAt: now, paymentProcessingIntentId: stripePaymentIntentId })
+    .where(
+      and(
+        eq(invoices.id, id),
+        notInArray(invoices.status, ["paid", "void"]),
+        isNull(invoices.paymentProcessingIntentId)
+      )
+    );
   return affectedRows(result) > 0;
+}
+
+/**
+ * Clears the processing state when THAT payment fails. Keyed on the intent,
+ * so a failure of some other payment (a declined card retried in the same
+ * session, a duplicate) can never reopen an invoice whose real payment is
+ * still in flight. The link's window is renewed in the same write — a bank
+ * failure lands days later, and the customer must be able to pay again.
+ * Returns true for the caller that cleared it.
+ */
+export async function clearInvoicePaymentProcessing(
+  id: number,
+  stripePaymentIntentId: string,
+  window: { linkExpiresAt: Date; dueDate: string }
+): Promise<boolean> {
+  const db = requireDb(await getDb());
+  const result = await db
+    .update(invoices)
+    .set({
+      paymentProcessingAt: null,
+      paymentProcessingIntentId: null,
+      linkExpiresAt: window.linkExpiresAt,
+      dueDate: window.dueDate,
+    })
+    .where(and(eq(invoices.id, id), eq(invoices.paymentProcessingIntentId, stripePaymentIntentId)));
+  return affectedRows(result) > 0;
+}
+
+/**
+ * The processing payment failed, but a payment we had set aside as its
+ * duplicate succeeded: that one now pays the invoice. One transaction — the
+ * invoice settles to it, the refund flag drops, and its payments row stops
+ * reading as a duplicate — and claimed only while that exact duplicate is the
+ * one on file and nothing else has settled or started processing since.
+ */
+export async function promoteDuplicatePayment(
+  invoiceId: number,
+  stripePaymentIntentId: string,
+  data: { paidAt: Date; paidMethod?: string }
+): Promise<boolean> {
+  const db = requireDb(await getDb());
+  return db.transaction(async tx => {
+    const settled = await tx
+      .update(invoices)
+      .set({
+        status: "paid",
+        paidAt: data.paidAt,
+        paidVia: "stripe",
+        paidMethod: data.paidMethod,
+        stripePaymentIntentId,
+        refundNeeded: false,
+        lastDuplicateIntentId: null,
+      })
+      .where(
+        and(
+          eq(invoices.id, invoiceId),
+          notInArray(invoices.status, ["paid", "void"]),
+          eq(invoices.lastDuplicateIntentId, stripePaymentIntentId),
+          isNull(invoices.paymentProcessingIntentId)
+        )
+      );
+    if (affectedRows(settled) === 0) return false;
+    await tx
+      .update(payments)
+      .set({ duplicate: false })
+      .where(and(eq(payments.invoiceId, invoiceId), eq(payments.stripePaymentIntentId, stripePaymentIntentId)));
+    return true;
+  });
+}
+
+/**
+ * Claims the right to mint the invoice's next Checkout Session.
+ *
+ * The attempt count is the claim, exactly like reminderCount: the UPDATE
+ * matches only while the count is still the one the caller read, so two
+ * visits racing (a double click, a mail scanner prefetching the link) cannot
+ * both mint — one wins, the other re-reads and reopens the winner's session.
+ * The old session pointer clears in the same write, which is what tells a
+ * loser "a session is being minted right now" rather than "mint one".
+ * Never while the invoice is settled or a payment is processing.
+ */
+export async function claimInvoiceCheckoutAttempt(
+  id: number,
+  expectedAttempt: number,
+  now: Date = new Date()
+): Promise<boolean> {
+  const db = requireDb(await getDb());
+  const result = await db
+    .update(invoices)
+    .set({
+      checkoutAttempt: expectedAttempt + 1,
+      checkoutClaimedAt: now,
+      stripeSessionId: null,
+      stripeSessionExpiresAt: null,
+    })
+    .where(
+      and(
+        eq(invoices.id, id),
+        eq(invoices.checkoutAttempt, expectedAttempt),
+        notInArray(invoices.status, ["paid", "void"]),
+        isNull(invoices.paymentProcessingIntentId)
+      )
+    );
+  return affectedRows(result) > 0;
+}
+
+/**
+ * Gives a claimed attempt back when Stripe refused to create its session, so
+ * the next visit can claim a fresh attempt at once instead of waiting out the
+ * claim's lease. Matches only the claimant's own, still-empty attempt.
+ */
+export async function releaseInvoiceCheckoutClaim(id: number, attempt: number): Promise<void> {
+  const db = requireDb(await getDb());
+  await db
+    .update(invoices)
+    .set({ checkoutClaimedAt: null })
+    .where(and(eq(invoices.id, id), eq(invoices.checkoutAttempt, attempt), isNull(invoices.stripeSessionId)));
+}
+
+/**
+ * Stores the session a claimed attempt minted: on the invoice (only while
+ * that attempt is still the current one) and in the session history. Returns
+ * false when a newer attempt has since taken over — the caller then closes
+ * the session it minted rather than leave a second one payable.
+ */
+export async function recordInvoiceCheckoutSession(
+  id: number,
+  attempt: number,
+  session: { stripeSessionId: string; expiresAt: Date; createdAt?: Date }
+): Promise<boolean> {
+  const db = requireDb(await getDb());
+  await db.insert(invoiceCheckoutSessions).values({
+    invoiceId: id,
+    stripeSessionId: session.stripeSessionId,
+    attempt,
+    createdAt: session.createdAt ?? new Date(),
+    expiresAt: session.expiresAt,
+  });
+  const result = await db
+    .update(invoices)
+    .set({ stripeSessionId: session.stripeSessionId, stripeSessionExpiresAt: session.expiresAt })
+    .where(and(eq(invoices.id, id), eq(invoices.checkoutAttempt, attempt)));
+  return affectedRows(result) > 0;
+}
+
+/**
+ * Stamps a session's end in the history the moment the app learns it can no
+ * longer be paid — before its replacement is minted, which is what lets the
+ * health check tell a clean hand-over from two sessions live at once.
+ */
+export async function endInvoiceCheckoutSession(
+  stripeSessionId: string,
+  reason: "expired" | "payment_failed" | "closed" | "superseded",
+  at: Date = new Date()
+): Promise<void> {
+  const db = requireDb(await getDb());
+  await db
+    .update(invoiceCheckoutSessions)
+    .set({ endedAt: at, endReason: reason })
+    .where(and(eq(invoiceCheckoutSessions.stripeSessionId, stripeSessionId), isNull(invoiceCheckoutSessions.endedAt)));
 }
 
 export async function getInvoiceById(id: number) {
@@ -1610,7 +1837,9 @@ export async function listSentBalanceInvoices() {
   return db
     .select()
     .from(invoices)
-    .where(and(eq(invoices.status, "sent"), isNotNull(invoices.payToken)))
+    // A delayed payment in flight is not "unpaid": the customer has paid and
+    // the bank is moving the money, so nobody chases them while it processes.
+    .where(and(eq(invoices.status, "sent"), isNotNull(invoices.payToken), isNull(invoices.paymentProcessingAt)))
     .orderBy(invoices.createdAt)
     .limit(500);
 }
@@ -1640,7 +1869,13 @@ export async function claimBalanceReminder(
       dueDate: data.dueDate,
     })
     .where(
-      and(eq(invoices.id, id), eq(invoices.status, "sent"), eq(invoices.reminderCount, expectedCount))
+      and(
+        eq(invoices.id, id),
+        eq(invoices.status, "sent"),
+        eq(invoices.reminderCount, expectedCount),
+        // A bank payment that started processing mid-sweep halts the sequence here too.
+        isNull(invoices.paymentProcessingAt)
+      )
     );
   return affectedRows(result) > 0;
 }
@@ -1655,7 +1890,14 @@ export async function claimBalanceReminderExhaustedAlert(id: number, now: Date =
   const result = await db
     .update(invoices)
     .set({ reminderExhaustedAlertAt: now })
-    .where(and(eq(invoices.id, id), eq(invoices.status, "sent"), isNull(invoices.reminderExhaustedAlertAt)));
+    .where(
+      and(
+        eq(invoices.id, id),
+        eq(invoices.status, "sent"),
+        isNull(invoices.reminderExhaustedAlertAt),
+        isNull(invoices.paymentProcessingAt)
+      )
+    );
   return affectedRows(result) > 0;
 }
 
@@ -2581,10 +2823,91 @@ export async function findInvoicesWithDeadLinks(now: Date = new Date()) {
       and(
         inArray(invoices.status, ["sent", "overdue"]),
         isNotNull(invoices.linkExpiresAt),
-        lte(invoices.linkExpiresAt, now)
+        lte(invoices.linkExpiresAt, now),
+        // Paid and waiting on the bank is not a dead link — "press Resend" would invite a second payment.
+        isNull(invoices.paymentProcessingAt)
       )
     )
     .limit(50);
+}
+
+/**
+ * Checkout Sessions the app minted since `since`, oldest first per invoice —
+ * the history the payments health check reads for overlapping live windows.
+ */
+export async function listInvoiceCheckoutSessionsSince(since: Date) {
+  const db = requireDb(await getDb());
+  return db
+    .select({
+      invoiceId: invoiceCheckoutSessions.invoiceId,
+      invoiceNumber: invoices.number,
+      stripeSessionId: invoiceCheckoutSessions.stripeSessionId,
+      attempt: invoiceCheckoutSessions.attempt,
+      createdAt: invoiceCheckoutSessions.createdAt,
+      expiresAt: invoiceCheckoutSessions.expiresAt,
+      endedAt: invoiceCheckoutSessions.endedAt,
+    })
+    .from(invoiceCheckoutSessions)
+    .leftJoin(invoices, eq(invoiceCheckoutSessions.invoiceId, invoices.id))
+    .where(gte(invoiceCheckoutSessions.createdAt, since))
+    .orderBy(asc(invoiceCheckoutSessions.invoiceId), asc(invoiceCheckoutSessions.createdAt), asc(invoiceCheckoutSessions.id))
+    .limit(2000);
+}
+
+/** Invoices whose delayed payment has been "processing" since before `before` — longer than any bank takes. */
+export async function listStuckProcessingInvoices(before: Date) {
+  const db = requireDb(await getDb());
+  return db
+    .select({
+      invoiceId: invoices.id,
+      invoiceNumber: invoices.number,
+      paymentProcessingAt: invoices.paymentProcessingAt,
+      paymentProcessingIntentId: invoices.paymentProcessingIntentId,
+    })
+    .from(invoices)
+    .where(
+      and(
+        isNotNull(invoices.paymentProcessingAt),
+        lte(invoices.paymentProcessingAt, before),
+        notInArray(invoices.status, ["paid", "void"])
+      )
+    )
+    .limit(50);
+}
+
+/**
+ * What the app knows about these invoices' Stripe money: each invoice's
+ * number and settling/processing intents, and every payments row carrying an
+ * intent. The health check holds Stripe's own record up against this.
+ */
+export async function getInvoicePaymentRecords(invoiceIds: number[]): Promise<{
+  invoices: Array<Pick<Invoice, "id" | "number" | "status" | "stripePaymentIntentId" | "paymentProcessingIntentId">>;
+  payments: Array<{ invoiceId: number | null; stripePaymentIntentId: string | null; status: string; duplicate: boolean }>;
+}> {
+  if (invoiceIds.length === 0) return { invoices: [], payments: [] };
+  const db = requireDb(await getDb());
+  const [invoiceRows, paymentRows] = await Promise.all([
+    db
+      .select({
+        id: invoices.id,
+        number: invoices.number,
+        status: invoices.status,
+        stripePaymentIntentId: invoices.stripePaymentIntentId,
+        paymentProcessingIntentId: invoices.paymentProcessingIntentId,
+      })
+      .from(invoices)
+      .where(inArray(invoices.id, invoiceIds)),
+    db
+      .select({
+        invoiceId: payments.invoiceId,
+        stripePaymentIntentId: payments.stripePaymentIntentId,
+        status: payments.status,
+        duplicate: payments.duplicate,
+      })
+      .from(payments)
+      .where(and(inArray(payments.invoiceId, invoiceIds), isNotNull(payments.stripePaymentIntentId))),
+  ]);
+  return { invoices: invoiceRows, payments: paymentRows };
 }
 
 /**

@@ -1352,7 +1352,15 @@ export const adminRouter = router({
     const now = new Date();
     return rows.map(({ invoice: { payToken, ...invoice }, booking, customer }) => ({
       ...invoice,
-      linkStatus: balanceLinkStatus({ status: invoice.status, payToken, linkExpiresAt: invoice.linkExpiresAt }, now),
+      linkStatus: balanceLinkStatus(
+        {
+          status: invoice.status,
+          payToken,
+          linkExpiresAt: invoice.linkExpiresAt,
+          paymentProcessingAt: invoice.paymentProcessingAt,
+        },
+        now
+      ),
       // The customer's name for this bill — what every email to them says —
       // so the owner and the customer are talking about the same thing.
       serviceReference: adminServiceReference(invoice, booking),
@@ -1696,6 +1704,12 @@ export const adminRouter = router({
           throw new TRPCError({ code: "BAD_REQUEST", message: "This invoice is already paid." });
         case "voided":
           throw new TRPCError({ code: "BAD_REQUEST", message: "This invoice was voided." });
+        case "payment_processing":
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "The customer's bank payment is processing — sending another link could charge them twice. It settles (or fails, and reopens) on its own within a few business days.",
+          });
         case "awaiting_approval":
           throw new TRPCError({
             code: "BAD_REQUEST",

@@ -1143,7 +1143,7 @@ export function buildBalanceDueEmail(data: BalanceEmailData): { subject: string;
  * Works for manual invoices too, where `jobless` drops the booking reference
  * and service date rather than printing them empty.
  */
-export type ReceiptPaymentMethod = "card" | "manual" | "cash" | "venmo" | "zelle" | "check" | "other";
+export type ReceiptPaymentMethod = "card" | "bank" | "manual" | "cash" | "venmo" | "zelle" | "check" | "other";
 
 export function buildPaymentReceiptEmail(
   data: BalanceEmailData & { paidOn: string; paidVia: ReceiptPaymentMethod; tipAmount?: number }
@@ -1151,6 +1151,7 @@ export function buildPaymentReceiptEmail(
   const jobless = data.reference === "";
   const methods: Record<ReceiptPaymentMethod, { en: string; es: string }> = {
     card: { en: "Card (online)", es: "Tarjeta (en línea)" },
+    bank: { en: "Bank payment (online)", es: "Pago bancario (en línea)" },
     manual: { en: "Recorded by our team", es: "Registrado por nuestro equipo" },
     cash: { en: "Cash", es: "Efectivo" },
     venmo: { en: "Venmo", es: "Venmo" },
@@ -1522,17 +1523,70 @@ export function buildBalancePaidNotification(data: BalanceEmailData): { title: s
 }
 
 /**
- * Owner alert for the manual-payment race: the invoice was already settled
- * (collected in person, or paid once already) when a card payment landed.
- * The invoice is NOT double-marked — this money has to be refunded.
+ * The two payments behind a duplicate alert: the one that arrived second, and
+ * what it collided with. Payment intent ids are what the owner searches for in
+ * Stripe to issue the refund, so the alert names both whenever they exist.
  */
-export function buildRefundNeededAlert(data: BalanceEmailData): { title: string; content: string } {
+export interface DuplicatePaymentFacts {
+  duplicateIntentId: string | null;
+  duplicateMethod: "card" | "bank";
+  original:
+    | { kind: "settled"; intentId: string | null; method: string | null }
+    | { kind: "processing"; intentId: string | null }
+    | { kind: "settled_by_hand"; method: string | null }
+    | { kind: "settled_without_payment" }
+    | { kind: "void" };
+}
+
+function paymentWord(method: string | null | undefined): string {
+  return method === "bank" ? "bank (ACH) payment" : method === "card" || !method ? "card payment" : `${method} payment`;
+}
+
+function originalPaymentLines(original: DuplicatePaymentFacts["original"]): string[] {
+  switch (original.kind) {
+    case "settled":
+      return [`Original payment (keep): ${original.intentId ?? "(no payment id on file)"} — ${paymentWord(original.method)}, settled this invoice`];
+    case "processing":
+      return [
+        `Original payment (keep): ${original.intentId ?? "(no payment id on file)"} — bank payment, STILL PROCESSING`,
+        `If the original later fails, this duplicate becomes the payment instead — you will get an alert saying so. Stripe only refunds a bank payment once it has succeeded.`,
+      ];
+    case "settled_by_hand":
+      return [`Original payment (keep): recorded by hand in Admin${original.method ? ` (${original.method})` : ""} — no Stripe payment id`];
+    case "settled_without_payment":
+      return [`Original settlement: the invoice was closed with nothing to collect`];
+    case "void":
+      return [`The invoice was VOIDED — nothing was owed`];
+  }
+}
+
+/**
+ * Owner alert for money arriving twice: the invoice was already settled
+ * (collected in person, voided, or paid once already) or had a payment still
+ * processing when another payment landed. The invoice is NOT double-marked —
+ * the duplicate is recorded, never applied, and has to be refunded. Names the
+ * invoice and both payment ids so the refund can go out at once.
+ */
+export function buildRefundNeededAlert(
+  data: BalanceEmailData,
+  payment?: DuplicatePaymentFacts
+): { title: string; content: string } {
+  const what = paymentWord(payment?.duplicateMethod ?? "card");
   return {
     title: `⚠️ REFUND NEEDED — duplicate balance payment on ${data.invoiceNumber} (${data.reference})`,
     content: [
-      `⚠️ A card payment of ${fmtUsd(data.balance)} arrived for an invoice that was ALREADY settled.`,
-      `The invoice was left as-is (the earlier payment stands) — please refund this card payment in Stripe.`,
+      payment?.original.kind === "processing"
+        ? `⚠️ A second ${what} of ${fmtUsd(data.balance)} arrived while the customer's first payment for this invoice was still processing.`
+        : `⚠️ A ${what} of ${fmtUsd(data.balance)} arrived for an invoice that was ALREADY settled.`,
+      `The invoice was left as-is (the earlier payment stands) — please refund this ${what} in Stripe.`,
       ``,
+      ...(payment
+        ? [
+            `REFUND THIS: ${payment.duplicateIntentId ?? "(Stripe sent no payment id — search Stripe by the amount and customer)"}`,
+            ...originalPaymentLines(payment.original),
+            ``,
+          ]
+        : []),
       `Reference: ${data.reference}`,
       `Invoice: ${data.invoiceNumber}`,
       `Service: ${data.serviceName}`,
@@ -1601,9 +1655,9 @@ export async function sendBalancePaidNotification(data: BalanceEmailData): Promi
   await notifyOwnerWithEmailCopy(buildBalancePaidNotification(data));
 }
 
-/** Notifies the owner that a duplicate card payment needs refunding. */
-export async function sendRefundNeededAlert(data: BalanceEmailData): Promise<void> {
-  await notifyOwnerWithEmailCopy(buildRefundNeededAlert(data));
+/** Notifies the owner that a duplicate payment needs refunding, naming both payments. */
+export async function sendRefundNeededAlert(data: BalanceEmailData, payment?: DuplicatePaymentFacts): Promise<void> {
+  await notifyOwnerWithEmailCopy(buildRefundNeededAlert(data, payment));
 }
 
 /**

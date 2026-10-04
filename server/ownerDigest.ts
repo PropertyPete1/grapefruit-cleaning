@@ -18,6 +18,12 @@ import { sendOwnerAlert, smtpUser } from "./emails";
 import { holdMinutesFor } from "./bookingRules";
 import { todayInBookingZone } from "@shared/leadTime";
 import { ENV } from "./_core/env";
+import {
+  formatPaymentFindings,
+  inspectPaymentIntegrity,
+  paymentProblemCount,
+  type PaymentIntegrityFindings,
+} from "./paymentHealth";
 
 // ---------------------------------------------------------------------------
 // Health check
@@ -84,6 +90,13 @@ export interface HealthFindings {
     actualRole: string | null;
     problem: "missing" | "role_mismatch";
   }>;
+  /**
+   * Stripe money held up against the invoices (paymentHealth.ts): duplicate
+   * payments, overlapping checkout sessions, payments the app never recorded,
+   * bank payments stuck processing. Optional only so older callers that build
+   * findings by hand keep working; runHealthCheck always fills it.
+   */
+  payments?: PaymentIntegrityFindings;
   /** True when something needs a human. Missing emails alone do NOT qualify. */
   hasProblems: boolean;
 }
@@ -282,7 +295,7 @@ function fmtDate(d: Date | string | null | undefined): string {
  */
 export async function runHealthCheck(now: Date = new Date()): Promise<HealthFindings> {
   const requestCutoff = new Date(now.getTime() - 24 * HOUR_MS);
-  const [paid, dead, noEmail, configuredBusinessEmail, activeProperties, overdueHolds, pendingTimes, staleRequests, accessUsers, heartbeat] = await Promise.all([
+  const [paid, dead, noEmail, configuredBusinessEmail, activeProperties, overdueHolds, pendingTimes, staleRequests, accessUsers, heartbeat, paymentFindings] = await Promise.all([
     db.findPaidInvoicesOnOpenBookings(),
     db.findInvoicesWithDeadLinks(now),
     db.findCustomersWithoutEmail(),
@@ -298,6 +311,8 @@ export async function runHealthCheck(now: Date = new Date()): Promise<HealthFind
         jobs: [] as HeartbeatJobInfo[],
         error: error instanceof Error ? error.message : String(error),
       })),
+    // Never throws — a payments check that cannot read Stripe reports that.
+    inspectPaymentIntegrity(now),
   ]);
   const expectedSmtpUser = configuredBusinessEmail?.trim() || null;
   const effectiveSmtpUser = smtpUser()?.trim() || null;
@@ -387,6 +402,7 @@ export async function runHealthCheck(now: Date = new Date()): Promise<HealthFind
         : null,
     },
     ...accessIntegrity,
+    payments: paymentFindings,
     hasProblems: false,
   };
   findings.hasProblems =
@@ -399,7 +415,8 @@ export async function runHealthCheck(now: Date = new Date()): Promise<HealthFind
     findings.staleRescheduleRequests.length > 0 ||
     findings.duplicateUserEmails.length > 0 ||
     findings.expectedAdminProblems.length > 0 ||
-    findings.smtpIdentity.matches === false;
+    findings.smtpIdentity.matches === false ||
+    paymentProblemCount(paymentFindings) > 0;
   return findings;
 }
 
@@ -413,12 +430,14 @@ export function healthProblemCount(findings: HealthFindings): number {
     findings.staleRescheduleRequests.length +
     findings.duplicateUserEmails.length +
     findings.expectedAdminProblems.length +
-    (findings.smtpIdentity.matches === false ? 1 : 0);
+    (findings.smtpIdentity.matches === false ? 1 : 0) +
+    (findings.payments ? paymentProblemCount(findings.payments) : 0);
 }
 
 /** The health section, as plain text. Used by both the alert and the digest. */
 export function formatHealthFindings(f: HealthFindings): string {
-  const lines: string[] = [];
+  // Money first: a customer charged twice outranks everything below.
+  const lines: string[] = f.payments ? formatPaymentFindings(f.payments) : [];
   if (f.paidOnOpenBookings.length > 0) {
     lines.push(`PAID INVOICES ON UNFINISHED JOBS (${f.paidOnOpenBookings.length})`);
     lines.push(`These were paid but the booking isn't marked completed, so the customer`);

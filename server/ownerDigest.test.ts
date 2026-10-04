@@ -31,6 +31,9 @@ const mockPendingTimes = vi.fn();
 const mockStaleRequests = vi.fn();
 const mockListHeartbeatJobs = vi.fn();
 const mockAccessUsers = vi.fn();
+const mockSessionHistory = vi.fn();
+const mockStuckProcessing = vi.fn();
+const mockPaymentRecords = vi.fn();
 
 vi.mock("./db", () => ({
   findPaidInvoicesOnOpenBookings: () => mockPaidOnOpen(),
@@ -46,6 +49,12 @@ vi.mock("./db", () => ({
   listUpcomingPendingTimeBookings: (...a: unknown[]) => mockPendingTimes(...a),
   listStaleOpenRescheduleRequests: (...a: unknown[]) => mockStaleRequests(...a),
   listUsersForAccessHealth: () => mockAccessUsers(),
+  // The payments check (paymentHealth.ts). Stripe's half is skipped here —
+  // STRIPE_SECRET_KEY is cleared for every test file — so only the app's own
+  // session history and processing state are read.
+  listInvoiceCheckoutSessionsSince: (...a: unknown[]) => mockSessionHistory(...a),
+  listStuckProcessingInvoices: (...a: unknown[]) => mockStuckProcessing(...a),
+  getInvoicePaymentRecords: (...a: unknown[]) => mockPaymentRecords(...a),
 }));
 
 vi.mock("./_core/heartbeat", () => ({
@@ -70,6 +79,9 @@ const NOW = new Date("2026-08-24T14:00:00Z"); // a Monday
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockSessionHistory.mockResolvedValue([]);
+  mockStuckProcessing.mockResolvedValue([]);
+  mockPaymentRecords.mockResolvedValue({ invoices: [], payments: [] });
   mockPaidOnOpen.mockResolvedValue([]);
   mockDeadLinks.mockResolvedValue([]);
   mockNoEmail.mockResolvedValue([]);
@@ -157,6 +169,53 @@ describe("the daily health check", () => {
     const findings = await runDailyHealthCheck(NOW);
     expect(findings.hasProblems).toBe(false);
     expect(mockOwnerAlert).not.toHaveBeenCalled();
+  });
+
+  it("alerts — money first — when a checkout session was minted while another was still payable", async () => {
+    mockSessionHistory.mockResolvedValue([
+      { invoiceId: 501, invoiceNumber: "INV-ACH-1", stripeSessionId: "cs_first", createdAt: new Date("2026-08-23T15:00:00Z"), expiresAt: new Date("2026-08-24T15:00:00Z"), endedAt: null },
+      { invoiceId: 501, invoiceNumber: "INV-ACH-1", stripeSessionId: "cs_second", createdAt: new Date("2026-08-23T15:01:00Z"), expiresAt: new Date("2026-08-24T15:01:00Z"), endedAt: null },
+    ]);
+    mockDeadLinks.mockResolvedValue([{ invoiceNumber: "INV-DEAD-0001", amount: 90, linkExpiresAt: new Date("2026-08-01T00:00:00Z") }]);
+    const findings = await runDailyHealthCheck(NOW);
+
+    expect(findings.hasProblems).toBe(true);
+    expect(findings.payments?.overlappingCheckoutSessions).toHaveLength(1);
+    const [subject, body] = mockOwnerAlert.mock.calls[0]!;
+    expect(subject).toContain("2 items need your attention");
+    expect(body).toContain("CHECKOUT SESSIONS PAYABLE AT THE SAME TIME");
+    expect(body).toContain("INV-ACH-1");
+    expect(body).toContain("cs_first");
+    expect(body).toContain("cs_second");
+    // Payments lead the report.
+    expect(body.indexOf("CHECKOUT SESSIONS PAYABLE")).toBeLessThan(body.indexOf("UNPAID INVOICES WITH EXPIRED"));
+  });
+
+  it("stays silent on a clean session hand-over", async () => {
+    mockSessionHistory.mockResolvedValue([
+      { invoiceId: 501, invoiceNumber: "INV-OK", stripeSessionId: "cs_1", createdAt: new Date("2026-08-20T10:00:00Z"), expiresAt: new Date("2026-08-21T10:00:00Z"), endedAt: new Date("2026-08-20T11:00:00Z") },
+      { invoiceId: 501, invoiceNumber: "INV-OK", stripeSessionId: "cs_2", createdAt: new Date("2026-08-20T11:00:00Z"), expiresAt: new Date("2026-08-21T11:00:00Z"), endedAt: null },
+    ]);
+    const findings = await runDailyHealthCheck(NOW);
+    expect(findings.hasProblems).toBe(false);
+    expect(mockOwnerAlert).not.toHaveBeenCalled();
+  });
+
+  it("alerts on a bank payment stuck processing for weeks", async () => {
+    mockStuckProcessing.mockResolvedValue([
+      { invoiceId: 7, invoiceNumber: "INV-SLOW", paymentProcessingAt: new Date("2026-08-01T00:00:00Z"), paymentProcessingIntentId: "pi_slow" },
+    ]);
+    await runDailyHealthCheck(NOW);
+    const body = mockOwnerAlert.mock.calls[0]![1] as string;
+    expect(body).toContain("BANK PAYMENTS PROCESSING FOR OVER 14 DAYS");
+    expect(body).toContain("pi_slow");
+  });
+
+  it("treats a payments check that could not run as a problem, never as silence", async () => {
+    mockSessionHistory.mockRejectedValue(new Error("db hiccup"));
+    const findings = await runDailyHealthCheck(NOW);
+    expect(findings.hasProblems).toBe(true);
+    expect(mockOwnerAlert.mock.calls[0]![1]).toContain("PAYMENTS CHECK COULD NOT RUN IN FULL");
   });
 
   it("catches the Daniel shape: money taken on a job still marked open", async () => {

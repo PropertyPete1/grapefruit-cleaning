@@ -115,19 +115,31 @@ export function canMarkPaidInCash(booking: { status: string; paymentStatus?: Boo
  * The invoice-side position, for Admin → Invoices: the same words the booking
  * badge uses, read off an invoice row alone (a manual invoice has no booking).
  */
-export type InvoicePaymentStatus = "paid" | "paid_cash" | "paid_offline" | "cash_pending" | "balance_pending_approval" | "balance_due" | "void" | "draft";
+export type InvoicePaymentStatus =
+  | "paid"
+  | "paid_cash"
+  | "paid_offline"
+  | "payment_processing"
+  | "cash_pending"
+  | "balance_pending_approval"
+  | "balance_due"
+  | "void"
+  | "draft";
 
 export function deriveInvoicePaymentStatus(invoice: {
   status: string;
   paidVia?: string | null;
   paidMethod?: string | null;
   paymentPreference?: string | null;
+  paymentProcessingAt?: Date | string | null;
 }): InvoicePaymentStatus {
   if (invoice.status === "paid") {
     if (invoice.paidVia === "manual") return invoice.paidMethod === "cash" ? "paid_cash" : "paid_offline";
     return "paid";
   }
   if (invoice.status === "void") return "void";
+  // Before the cash preference: money actually in flight outranks an intent.
+  if (invoice.paymentProcessingAt) return "payment_processing";
   if (invoice.paymentPreference === "cash") return "cash_pending";
   if (invoice.status === "awaiting_approval") return "balance_pending_approval";
   if (invoice.status === "draft") return "draft";
@@ -138,6 +150,7 @@ export const INVOICE_PAYMENT_STATUS_LABELS: Record<InvoicePaymentStatus, string>
   paid: "Paid online",
   paid_cash: "Paid in Cash",
   paid_offline: "Paid (recorded)",
+  payment_processing: "Bank payment processing",
   cash_pending: "Cash pending",
   balance_pending_approval: "Awaiting approval",
   balance_due: "Unpaid",

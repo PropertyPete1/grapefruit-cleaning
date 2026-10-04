@@ -30,6 +30,14 @@ const mockNotifyOwner = vi.fn();
 const mockListInvoices = vi.fn();
 
 vi.mock("./db", () => ({
+  // One-live-session checkout (invoiceCheckout.ts): this caller wins every
+  // claim and the stored session has always died, so each open mints.
+  claimInvoiceCheckoutAttempt: async () => true,
+  recordInvoiceCheckoutSession: async () => true,
+  releaseInvoiceCheckoutClaim: async () => undefined,
+  endInvoiceCheckoutSession: async () => undefined,
+  markInvoicePaymentProcessing: async () => true,
+  findInvoicePaymentByIntent: async () => undefined,
   getSetting: vi.fn().mockResolvedValue(null),
   getBookingById: (...a: unknown[]) => mockGetBookingById(...a),
   getCustomerById: (...a: unknown[]) => mockGetCustomerById(...a),
@@ -45,7 +53,7 @@ vi.mock("./db", () => ({
 }));
 
 vi.mock("./stripe", () => ({
-  getStripe: () => ({ checkout: { sessions: { create: (...a: unknown[]) => mockSessionCreate(...a), expire: vi.fn() } } }),
+  getStripe: () => ({ checkout: { sessions: { create: (...a: unknown[]) => mockSessionCreate(...a), retrieve: async (id: string) => ({ id, status: "expired", payment_status: "unpaid" }), expire: vi.fn() } } }),
 }));
 
 vi.mock("./_core/notification", () => ({ notifyOwner: (...a: unknown[]) => mockNotifyOwner(...a) }));
@@ -254,6 +262,43 @@ describe("Test G — customer messages use the reference, never the number", () 
     expect(buildBalanceApprovalNeededAlert(DATA).content).toContain("Invoice: INV-REF-01");
     expect(buildBalancePaidNotification(DATA).title).toContain("INV-REF-01");
     expect(buildRefundNeededAlert(DATA).title).toContain("INV-REF-01");
+  });
+
+  it("the duplicate-payment alert names the invoice and BOTH payment ids, and the method that arrived", () => {
+    const settled = buildRefundNeededAlert(DATA, {
+      duplicateIntentId: "pi_second",
+      duplicateMethod: "bank",
+      original: { kind: "settled", intentId: "pi_first", method: "card" },
+    });
+    expect(settled.title).toContain("INV-REF-01");
+    expect(settled.content).toContain("REFUND THIS: pi_second");
+    expect(settled.content).toContain("Original payment (keep): pi_first");
+    expect(settled.content).toContain("bank (ACH) payment");
+    expect(settled.content).not.toContain("A card payment");
+
+    const inFlight = buildRefundNeededAlert(DATA, {
+      duplicateIntentId: "pi_second",
+      duplicateMethod: "card",
+      original: { kind: "processing", intentId: "pi_first" },
+    });
+    expect(inFlight.content).toContain("while the customer's first payment for this invoice was still processing");
+    expect(inFlight.content).toContain("pi_first — bank payment, STILL PROCESSING");
+
+    const byHand = buildRefundNeededAlert(DATA, {
+      duplicateIntentId: "pi_late",
+      duplicateMethod: "card",
+      original: { kind: "settled_by_hand", method: "cash" },
+    });
+    expect(byHand.content).toContain("recorded by hand in Admin (cash)");
+  });
+
+  it("a bank payment's receipt says so, in both languages", () => {
+    expect(buildPaymentReceiptEmail({ ...DATA, paidOn: "2026-10-01", paidVia: "bank" }).body).toContain(
+      "Payment method: Bank payment (online)"
+    );
+    expect(
+      buildPaymentReceiptEmail({ ...DATA, locale: "es", paidOn: "2026-10-01", paidVia: "bank" }).body
+    ).toContain("Pago bancario (en línea)");
   });
 });
 
