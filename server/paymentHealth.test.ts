@@ -109,6 +109,18 @@ describe("Stripe's record against the app's", () => {
     expect(f.unrecordedStripePayments).toEqual([]);
   });
 
+  it("counts a partly refunded payment as money still held, and a fully refunded one as nothing", async () => {
+    const s1 = await stripeSession(9);
+    const s2 = await stripeSession(9);
+    customerPays(s1, "card", "pi_keep");
+    customerPays(s2, "card", "pi_partial");
+    seedInvoice({ ...kit.invoices.get(9)!, status: "paid", stripePaymentIntentId: "pi_keep" });
+    stripeKit.intents.get("pi_partial")!.partlyRefundedCents = 2000;
+    expect((await inspectPaymentIntegrity(new Date())).duplicatePayments).toHaveLength(1);
+    stripeKit.intents.get("pi_partial")!.refunded = true;
+    expect((await inspectPaymentIntegrity(new Date())).duplicatePayments).toEqual([]);
+  });
+
   it("one payment per invoice is silent", async () => {
     const s1 = await stripeSession(9);
     customerPays(s1, "card", "pi_card");
@@ -177,7 +189,7 @@ describe("bank answers the webhook never delivered", () => {
   it("flags an invoice still 'processing' after Stripe has the bank's answer — and says how to sync it", async () => {
     const s1 = await stripeSession(9);
     customerPays(s1, "ach", "pi_ach");
-    seedInvoice({ ...kit.invoices.get(9)!, paymentProcessingAt: new Date(Date.now() - 3 * HOUR), paymentProcessingIntentId: "pi_ach" });
+    seedInvoice({ ...kit.invoices.get(9)!, paymentProcessingAt: new Date(Date.now() - 25 * HOUR), paymentProcessingIntentId: "pi_ach" });
     bankSettles("pi_ach", "succeeded");
 
     const f = await inspectPaymentIntegrity(new Date());
@@ -185,12 +197,19 @@ describe("bank answers the webhook never delivered", () => {
     expect(f.bankAnswersNotRecorded).toEqual([{ invoiceId: 9, invoiceNumber: "INV-9", intentId: "pi_ach", stripeState: "succeeded" }]);
     const text = formatPaymentFindings(f).join("\n");
     expect(text).toContain("STRIPE HAS ANSWERED BUT THE APP WAS NEVER TOLD");
-    expect(text).toContain("press Resend");
+    expect(text).toContain('"Check with Stripe"');
+  });
+  it("gives a fresh answer a day for its webhook (Stripe retries failed deliveries for hours)", async () => {
+    const s1 = await stripeSession(9);
+    customerPays(s1, "ach", "pi_ach");
+    seedInvoice({ ...kit.invoices.get(9)!, paymentProcessingAt: new Date(Date.now() - 5 * HOUR), paymentProcessingIntentId: "pi_ach" });
+    bankSettles("pi_ach", "succeeded");
+    expect((await inspectPaymentIntegrity(new Date())).bankAnswersNotRecorded).toEqual([]);
   });
   it("flags a failure the app never heard about", async () => {
     const s1 = await stripeSession(9);
     customerPays(s1, "ach", "pi_ach");
-    seedInvoice({ ...kit.invoices.get(9)!, paymentProcessingAt: new Date(), paymentProcessingIntentId: "pi_ach" });
+    seedInvoice({ ...kit.invoices.get(9)!, paymentProcessingAt: new Date(Date.now() - 25 * HOUR), paymentProcessingIntentId: "pi_ach" });
     bankSettles("pi_ach", "failed");
     expect((await inspectPaymentIntegrity(new Date())).bankAnswersNotRecorded[0]).toMatchObject({ stripeState: "failed" });
   });
@@ -211,8 +230,8 @@ describe("advice the owner can act on", () => {
     customerPays(s2, "ach", "pi_moving");
     const text = formatPaymentFindings(await inspectPaymentIntegrity(new Date())).join("\n");
     expect(text).toContain("Do NOT record these by hand");
-    expect(text).toMatch(/pi_done \(succeeded\): press Resend/);
-    expect(text).toMatch(/pi_moving \(still processing\): press Resend once/);
+    expect(text).toMatch(/pi_done \(succeeded\): press "Check with Stripe"/);
+    expect(text).toMatch(/pi_moving \(still processing\): press "Check with Stripe" once/);
   });
 });
 

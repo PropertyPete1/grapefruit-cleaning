@@ -40,6 +40,12 @@ export const STUCK_PROCESSING_DAYS = 20;
 const OVERLAP_REPORT_WINDOW_MS = 26 * 60 * 60 * 1000;
 /** A payment this fresh may simply be ahead of its webhook. */
 const WEBHOOK_GRACE_MS = 60 * 60 * 1000;
+/**
+ * How long an invoice must have been waiting before a Stripe answer it was
+ * never told about is reported. The answer's own time is not on the session,
+ * and Stripe retries a failed delivery for hours, so a day is the honest line.
+ */
+const ANSWER_GRACE_MS = 24 * 60 * 60 * 1000;
 const MAX_STRIPE_SESSIONS = 2000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -159,7 +165,8 @@ export function sessionPaymentState(
   if (!intent || typeof intent === "string") return null;
   if (intent.status === "succeeded") {
     const charge = intent.latest_charge;
-    if (charge && typeof charge === "object" && (charge.refunded || (charge.amount_refunded ?? 0) > 0)) return null;
+    // Fully refunded: no money held. A partial refund still holds money.
+    if (charge && typeof charge === "object" && charge.refunded) return null;
     return { intentId: intent.id, state: "succeeded" };
   }
   if (session.status !== "complete") return null;
@@ -262,7 +269,8 @@ export async function inspectPaymentIntegrity(now: Date = new Date()): Promise<P
         // The invoice still waits on a payment Stripe has already answered for.
         const waitingOn = invoice?.paymentProcessingIntentId;
         const answer = waitingOn ? all.find(p => p.intentId === waitingOn) : undefined;
-        if (answer && answer.state !== "processing" && now.getTime() - answer.createdMs >= WEBHOOK_GRACE_MS) {
+        const waitingSince = invoice?.paymentProcessingAt ? new Date(invoice.paymentProcessingAt).getTime() : now.getTime();
+        if (answer && answer.state !== "processing" && now.getTime() - waitingSince >= ANSWER_GRACE_MS) {
           findings.bankAnswersNotRecorded.push({ invoiceId, invoiceNumber, intentId: answer.intentId, stripeState: answer.state });
         }
 
@@ -338,17 +346,17 @@ export function formatPaymentFindings(f: PaymentIntegrityFindings): string[] {
     for (const u of f.unrecordedStripePayments) {
       lines.push(
         u.state === "succeeded"
-          ? `  • ${u.invoiceNumber} — ${u.intentId} (succeeded): press Resend on the invoice in Admin → Invoices — it checks Stripe first and records this payment, sending nothing.`
-          : `  • ${u.invoiceNumber} — ${u.intentId} (still processing): press Resend once — it checks Stripe, marks the invoice processing and stops the reminders; the payment records itself when the bank answers.`
+          ? `  • ${u.invoiceNumber} — ${u.intentId} (succeeded): press "Check with Stripe" on the invoice in Admin → Invoices — it records this payment and sends nothing.`
+          : `  • ${u.invoiceNumber} — ${u.intentId} (still processing): press "Check with Stripe" once — it marks the invoice processing and stops the reminders; the payment records itself when the bank answers.`
       );
     }
     lines.push("");
   }
   if ((f.bankAnswersNotRecorded?.length ?? 0) > 0) {
     lines.push(`BANK PAYMENTS STRIPE HAS ANSWERED BUT THE APP WAS NEVER TOLD (${f.bankAnswersNotRecorded.length})`);
-    lines.push("The webhook is not receiving checkout.session.async_payment_succeeded / async_payment_failed — subscribe the");
-    lines.push("endpoint to them in the Stripe Dashboard. Meanwhile press Resend on each invoice: it reads Stripe and records");
-    lines.push("the payment, or reopens a failed one and emails the customer:");
+    lines.push("For over a day the webhook has not delivered checkout.session.async_payment_succeeded / async_payment_failed");
+    lines.push("for these — check the endpoint's subscription and delivery log in the Stripe Dashboard. Meanwhile press");
+    lines.push('"Check with Stripe" on each invoice: it records the payment, or reopens a failed one and emails the customer:');
     for (const b of f.bankAnswersNotRecorded) {
       lines.push(`  • ${b.invoiceNumber} — ${b.intentId} ${b.stripeState} on Stripe; the invoice still says processing`);
     }
@@ -365,7 +373,7 @@ export function formatPaymentFindings(f: PaymentIntegrityFindings): string[] {
   if (f.stuckPaymentProcessing.length > 0) {
     lines.push(`BANK PAYMENTS PROCESSING FOR OVER ${STUCK_PROCESSING_DAYS} DAYS (${f.stuckPaymentProcessing.length})`);
     lines.push("No bank takes this long. Check each payment in Stripe — if it settled or failed there, the webhook is");
-    lines.push("not receiving checkout.session.async_payment_succeeded / async_payment_failed (press Resend to sync it):");
+    lines.push('not receiving checkout.session.async_payment_succeeded / async_payment_failed (press "Check with Stripe" to sync it):');
     for (const s of f.stuckPaymentProcessing) {
       lines.push(`  • ${s.invoiceNumber} — ${s.intentId ?? "(no payment id)"} — processing since ${s.since} (${s.days} days)`);
     }

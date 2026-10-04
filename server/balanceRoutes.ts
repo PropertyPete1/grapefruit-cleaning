@@ -57,12 +57,12 @@ const NOTICES: Record<NoticeKind, Record<"en" | "es", { title: string; body: str
   // confirms Stripe's two microdeposits, so "nothing else to do" would be wrong.
   verifying: {
     en: {
-      title: "Almost done — confirm your bank account",
-      body: "Thank you! To finish your bank payment, confirm the two small deposits Stripe is sending to your bank account — look for Stripe's email with the link (the deposits take 1–2 business days to show up). Your payment starts as soon as you confirm. There's no need to pay again.",
+      title: "Almost done — verify your bank account",
+      body: "Thank you! To finish your bank payment, verify your bank account: Stripe is sending a small test deposit to it, and an email with a link that tells you exactly what to enter (the deposit takes 1–2 business days to show up). Your payment starts as soon as you verify. There's no need to pay again.",
     },
     es: {
-      title: "Casi listo — confirme su cuenta bancaria",
-      body: "¡Gracias! Para completar su pago bancario, confirme los dos pequeños depósitos que Stripe está enviando a su cuenta — busque el correo de Stripe con el enlace (los depósitos tardan 1–2 días hábiles en aparecer). Su pago comienza en cuanto confirme. No tiene que volver a pagar.",
+      title: "Casi listo — verifique su cuenta bancaria",
+      body: "¡Gracias! Para completar su pago bancario, verifique su cuenta: Stripe está enviando un pequeño depósito de prueba y un correo con un enlace que le indica exactamente qué ingresar (el depósito tarda 1–2 días hábiles en aparecer). Su pago comienza en cuanto la verifique. No tiene que volver a pagar.",
     },
   },
   confirming: {

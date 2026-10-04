@@ -147,26 +147,27 @@ export const fakeDb = {
     return true;
   },
   // WHERE id AND processing = intent
-  clearInvoicePaymentProcessing: async (
-    id: number,
-    intent: string,
-    window: { linkExpiresAt: Date; dueDate: string; restartRemindersAt?: Date }
-  ) => {
+  clearInvoicePaymentProcessing: async (id: number, intent: string, window: { linkExpiresAt: Date; dueDate: string }) => {
     const invoice = kit.invoices.get(id);
     if (!invoice || invoice.paymentProcessingIntentId !== intent) return false;
-    const { restartRemindersAt, ...rest } = window;
-    Object.assign(invoice, { paymentProcessingAt: null, paymentProcessingIntentId: null, ...rest });
-    if (restartRemindersAt) {
-      Object.assign(invoice, { linkSentAt: restartRemindersAt, reminderCount: 0, lastReminderAt: null, reminderExhaustedAlertAt: null });
-    }
+    Object.assign(invoice, { paymentProcessingAt: null, paymentProcessingIntentId: null, ...window });
     return true;
   },
-  // WHERE id AND status NOT IN (paid, void) AND lastDuplicate = intent AND processing = failed
+  // WHERE id AND status NOT IN (paid, void) AND processing IS NULL
+  restartBalanceReminders: async (id: number, now: Date) => {
+    const invoice = kit.invoices.get(id);
+    if (!invoice || settled(invoice) || invoice.paymentProcessingIntentId) return false;
+    Object.assign(invoice, { linkSentAt: now, reminderCount: 0, lastReminderAt: null, reminderExhaustedAlertAt: null });
+    return true;
+  },
+  listHeldDuplicatePayments: async (invoiceId: number) =>
+    kit.payments
+      .filter(p => p.invoiceId === invoiceId && p.duplicate && p.status === "succeeded")
+      .map(p => ({ id: p.id, stripePaymentIntentId: p.stripePaymentIntentId, method: p.method })),
+  // WHERE id AND status NOT IN (paid, void) AND processing = failed
   promoteDuplicatePayment: async (id: number, intent: string, failedIntent: string, data: { paidAt: Date; paidMethod?: string }) => {
     const invoice = kit.invoices.get(id);
-    if (!invoice || settled(invoice) || invoice.lastDuplicateIntentId !== intent || invoice.paymentProcessingIntentId !== failedIntent) {
-      return false;
-    }
+    if (!invoice || settled(invoice) || invoice.paymentProcessingIntentId !== failedIntent) return false;
     Object.assign(invoice, {
       status: "paid",
       paidAt: data.paidAt,
@@ -255,7 +256,16 @@ export const fakeDb = {
     invoices: ids.flatMap(id => {
       const i = kit.invoices.get(id);
       return i
-        ? [{ id: i.id, number: i.number, status: i.status, stripePaymentIntentId: i.stripePaymentIntentId, paymentProcessingIntentId: i.paymentProcessingIntentId }]
+        ? [
+            {
+              id: i.id,
+              number: i.number,
+              status: i.status,
+              stripePaymentIntentId: i.stripePaymentIntentId,
+              paymentProcessingIntentId: i.paymentProcessingIntentId,
+              paymentProcessingAt: i.paymentProcessingAt,
+            },
+          ]
         : [];
     }),
     payments: kit.payments
@@ -283,13 +293,18 @@ type FakeSession = {
   amount_total: number;
   metadata: Record<string, string>;
   client_reference_id: string | null;
+  customer_email: string | null;
 };
 type FakeIntent = {
   id: string;
   object: "payment_intent";
   status: string;
   metadata: Record<string, string>;
+  /** Fully refunded. */
   refunded?: boolean;
+  /** Part of it refunded (cents). */
+  partlyRefundedCents?: number;
+  disputed?: boolean;
   /** The instrument on the charge, as Stripe names it ("card", "us_bank_account"). */
   methodType?: string;
   next_action?: { type: string } | null;
@@ -300,6 +315,7 @@ export const stripeKit = {
   intents: new Map<string, FakeIntent>(),
   createCalls: [] as Array<{ params: Record<string, unknown>; options?: { idempotencyKey?: string } }>,
   expireCalls: [] as string[],
+  listCalls: [] as Array<Record<string, unknown>>,
   idempotency: new Map<string, { params: string; session: FakeSession }>(),
   seq: 0,
   /** Make the next N sessions.create calls fail, as a provider outage would. */
@@ -311,6 +327,7 @@ export function resetFakeStripe(): void {
   stripeKit.intents.clear();
   stripeKit.createCalls = [];
   stripeKit.expireCalls = [];
+  stripeKit.listCalls = [];
   stripeKit.idempotency.clear();
   stripeKit.seq = 0;
   stripeKit.failCreates = 0;
@@ -331,7 +348,8 @@ function intentWithCharge(intent: FakeIntent): Record<string, unknown> {
     latest_charge: {
       id: `ch_${intent.id}`,
       refunded: Boolean(intent.refunded),
-      amount_refunded: intent.refunded ? 1 : 0,
+      amount_refunded: intent.refunded ? 18000 : (intent.partlyRefundedCents ?? 0),
+      disputed: Boolean(intent.disputed),
       payment_method_details: intent.methodType ? { type: intent.methodType } : null,
     },
   };
@@ -383,6 +401,7 @@ export const fakeStripe = {
           amount_total: lineTotal(params),
           metadata: (params.metadata ?? {}) as Record<string, string>,
           client_reference_id: (params.client_reference_id as string) ?? null,
+          customer_email: (params.customer_email as string) ?? null,
         };
         stripeKit.sessions.set(id, session);
         if (key) stripeKit.idempotency.set(key, { params: signature, session: { ...session } });
@@ -402,9 +421,18 @@ export const fakeStripe = {
         session.url = null;
         return { ...session };
       },
-      list: (params: { created?: { gte?: number }; expand?: string[] }) => {
+      list: (params: {
+        created?: { gte?: number };
+        expand?: string[];
+        status?: string;
+        customer_details?: { email: string };
+      }) => {
+        stripeKit.listCalls.push(params);
         const rows = Array.from(stripeKit.sessions.values())
           .filter(s => s.created >= (params.created?.gte ?? 0))
+          .filter(s => !params.status || s.status === params.status)
+          // Stripe fills customer_details once the customer completes checkout.
+          .filter(s => !params.customer_details || (s.status === "complete" && s.customer_email === params.customer_details.email))
           .map(s => expandIntent(s, params.expand));
         return {
           async *[Symbol.asyncIterator]() {

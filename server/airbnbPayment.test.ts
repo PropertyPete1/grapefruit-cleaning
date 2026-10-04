@@ -59,6 +59,9 @@ vi.mock("./db", async () => {
     createInvoice: (...a: unknown[]) => mockCreateInvoice(...a),
     updateInvoice: (...a: unknown[]) => mockUpdateInvoice(...a),
     settleUnpaidInvoice: (...a: unknown[]) => mockSettleUnpaidInvoice(...a),
+    // Settlement checks the ledger for the intent first (never settle with a recorded duplicate).
+    findInvoicePaymentByIntent: async () => undefined,
+    listHeldDuplicatePayments: async () => [],
     flagInvoiceRefundNeeded: vi.fn().mockResolvedValue(true),
     createPayment: (...a: unknown[]) => mockCreatePayment(...a),
     recordOfflineInvoicePayment: (...a: unknown[]) => mockRecordOffline(...a),

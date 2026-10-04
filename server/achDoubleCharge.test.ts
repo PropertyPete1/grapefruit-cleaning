@@ -28,7 +28,7 @@ vi.mock("nodemailer", () => ({
 }));
 
 import { _resetRateLimits } from "./antiSpam";
-import { resendBalanceLink, sendDueBalanceReminders } from "./balance";
+import { applyBalancePayment, resendBalanceLink, sendDueBalanceReminders, syncInvoiceWithStripe } from "./balance";
 import { registerBalanceRoutes } from "./balanceRoutes";
 import { __resetTransporter } from "./emails";
 import { findOverlappingSessions, inspectPaymentIntegrity } from "./paymentHealth";
@@ -127,6 +127,7 @@ async function legacySession(): Promise<string> {
     line_items: [{ price_data: { unit_amount: 18000 }, quantity: 1 }],
     metadata: { payment_type: "balance", invoice_id: String(INVOICE_ID), invoice_number: NUMBER },
     client_reference_id: String(INVOICE_ID),
+    customer_email: "alex@example.com",
   });
   return session.id;
 }
@@ -686,7 +687,7 @@ describe("microdeposit verification", () => {
 
     for (const query of [{}, { paid: "1" }]) {
       const body = String((await visit(query)).body);
-      expect(body).toContain("Almost done — confirm your bank account");
+      expect(body).toContain("Almost done — verify your bank account");
       expect(body).not.toContain("There&#39;s nothing else to do".replace("&#39;", "'"));
     }
     expect(invoice().paymentProcessingIntentId).toBe("pi_micro");
@@ -726,16 +727,195 @@ describe("invoices last touched by the old per-visit code", () => {
     expect(invoice()).toMatchObject({ status: "paid", stripePaymentIntentId: "pi_first", refundNeeded: true, lastDuplicateIntentId: "pi_second" });
   });
 
-  it("closes every stray open session before minting the invoice's first tracked one", async () => {
+  it("closes the old code's stray sessions but reopens the stored one a customer may be paying in", async () => {
     const { older, stored } = await legacyInvoice();
 
     const res = await visit();
 
     expect(res.statusCode).toBe(303);
     expect(stripeKit.sessions.get(older)!.status).toBe("expired");
-    expect(stripeKit.sessions.get(stored)!.status).toBe("expired");
+    expect(stripeKit.sessions.get(stored)!.status).toBe("open");
+    expect(res.redirectUrl).toBe(`https://checkout.stripe.test/${stored}`);
+    expect(stripeKit.createCalls).toHaveLength(2); // only the two legacy sessions this test made
+  });
+
+  it("mints the first tracked session once the stored one has lapsed", async () => {
+    const { older, stored } = await legacyInvoice();
+    stripeKit.sessions.get(stored)!.status = "expired";
+
+    const res = await visit();
+
+    expect(res.statusCode).toBe(303);
+    expect(stripeKit.sessions.get(older)!.status).toBe("expired");
     expect(invoice().checkoutAttempt).toBe(1);
-    expect(res.redirectUrl).toBe(`https://checkout.stripe.test/${invoice().stripeSessionId}`);
+    expect(stripeKit.createCalls.at(-1)!.params.metadata).toMatchObject({ checkout_attempt: "1" });
+  });
+
+  it("finds the old payment even when a resend moved linkSentAt past it (scan from the invoice's creation)", async () => {
+    const { older } = await legacyInvoice();
+    customerPays(older, "ach", "pi_before_resend");
+    bankSettles("pi_before_resend", "succeeded");
+    stripeKit.sessions.get(older)!.created -= 6 * 24 * 3600; // six days before…
+    Object.assign(invoice(), { linkSentAt: new Date(), createdAt: new Date(Date.now() - 8 * DAY) }); // …the resend
+
+    expect(String((await visit()).body)).toContain("Payment received");
+    expect(invoice()).toMatchObject({ status: "paid", stripePaymentIntentId: "pi_before_resend" });
+    // Narrowed to this customer's completed sessions, not the whole account.
+    expect(stripeKit.listCalls[0]).toMatchObject({ status: "complete", customer_details: { email: "alex@example.com" } });
+  });
+
+  it("never settles with a payment the owner already refunded — the next unrefunded one settles", async () => {
+    const { older, stored } = await legacyInvoice();
+    customerPays(older, "ach", "pi_refunded");
+    bankSettles("pi_refunded", "succeeded");
+    stripeKit.intents.get("pi_refunded")!.refunded = true;
+    customerPays(stored, "ach", "pi_kept");
+    bankSettles("pi_kept", "succeeded");
+
+    expect(String((await visit()).body)).toContain("Payment received");
+    expect(invoice()).toMatchObject({ status: "paid", stripePaymentIntentId: "pi_kept", refundNeeded: false });
+    expect(kit.payments.map(p => p.stripePaymentIntentId)).toEqual(["pi_kept"]);
+  });
+
+  it("tells the owner when more than one bank payment is in flight, and waits on the first", async () => {
+    const { older, stored } = await legacyInvoice();
+    customerPays(older, "ach", "pi_one");
+    customerPays(stored, "ach", "pi_two");
+
+    expect(String((await visit()).body)).toContain("Your bank payment is processing");
+    expect(invoice().paymentProcessingIntentId).toBe("pi_one");
+    const alert = ownerAlerts().find(a => a.title.includes("More than one bank payment in flight"))!;
+    expect(alert.content).toContain("pi_one");
+    expect(alert.content).toContain("pi_two");
+  });
+
+  it("when the first in-flight payment fails, the second takes over — the customer is not told to pay again", async () => {
+    vi.stubEnv("PUBLIC_BASE_URL", "https://grapefruitclean.com");
+    const { older, stored } = await legacyInvoice();
+    customerPays(older, "ach", "pi_one");
+    customerPays(stored, "ach", "pi_two");
+    await visit();
+    mockSendMail.mockClear();
+
+    bankSettles("pi_one", "failed");
+    await deliver(sessionEvent("checkout.session.async_payment_failed", older));
+
+    expect(invoice().paymentProcessingIntentId).toBe("pi_two");
+    expect(customerEmails().some(m => m.subject.includes("didn't go through"))).toBe(false);
+    expect(ownerAlerts().at(-1)!.title).toContain("another payment covers it");
+  });
+});
+
+describe("round three: refunded money never settles, every held duplicate counts", () => {
+  /** ACH A in flight on one stray session; card duplicates on others — the legacy shape, set up through real events. */
+  async function processingWithDuplicates(cards: string[]): Promise<string> {
+    const s1 = await legacySession();
+    customerPays(s1, "ach", "pi_A");
+    await deliver(sessionEvent("checkout.session.completed", s1));
+    for (const id of cards) {
+      const s = await legacySession();
+      customerPays(s, "card", id);
+      await deliver(sessionEvent("checkout.session.completed", s));
+    }
+    return s1;
+  }
+
+  it("a duplicate the owner refunded never settles the reopened invoice — not by the link, not by a late event", async () => {
+    vi.stubEnv("PUBLIC_BASE_URL", "https://grapefruitclean.com");
+    const s1 = await processingWithDuplicates(["pi_X"]);
+    Object.assign(invoice(), { stripeSessionId: s1, checkoutAttempt: 0 }); // pointer on a legacy session
+    stripeKit.intents.get("pi_X")!.refunded = true;
+    bankSettles("pi_A", "failed");
+    await deliver(sessionEvent("checkout.session.async_payment_failed", s1));
+    expect(invoice().status).toBe("sent");
+
+    await visit(); // the legacy scan sees pi_X's session still reading "paid"
+    await deliver(intentEvent("payment_intent.succeeded", "pi_X", "evt_late_redelivery"));
+    expect(await applyBalancePayment(INVOICE_ID, "pi_X")).toEqual({ outcome: "refunded" });
+
+    expect(invoice().status).toBe("sent");
+    expect(invoice().stripePaymentIntentId).toBeNull();
+    expect(kit.payments.filter(p => p.stripePaymentIntentId === "pi_X")).toHaveLength(1);
+  });
+
+  it("a recorded duplicate never settles the invoice by the back door, even when Stripe cannot be read", async () => {
+    await processingWithDuplicates(["pi_X"]);
+    Object.assign(invoice(), { paymentProcessingAt: null, paymentProcessingIntentId: null }); // reopened by hand
+    const spy = vi.spyOn(fakeStripe.paymentIntents, "retrieve").mockRejectedValue(new Error("Stripe down"));
+    const result = await applyBalancePayment(INVOICE_ID, "pi_X");
+    spy.mockRestore();
+    expect(result).toEqual({ outcome: "duplicate" });
+    expect(invoice().status).toBe("sent");
+  });
+
+  it("promotion looks at every held duplicate: the owner refunded the newest, the older one pays", async () => {
+    const s1 = await processingWithDuplicates(["pi_X1", "pi_X2"]);
+    stripeKit.intents.get("pi_X2")!.refunded = true;
+    bankSettles("pi_A", "failed");
+    await deliver(sessionEvent("checkout.session.async_payment_failed", s1));
+    expect(invoice()).toMatchObject({ status: "paid", stripePaymentIntentId: "pi_X1" });
+    expect(kit.payments.find(p => p.stripePaymentIntentId === "pi_X2")).toMatchObject({ status: "refunded" });
+  });
+
+  it("after the original clears, the owner is told to refund EVERY held duplicate", async () => {
+    const s1 = await processingWithDuplicates(["pi_X1", "pi_X2"]);
+    const before = ownerAlerts().length;
+    bankSettles("pi_A", "succeeded");
+    await deliver(sessionEvent("checkout.session.async_payment_succeeded", s1));
+    const refundNow = ownerAlerts().slice(before).filter(a => a.content.includes("REFUND THIS:"));
+    expect(refundNow.map(a => a.content.match(/REFUND THIS: (\S+)/)![1]).sort()).toEqual(["pi_X1", "pi_X2"]);
+  });
+
+  it("a part-refunded or disputed duplicate is left to the owner — no promotion, and the customer is not told to pay again", async () => {
+    vi.stubEnv("PUBLIC_BASE_URL", "https://grapefruitclean.com");
+    const s1 = await processingWithDuplicates(["pi_X"]);
+    stripeKit.intents.get("pi_X")!.disputed = true;
+    mockSendMail.mockClear();
+    bankSettles("pi_A", "failed");
+    await deliver(sessionEvent("checkout.session.async_payment_failed", s1));
+
+    expect(invoice()).toMatchObject({ status: "sent", paymentProcessingAt: null });
+    expect(customerEmails().some(m => m.subject.includes("didn't go through"))).toBe(false);
+    expect(ownerAlerts().at(-1)!.title).toContain("check the duplicate by hand");
+  });
+
+  it("a void invoice whose bank payment fails tells the owner to refund the duplicate it still holds", async () => {
+    const s1 = await processingWithDuplicates(["pi_X"]);
+    Object.assign(invoice(), { status: "void" });
+    bankSettles("pi_A", "failed");
+    await deliver(sessionEvent("checkout.session.async_payment_failed", s1));
+    expect(ownerAlerts().at(-1)!.content).toContain("Refund now (held duplicates on this invoice): pi_X");
+  });
+
+  it("closes the old code's open sessions while a pre-deploy invoice's payment is processing", async () => {
+    const stray = await legacySession();
+    const paying = await legacySession();
+    customerPays(paying, "ach", "pi_A");
+    Object.assign(invoice(), { stripeSessionId: paying, checkoutAttempt: 0, paymentProcessingAt: new Date(), paymentProcessingIntentId: "pi_A" });
+
+    expect(String((await visit()).body)).toContain("Your bank payment is processing");
+    expect(stripeKit.sessions.get(stray)!.status).toBe("expired");
+  });
+});
+
+describe("Check with Stripe — the owner's sync", () => {
+  it("records a bank payment the webhook never reported, with no email to the customer", async () => {
+    await visit();
+    const sessionId = invoice().stripeSessionId!;
+    customerPays(sessionId, "ach", "pi_ach_1");
+    await deliver(sessionEvent("checkout.session.completed", sessionId));
+    bankSettles("pi_ach_1", "succeeded");
+    mockSendMail.mockClear();
+
+    expect(await syncInvoiceWithStripe(INVOICE_ID, "https://grapefruitclean.com")).toEqual({ outcome: "checked", state: "paid" });
+    expect(invoice()).toMatchObject({ status: "paid", paidMethod: "bank" });
+    expect(customerEmails().some(m => m.subject.includes("Your cleaning is complete"))).toBe(false);
+    expect(stripeKit.createCalls).toHaveLength(1);
+  });
+
+  it("never mints a checkout — an untouched invoice reads 'none'", async () => {
+    expect(await syncInvoiceWithStripe(INVOICE_ID, "https://grapefruitclean.com")).toEqual({ outcome: "checked", state: "none" });
+    expect(stripeKit.createCalls).toHaveLength(0);
   });
 });
 

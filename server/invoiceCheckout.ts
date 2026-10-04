@@ -86,11 +86,25 @@ export interface LivePaymentIntent {
   state: PaymentIntentState;
   /** How the money moved: "bank" for ACH and other bank debits, "card" otherwise; null when Stripe does not say. */
   method: "card" | "bank" | null;
-  /** True once any of the charge has been refunded. */
+  /** True once ANY of the charge has been refunded — a payment like that is never promoted to pay an invoice. */
   refunded: boolean;
-  /** True while an ACH customer still has to confirm Stripe's two microdeposits before the debit starts. */
+  /** True only when ALL of it was refunded — the only case treated as "no money held". */
+  fullyRefunded: boolean;
+  /** True when the customer disputed the charge (or the bank returned an ACH debit after success, which Stripe files as a dispute). */
+  disputed: boolean;
+  /** True while an ACH customer still has to verify their account (microdeposits) before the debit starts. */
   awaitingVerification: boolean;
 }
+
+/** A read that failed: everything unknown, nothing claimed. */
+export const UNKNOWN_INTENT: LivePaymentIntent = {
+  state: "unknown",
+  method: null,
+  refunded: false,
+  fullyRefunded: false,
+  disputed: false,
+  awaitingVerification: false,
+};
 
 type IntentLike = Pick<Stripe.PaymentIntent, "status" | "payment_method_types"> & {
   next_action?: { type?: string | null } | null;
@@ -108,6 +122,8 @@ export function describeIntent(intent: IntentLike): LivePaymentIntent {
     state: paymentIntentState(intent.status),
     method: type == null ? null : BANK_METHOD_TYPES.has(type) ? "bank" : "card",
     refunded: Boolean(charge && (charge.refunded || (charge.amount_refunded ?? 0) > 0)),
+    fullyRefunded: Boolean(charge?.refunded),
+    disputed: Boolean(charge?.disputed),
     awaitingVerification,
   };
 }
@@ -182,6 +198,10 @@ export interface CheckoutHooks {
   onPaymentSucceeded(invoiceId: number, paymentIntentId: string | null): Promise<unknown>;
   /** The processing payment failed (the webhook may not have landed yet): clear the state, idempotently. */
   onPaymentFailed(invoiceId: number, paymentIntentId: string): Promise<unknown>;
+  /** The customer's email — narrows the scan of a pre-deploy invoice's sessions to this customer's. */
+  customerEmail?: string;
+  /** Tells the owner something only a person can sort out (more than one bank payment in flight). Never throws. */
+  alertOwner?(title: string, content: string): Promise<void>;
 }
 
 export interface OpenCheckoutOptions {
@@ -221,25 +241,73 @@ async function readIntentSafely(paymentIntentId: string): Promise<LivePaymentInt
     return await readPaymentIntent(paymentIntentId);
   } catch (error) {
     console.warn(`[Checkout] Could not read payment intent ${paymentIntentId}:`, error);
-    return { state: "unknown", method: null, refunded: false, awaitingVerification: false };
+    return UNKNOWN_INTENT;
   }
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const MAX_LEGACY_SESSIONS = 1000;
+/** No session can stay open longer than this (Stripe's 24-hour cap, plus a margin). */
+const OPEN_SESSION_HORIZON_MS = 25 * 60 * 60 * 1000;
+const MAX_LEGACY_SESSIONS = 500;
+
+/** Sessions minted under one-live-session carry their attempt; anything without it was minted by the old per-visit code. */
+function isLegacySession(session: Pick<Stripe.Checkout.Session, "metadata">, invoiceId: number): boolean {
+  return (
+    session.metadata?.payment_type === "balance" &&
+    Number(session.metadata?.invoice_id) === invoiceId &&
+    session.metadata?.checkout_attempt == null
+  );
+}
+
+async function listLegacySessions(invoiceId: number, params: Stripe.Checkout.SessionListParams): Promise<Stripe.Checkout.Session[]> {
+  const found: Stripe.Checkout.Session[] = [];
+  let seen = 0;
+  for await (const session of getStripe().checkout.sessions.list({ limit: 100, ...params })) {
+    seen += 1;
+    if (seen > MAX_LEGACY_SESSIONS) throw new Error(`Too many Stripe sessions to reconcile invoice ${invoiceId}`);
+    if (isLegacySession(session, invoiceId)) found.push(session);
+  }
+  return found.sort((a, b) => a.created - b.created);
+}
+
+/** The old code's sessions for this invoice that could still be paid right now. */
+async function openLegacySessions(invoice: Invoice, now: Date): Promise<Stripe.Checkout.Session[]> {
+  return listLegacySessions(invoice.id, {
+    status: "open",
+    created: { gte: Math.floor((now.getTime() - OPEN_SESSION_HORIZON_MS) / 1000) },
+  });
+}
+
+/**
+ * Closes the old code's open sessions for an invoice — all of them, or all but
+ * `keep` (the stored one, which the normal path may still reopen). Returns
+ * "rescan" when one completed while it was being closed.
+ */
+async function closeLegacySessions(invoice: Invoice, now: Date, keep: string | null): Promise<"done" | "rescan"> {
+  for (const session of await openLegacySessions(invoice, now)) {
+    if (session.id === keep) continue;
+    if ((await closeSession(session.id)) === "completed") return "rescan";
+  }
+  return "done";
+}
 
 /**
  * Invoices last touched by the code before one-live-session (attempt 0 with a
  * stored session) may have more than one session out there: that code minted
- * one per visit and kept only the newest id. A bank payment can be in flight
- * on a session the invoice no longer points at — exactly the incident's shape
- * — so before such an invoice is ever handed a new checkout, all of its
- * sessions are read from Stripe: a completed payment is recorded (the first
- * settles, any later one is a duplicate), a processing one marks the invoice,
- * and every stray open session is closed. Runs once per legacy invoice: the
- * mint that follows moves it to attempt 1.
- *
- * Returns "rescan" when a session completed while it was being closed.
+ * one per visit and kept only the newest id, so a bank payment can be in
+ * flight — or have landed — on a session the invoice no longer points at:
+ * exactly the incident's shape. Before such an invoice is handed a checkout,
+ * its completed sessions are read from Stripe (narrowed to the customer's
+ * email, from the invoice's creation on — never from linkSentAt, which resends
+ * move):
+ *   - a fully refunded payment counts for nothing;
+ *   - the earliest unrefunded paid session settles the invoice, any later one
+ *     is recorded as a duplicate (through the normal settle path);
+ *   - an in-flight payment marks the invoice processing; a second one in
+ *     flight is reported to the owner, since only a person can untangle it.
+ * Then the old code's stray open sessions are closed (the stored one too once
+ * the invoice is paid or processing). Runs until the invoice's first tracked
+ * mint moves it to attempt 1.
  */
 async function reconcileLegacySessions(
   invoice: Invoice,
@@ -247,29 +315,38 @@ async function reconcileLegacySessions(
   now: Date,
   mayClose: boolean
 ): Promise<"done" | "rescan"> {
-  const anchor = invoice.linkSentAt ?? invoice.approvedAt ?? invoice.createdAt;
-  const since = Math.floor((new Date(anchor).getTime() - DAY_MS) / 1000);
-  const sessions: Stripe.Checkout.Session[] = [];
-  let seen = 0;
-  for await (const session of getStripe().checkout.sessions.list({ created: { gte: since }, limit: 100, expand: ["data.payment_intent"] })) {
-    seen += 1;
-    if (seen > MAX_LEGACY_SESSIONS) throw new Error(`Too many Stripe sessions to reconcile invoice ${invoice.id}`);
-    if (session.metadata?.payment_type === "balance" && Number(session.metadata?.invoice_id) === invoice.id) sessions.push(session);
-  }
-  sessions.sort((a, b) => a.created - b.created);
-  for (const session of sessions) {
+  const since = Math.floor((new Date(invoice.createdAt).getTime() - 2 * DAY_MS) / 1000);
+  const completed = await listLegacySessions(invoice.id, {
+    status: "complete",
+    created: { gte: since },
+    expand: ["data.payment_intent.latest_charge"],
+    ...(hooks.customerEmail ? { customer_details: { email: hooks.customerEmail } } : {}),
+  });
+  const inFlight: string[] = [];
+  for (const session of completed) {
     const view = classifySession(session);
-    if (view.kind === "paid") await hooks.onPaymentSucceeded(invoice.id, view.paymentIntentId);
-    else if (view.kind === "processing" && view.paymentIntentId) {
+    const intent = typeof session.payment_intent === "object" && session.payment_intent ? session.payment_intent : null;
+    if (view.kind === "paid") {
+      if (intent && describeIntent(intent as IntentLike).fullyRefunded) continue;
+      await hooks.onPaymentSucceeded(invoice.id, view.paymentIntentId);
+    } else if (view.kind === "processing" && view.paymentIntentId) {
+      inFlight.push(view.paymentIntentId);
       await db.markInvoicePaymentProcessing(invoice.id, view.paymentIntentId, now);
     }
   }
-  if (!mayClose) return "done";
-  for (const session of sessions) {
-    if (session.status !== "open") continue;
-    if ((await closeSession(session.id)) === "completed") return "rescan";
+  if (inFlight.length > 1 && hooks.alertOwner) {
+    await hooks.alertOwner(
+      `More than one bank payment in flight — ${invoice.number}`,
+      [
+        `Invoice ${invoice.number} has ${inFlight.length} bank payments processing at once (made before the one-checkout fix): ${inFlight.join(", ")}.`,
+        `The invoice waits on ${inFlight[0]}. When the others clear they are recorded as duplicates to refund; if the first fails, check Stripe before the customer pays again.`,
+      ].join("\n")
+    );
   }
-  return "done";
+  if (!mayClose) return "done";
+  const after = await db.getInvoiceById(invoice.id);
+  const settledOrWaiting = Boolean(after && (after.status === "paid" || after.status === "void" || after.paymentProcessingIntentId));
+  return closeLegacySessions(invoice, now, settledOrWaiting ? null : invoice.stripeSessionId);
 }
 
 /**
@@ -318,6 +395,11 @@ export async function openInvoiceCheckout(
     // since — the webhook may be late, or never configured — and otherwise
     // refuse: the customer has paid, the bank is moving the money.
     if (invoice.paymentProcessingIntentId) {
+      // A pre-deploy invoice whose payment is in flight may still have the old
+      // code's other sessions open: none of them may stay payable.
+      if (mayMint && invoice.checkoutAttempt === 0 && invoice.stripeSessionId) {
+        if ((await closeLegacySessions(invoice, now(), null)) === "rescan") continue;
+      }
       const live = await readIntentSafely(invoice.paymentProcessingIntentId);
       if (live.state === "succeeded") {
         await hooks.onPaymentSucceeded(invoice.id, invoice.paymentProcessingIntentId);

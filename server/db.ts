@@ -1612,6 +1612,31 @@ export async function flagInvoiceDuplicatePayment(id: number, stripePaymentInten
   return affectedRows(result) > 0;
 }
 
+/** Every duplicate still held on an invoice (recorded, succeeded, not yet refunded), oldest first. */
+export async function listHeldDuplicatePayments(invoiceId: number) {
+  const db = requireDb(await getDb());
+  return db
+    .select({ id: payments.id, stripePaymentIntentId: payments.stripePaymentIntentId, method: payments.method })
+    .from(payments)
+    .where(and(eq(payments.invoiceId, invoiceId), eq(payments.duplicate, true), eq(payments.status, "succeeded")))
+    .orderBy(asc(payments.id))
+    .limit(20);
+}
+
+/**
+ * Restarts an open invoice's reminder sequence from `now` — day 3 and day 7
+ * count again from here, and the owner's exhausted alert re-arms. Only while
+ * the invoice is open with nothing processing.
+ */
+export async function restartBalanceReminders(id: number, now: Date): Promise<boolean> {
+  const db = requireDb(await getDb());
+  const result = await db
+    .update(invoices)
+    .set({ linkSentAt: now, reminderCount: 0, lastReminderAt: null, reminderExhaustedAlertAt: null })
+    .where(and(eq(invoices.id, id), notInArray(invoices.status, ["paid", "void"]), isNull(invoices.paymentProcessingIntentId)));
+  return affectedRows(result) > 0;
+}
+
 /** The payments row this intent already produced on this invoice, if any — a recorded duplicate's redelivery guard. */
 export async function findInvoicePaymentByIntent(invoiceId: number, stripePaymentIntentId: string) {
   const db = requireDb(await getDb());
@@ -1654,15 +1679,14 @@ export async function markInvoicePaymentProcessing(
  * so a failure of some other payment (a declined card retried in the same
  * session, a duplicate) can never reopen an invoice whose real payment is
  * still in flight. The link's window is renewed in the same write — a bank
- * failure lands days later, and the customer must be able to pay again — and,
- * when asked, the reminder sequence restarts from `restartRemindersAt`, so a
- * customer whose two reminders were used up before they paid is still chased.
+ * failure lands days later, and the customer must be able to pay again (the
+ * reminder sequence restarts separately, once nothing else covers the bill).
  * Returns true for the caller that cleared it.
  */
 export async function clearInvoicePaymentProcessing(
   id: number,
   stripePaymentIntentId: string,
-  window: { linkExpiresAt: Date; dueDate: string; restartRemindersAt?: Date }
+  window: { linkExpiresAt: Date; dueDate: string }
 ): Promise<boolean> {
   const db = requireDb(await getDb());
   const result = await db
@@ -1672,9 +1696,6 @@ export async function clearInvoicePaymentProcessing(
       paymentProcessingIntentId: null,
       linkExpiresAt: window.linkExpiresAt,
       dueDate: window.dueDate,
-      ...(window.restartRemindersAt
-        ? { linkSentAt: window.restartRemindersAt, reminderCount: 0, lastReminderAt: null, reminderExhaustedAlertAt: null }
-        : {}),
     })
     .where(and(eq(invoices.id, id), eq(invoices.paymentProcessingIntentId, stripePaymentIntentId)));
   return affectedRows(result) > 0;
@@ -1685,9 +1706,9 @@ export async function clearInvoicePaymentProcessing(
  * duplicate succeeded (and Stripe shows it unrefunded): that one now pays the
  * invoice. One transaction — the invoice settles to it, its payments row stops
  * reading as a duplicate, and the refund flag stays up only if ANOTHER
- * duplicate is still waiting on a refund — claimed only while that exact
- * duplicate is the one on file and the failed payment is still the one
- * processing, which this same write clears.
+ * duplicate is still waiting on a refund — claimed only while the failed
+ * payment is still the one processing, which this same write clears. The
+ * caller has confirmed on Stripe that this duplicate is held and unrefunded.
  */
 export async function promoteDuplicatePayment(
   invoiceId: number,
@@ -1715,7 +1736,6 @@ export async function promoteDuplicatePayment(
         and(
           eq(invoices.id, invoiceId),
           notInArray(invoices.status, ["paid", "void"]),
-          eq(invoices.lastDuplicateIntentId, stripePaymentIntentId),
           // Still the failed payment's processing state: clearing and promoting
           // are one write, so no checkout can open in between.
           eq(invoices.paymentProcessingIntentId, failedIntentId)
@@ -2955,7 +2975,7 @@ export async function listStuckProcessingInvoices(before: Date) {
  * intent. The health check holds Stripe's own record up against this.
  */
 export async function getInvoicePaymentRecords(invoiceIds: number[]): Promise<{
-  invoices: Array<Pick<Invoice, "id" | "number" | "status" | "stripePaymentIntentId" | "paymentProcessingIntentId">>;
+  invoices: Array<Pick<Invoice, "id" | "number" | "status" | "stripePaymentIntentId" | "paymentProcessingIntentId" | "paymentProcessingAt">>;
   payments: Array<{ invoiceId: number | null; stripePaymentIntentId: string | null; status: string; duplicate: boolean }>;
 }> {
   if (invoiceIds.length === 0) return { invoices: [], payments: [] };
@@ -2968,6 +2988,7 @@ export async function getInvoicePaymentRecords(invoiceIds: number[]): Promise<{
         status: invoices.status,
         stripePaymentIntentId: invoices.stripePaymentIntentId,
         paymentProcessingIntentId: invoices.paymentProcessingIntentId,
+        paymentProcessingAt: invoices.paymentProcessingAt,
       })
       .from(invoices)
       .where(inArray(invoices.id, invoiceIds)),

@@ -46,6 +46,7 @@ import { composeAddress, MAX_HOME_SQFT, MIN_HOME_SQFT, PROPERTY_TYPES } from "@s
 import { applyCancellationSideEffectsSafely } from "../cancellation";
 import {
   approveBalanceInvoice,
+  syncInvoiceWithStripe,
   balanceDueForBooking,
   issueBalanceSafely,
   issueManualInvoice,
@@ -1735,6 +1736,22 @@ export const adminRouter = router({
         default:
           throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
       }
+    }),
+
+  /**
+   * "Check with Stripe" on an invoice: syncs what Stripe knows — records a
+   * payment the webhook missed, marks a bank payment in flight, reopens a
+   * failed one. Never mints a checkout or emails a link.
+   */
+  syncInvoicePayment: adminProcedure
+    .input(z.object({ invoiceId: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const result = await syncInvoiceWithStripe(input.invoiceId, originFromRequest(ctx.req));
+      if (result.outcome === "not_found") throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
+      if (result.outcome === "no_link") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This invoice never had a payment link, so there is nothing on Stripe to check." });
+      }
+      return { state: result.state };
     }),
 
   // ---------- Payments ----------

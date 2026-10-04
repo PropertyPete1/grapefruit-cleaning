@@ -293,11 +293,25 @@ describe("processing state", () => {
     Object.assign(inv(), { status: "void" });
     expect(await db.markInvoicePaymentProcessing(1, "pi_A")).toBe(false);
   });
-  it("a clear can restart the reminder sequence in the same write", async () => {
-    Object.assign(inv(), { paymentProcessingIntentId: "pi_A", reminderCount: 2, lastReminderAt: new Date(), reminderExhaustedAlertAt: new Date() });
+  it("restarts the reminder sequence only on an open invoice with nothing processing", async () => {
+    Object.assign(inv(), { reminderCount: 2, lastReminderAt: new Date(), reminderExhaustedAlertAt: new Date(), paymentProcessingIntentId: "pi_B" });
     const now = new Date("2026-10-04T15:00:00Z");
-    await db.clearInvoicePaymentProcessing(1, "pi_A", { linkExpiresAt: new Date(), dueDate: "2026-10-11", restartRemindersAt: now });
+    expect(await db.restartBalanceReminders(1, now)).toBe(false);
+    Object.assign(inv(), { paymentProcessingIntentId: null });
+    expect(await db.restartBalanceReminders(1, now)).toBe(true);
     expect(inv()).toMatchObject({ linkSentAt: now, reminderCount: 0, lastReminderAt: null, reminderExhaustedAlertAt: null });
+    Object.assign(inv(), { status: "paid", reminderCount: 2 });
+    expect(await db.restartBalanceReminders(1, now)).toBe(false);
+  });
+
+  it("lists every duplicate still held on an invoice, oldest first", async () => {
+    sqlHarness.tables.payments.push(
+      { id: 1, invoiceId: 1, stripePaymentIntentId: "pi_B", duplicate: true, status: "succeeded" },
+      { id: 2, invoiceId: 1, stripePaymentIntentId: "pi_C", duplicate: true, status: "refunded" },
+      { id: 3, invoiceId: 1, stripePaymentIntentId: "pi_D", duplicate: true, status: "succeeded" },
+      { id: 4, invoiceId: 1, stripePaymentIntentId: "pi_A", duplicate: false, status: "succeeded" }
+    );
+    expect((await db.listHeldDuplicatePayments(1)).map(r => r.stripePaymentIntentId)).toEqual(["pi_B", "pi_D"]);
   });
 
   it("refuses to record money by hand while a bank payment is processing", async () => {
@@ -327,8 +341,8 @@ describe("processing state", () => {
     Object.assign(inv(), { refundNeeded: true, lastDuplicateIntentId: "pi_B", paymentProcessingAt: new Date(), paymentProcessingIntentId: "pi_A" });
     sqlHarness.tables.payments.push({ id: 1, invoiceId: 1, stripePaymentIntentId: "pi_B", duplicate: true, status: "succeeded" });
     expect(await db.promoteDuplicatePayment(1, "pi_B", "pi_other", { paidAt: new Date() })).toBe(false); // a different payment is processing
-    expect(await db.promoteDuplicatePayment(1, "pi_X", "pi_A", { paidAt: new Date() })).toBe(false); // not the one on file
     expect(await db.promoteDuplicatePayment(1, "pi_B", "pi_A", { paidAt: new Date(), paidMethod: "card" })).toBe(true);
+    expect(await db.promoteDuplicatePayment(1, "pi_B", "pi_A", { paidAt: new Date() })).toBe(false); // already promoted
     expect(inv()).toMatchObject({
       status: "paid",
       stripePaymentIntentId: "pi_B",

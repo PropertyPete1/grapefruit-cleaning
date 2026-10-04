@@ -622,6 +622,16 @@ describe("resendBalanceLink", () => {
     expect(mockSessionCreate).toHaveBeenCalledTimes(1);
   });
 
+  it("Check with Stripe reads Stripe and never mints or emails; an invoice without a link is refused", async () => {
+    mockGetInvoiceById.mockResolvedValue(INVOICE);
+    const caller = adminRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+    expect(await caller.syncInvoicePayment({ invoiceId: 501 })).toEqual({ state: "none" });
+    expect(mockSessionCreate).not.toHaveBeenCalled();
+    expect(mockSendMail).not.toHaveBeenCalled();
+    mockGetInvoiceById.mockResolvedValue({ ...INVOICE, payToken: null });
+    await expect(caller.syncInvoicePayment({ invoiceId: 501 })).rejects.toThrow(/never had a payment link/);
+  });
+
   it("rejects resending a paid invoice through the admin router", async () => {
     mockGetInvoiceById.mockResolvedValue({ ...INVOICE, status: "paid" });
     const caller = adminRouter.createCaller({ user: { id: 1, role: "admin" } } as never);

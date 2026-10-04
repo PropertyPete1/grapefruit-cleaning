@@ -1478,7 +1478,7 @@ export function buildBankPaymentFailedEmail(data: BalanceEmailData): { subject: 
       body: [
         `Hola ${data.customerName},`,
         ``,
-        `Su banco nos informó que el pago bancario de ${ref} (${fmtUsd(data.balance)}) no se completó, así que no se cobró nada.`,
+        `Su pago bancario de ${ref} (${fmtUsd(data.balance)}) no se pudo completar, así que no se cobró nada.`,
         `Puede pagar de nuevo cuando le convenga, con tarjeta o cuenta bancaria:`,
         data.payUrl,
         ``,
@@ -1496,7 +1496,7 @@ export function buildBankPaymentFailedEmail(data: BalanceEmailData): { subject: 
     body: [
       `Hi ${data.customerName},`,
       ``,
-      `Your bank let us know that the bank payment for ${ref} (${fmtUsd(data.balance)}) didn't go through, so nothing was taken.`,
+      `Your bank payment for ${ref} (${fmtUsd(data.balance)}) couldn't be completed, so nothing was taken.`,
       `You can pay again whenever it suits you, by card or bank account:`,
       data.payUrl,
       ``,
