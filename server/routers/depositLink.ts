@@ -32,6 +32,7 @@ import { centsToDollars, depositCents, dollarsToCents, legacyWholeDollars } from
 import * as db from "../db";
 import { applyCoupon, computeBasePrice, resolveEffectiveSqft, usableCoupon } from "../adminBooking";
 import { assertRateLimit, clientIp } from "../antiSpam";
+import { IMMEDIATE_PAYMENT_METHOD_TYPES } from "../checkoutMethods";
 import {
   bookingNeeds,
   depositLinkStatus,
@@ -701,6 +702,9 @@ export const depositLinkRouter = router({
         customer_email: (await db.getCustomerById(booking.customerId))?.email ?? undefined,
         client_reference_id: String(booking.id),
         allow_promotion_codes: false,
+        // Card only: a bank debit would complete this session "unpaid", leave
+        // the booking pending, and let the next tap mint a second debit.
+        payment_method_types: [...IMMEDIATE_PAYMENT_METHOD_TYPES],
         // Capped at the remaining hold, so a session can never outlive the
         // slot it is paying for.
         expires_at:

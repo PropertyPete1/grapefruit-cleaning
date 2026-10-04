@@ -377,6 +377,16 @@ describe("payment lands in the normal flow", () => {
     expect(args.metadata.payment_type).toBeUndefined();
   });
 
+  it("offers card only, so a completed session is always a paid one", async () => {
+    await caller().createSession({ token: TOKEN, extras: [] });
+    const args = mockSessionCreate.mock.calls[0]![0] as { payment_method_types?: string[] };
+    // Left to the Dashboard's methods, Checkout offered ACH: the session
+    // completed "unpaid", the webhook (which acts only on "paid") left the
+    // booking pending with this link still payable, and the next tap minted a
+    // second session — a second debit.
+    expect(args.payment_method_types).toEqual(["card"]);
+  });
+
   it("returns the customer to the booking confirmation page in their language", async () => {
     mockGetBookingByPayToken.mockResolvedValue(booking({ locale: "es" }));
     await caller().createSession({ token: TOKEN, extras: [] });
