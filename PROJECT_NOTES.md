@@ -897,4 +897,5 @@ Invariants a payment change must keep:
   touch: the customer's completed sessions since the invoice was created (never from `linkSentAt`, which resends
   move) are read from Stripe — fully refunded ones skipped — and the old code's stray open sessions closed.
   New sessions carry `metadata.checkout_attempt`, which is how the two are told apart. No backfill was run.
-- Deposits and tips still have the same ACH blindness — open follow-up.
+- Deposits and tips had the same ACH blindness; that is handled separately (PR #24 restricts those sessions
+  to card), not by this machinery.
