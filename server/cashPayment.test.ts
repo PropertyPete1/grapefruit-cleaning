@@ -273,6 +273,31 @@ describe("Test F — Paid in Cash on a completed booking", () => {
     expect(mockRecordOffline).not.toHaveBeenCalled();
   });
 
+  it("refuses Paid in Cash while the customer's bank payment is processing — collecting twice is the double charge", async () => {
+    mockGetBalanceInvoice.mockResolvedValue({ ...INVOICE, paymentProcessingAt: new Date(), paymentProcessingIntentId: "pi_ach" });
+    expect(await payBookingInCash({ bookingId: 42, recordedByUserId: 9, origin: ORIGIN })).toEqual({ outcome: "payment_processing", invoiceId: 501 });
+    expect(mockRecordOffline).not.toHaveBeenCalled();
+    await expect(adminCaller().markPaidInCash({ bookingId: 42 })).rejects.toThrow(/bank payment for this balance is still processing/);
+  });
+
+  it("maps the ledger's own processing refusal too (a payment that started processing mid-tap)", async () => {
+    mockRecordOffline.mockResolvedValue({ outcome: "payment_processing", paymentIntentId: "pi_ach" });
+    expect(await payBookingInCash({ bookingId: 42, recordedByUserId: 9, origin: ORIGIN })).toEqual({ outcome: "payment_processing", invoiceId: 501 });
+  });
+
+  it("a booking whose balance is being paid by bank reads 'Bank payment processing' and offers no Paid in Cash", () => {
+    const status = derivePaymentStatus({
+      status: "completed",
+      depositAmount: 68,
+      depositAmountCents: 6800,
+      stripePaymentIntentId: "pi_1",
+      paymentPreference: "cash",
+      invoice: { status: "sent", paymentPreference: "cash", paymentProcessingAt: new Date() },
+    });
+    expect(status).toBe("payment_processing");
+    expect(canMarkPaidInCash({ status: "completed", paymentStatus: status })).toBe(false);
+  });
+
   it("a tip already on file is refused rather than recorded twice", async () => {
     mockRecordOffline.mockResolvedValue({ outcome: "tip_already_recorded" });
     expect(await payBookingInCash({ bookingId: 42, tipAmount: 10, recordedByUserId: 9, origin: ORIGIN })).toEqual({ outcome: "tip_already_recorded", invoiceId: 501 });
@@ -408,6 +433,19 @@ describe("PAY WITH CASH on the balance email", () => {
     await routes["POST /api/pay/balance/:token/cash"]!(request("POST"), again as unknown as Response);
     expect(again.body).toContain("Got it — cash it is");
     expect(mockNotifyOwner).toHaveBeenCalledTimes(1);
+  });
+
+  it("a customer whose bank payment is processing is told so — nothing to choose, nothing recorded", async () => {
+    mockGetInvoiceByPayToken.mockResolvedValue({ ...INVOICE, paymentProcessingAt: new Date(), paymentProcessingIntentId: "pi_ach" });
+    const routes = captureRoutes();
+    for (const method of ["GET", "POST"] as const) {
+      const res = fakeRes();
+      await routes[`${method} /api/pay/balance/:token/cash`]!(request(method), res as unknown as Response);
+      expect(res.body).toContain("Your bank payment is processing");
+      expect(res.body).not.toContain('method="post"');
+    }
+    expect(mockClaimCashPreference).not.toHaveBeenCalled();
+    expect(mockNotifyOwner).not.toHaveBeenCalled();
   });
 
   it("a customer who already chose cash sees they are set, in their language", async () => {

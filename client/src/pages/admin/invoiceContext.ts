@@ -80,6 +80,8 @@ export type InvoicePaymentContext = {
   paidMethod?: string | null;
   paidAt?: Date | string | null;
   paymentPreference?: string | null;
+  /** Set while the customer's bank payment is in flight. */
+  paymentProcessingAt?: Date | string | null;
   dueDate?: string | null;
 };
 
@@ -91,6 +93,7 @@ export type InvoiceContextInput = InvoicePaymentContext & {
 
 const METHOD_LABELS: Record<string, string> = {
   card: "Card (online)",
+  bank: "Bank payment (ACH)",
   cash: "Cash",
   venmo: "Venmo",
   zelle: "Zelle",
@@ -115,6 +118,7 @@ function paymentRows(invoice: InvoicePaymentContext): ContextRow[] {
       paidVia: invoice.paidVia,
       paidMethod: invoice.paidMethod,
       paymentPreference: invoice.paymentPreference,
+      paymentProcessingAt: invoice.paymentProcessingAt,
     });
     rows.push({ label: "Status", value: INVOICE_PAYMENT_STATUS_LABELS[position] });
     if (invoice.status === "paid") {

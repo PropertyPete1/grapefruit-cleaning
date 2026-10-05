@@ -18,6 +18,14 @@ const mockSendMail = vi.fn();
 const mockTipRequest = vi.fn();
 
 vi.mock("./db", () => ({
+  // One-live-session checkout (invoiceCheckout.ts): this caller wins every
+  // claim and the stored session has always died, so each open mints.
+  claimInvoiceCheckoutAttempt: async () => true,
+  recordInvoiceCheckoutSession: async () => true,
+  releaseInvoiceCheckoutClaim: async () => undefined,
+  endInvoiceCheckoutSession: async () => undefined,
+  markInvoicePaymentProcessing: async () => true,
+  findInvoicePaymentByIntent: async () => undefined,
   getSetting: (...args: unknown[]) => mockGetSetting(...args),
   getBookingById: (...args: unknown[]) => mockGetBookingById(...args),
   getCustomerById: (...args: unknown[]) => mockGetCustomerById(...args),
@@ -31,7 +39,7 @@ vi.mock("./db", () => ({
 
 vi.mock("./stripe", () => ({
   getStripe: () => ({
-    checkout: { sessions: { create: (...args: unknown[]) => mockSessionCreate(...args) } },
+    checkout: { sessions: { create: (...args: unknown[]) => mockSessionCreate(...args), retrieve: async (id: string) => ({ id, status: "expired", payment_status: "unpaid" }) } },
   }),
 }));
 

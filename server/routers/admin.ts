@@ -46,6 +46,7 @@ import { composeAddress, MAX_HOME_SQFT, MIN_HOME_SQFT, PROPERTY_TYPES } from "@s
 import { applyCancellationSideEffectsSafely } from "../cancellation";
 import {
   approveBalanceInvoice,
+  syncInvoiceWithStripe,
   balanceDueForBooking,
   issueBalanceSafely,
   issueManualInvoice,
@@ -692,6 +693,12 @@ export const adminRouter = router({
               result.status === "void"
                 ? "This booking's invoice was voided — nothing is owed on it."
                 : `This booking is already paid${result.paidMethod === "cash" ? " in cash" : ""}.`,
+          });
+        case "payment_processing":
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "The customer's bank payment for this balance is still processing — recording money now would collect it twice. It settles (or fails and reopens) on its own within a few business days.",
           });
         case "tip_already_recorded":
           throw new TRPCError({
@@ -1352,7 +1359,15 @@ export const adminRouter = router({
     const now = new Date();
     return rows.map(({ invoice: { payToken, ...invoice }, booking, customer }) => ({
       ...invoice,
-      linkStatus: balanceLinkStatus({ status: invoice.status, payToken, linkExpiresAt: invoice.linkExpiresAt }, now),
+      linkStatus: balanceLinkStatus(
+        {
+          status: invoice.status,
+          payToken,
+          linkExpiresAt: invoice.linkExpiresAt,
+          paymentProcessingAt: invoice.paymentProcessingAt,
+        },
+        now
+      ),
       // The customer's name for this bill — what every email to them says —
       // so the owner and the customer are talking about the same thing.
       serviceReference: adminServiceReference(invoice, booking),
@@ -1547,6 +1562,12 @@ export const adminRouter = router({
           throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found." });
         case "already_settled":
           throw new TRPCError({ code: "CONFLICT", message: `This invoice is already ${result.status}.` });
+        case "payment_processing":
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "The customer's bank payment for this balance is still processing — recording money now would collect it twice. It settles (or fails and reopens) on its own within a few business days.",
+          });
         case "amount_mismatch":
           throw new TRPCError({
             code: "BAD_REQUEST",
@@ -1696,6 +1717,12 @@ export const adminRouter = router({
           throw new TRPCError({ code: "BAD_REQUEST", message: "This invoice is already paid." });
         case "voided":
           throw new TRPCError({ code: "BAD_REQUEST", message: "This invoice was voided." });
+        case "payment_processing":
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "The customer's bank payment is processing — sending another link could charge them twice. It settles (or fails, and reopens) on its own within a few business days.",
+          });
         case "awaiting_approval":
           throw new TRPCError({
             code: "BAD_REQUEST",
@@ -1709,6 +1736,22 @@ export const adminRouter = router({
         default:
           throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
       }
+    }),
+
+  /**
+   * "Check with Stripe" on an invoice: syncs what Stripe knows — records a
+   * payment the webhook missed, marks a bank payment in flight, reopens a
+   * failed one. Never mints a checkout or emails a link.
+   */
+  syncInvoicePayment: adminProcedure
+    .input(z.object({ invoiceId: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const result = await syncInvoiceWithStripe(input.invoiceId, originFromRequest(ctx.req));
+      if (result.outcome === "not_found") throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
+      if (result.outcome === "no_link") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This invoice never had a payment link, so there is nothing on Stripe to check." });
+      }
+      return { state: result.state };
     }),
 
   // ---------- Payments ----------

@@ -643,15 +643,38 @@ export const invoices = mysqlTable("invoices", {
   cashChosenAt: timestamp("cashChosenAt"),
   /**
    * Secret token behind the emailed payment link (/api/pay/balance/:token).
-   * The route mints a fresh Stripe Checkout Session on each visit, so the
-   * customer-facing link stays valid for the whole linkExpiresAt window even
-   * though a single Stripe session may live at most 24 hours.
+   * The link outlives any one Stripe Checkout Session (24 hours at most): the
+   * route reopens the invoice's live session while there is one and mints a
+   * replacement only once that session has expired or its payment failed.
    */
   payToken: varchar("payToken", { length: 64 }),
-  /** Most recent Stripe Checkout Session minted for this invoice. */
+  /** The invoice's current Stripe Checkout Session — the ONE live session it may have. */
   stripeSessionId: varchar("stripeSessionId", { length: 255 }),
-  /** Payment intent that settled this invoice (or the one needing a refund). */
+  /** When stripeSessionId stops being payable (Stripe's expires_at). NULL on pre-0036 rows. */
+  stripeSessionExpiresAt: timestamp("stripeSessionExpiresAt"),
+  /**
+   * How many Checkout Sessions have been minted for this invoice. The count is
+   * the claim: a mint first moves it from N to N+1 with a conditional UPDATE,
+   * so two visits racing can never both create a session, and N+1 rides in
+   * the Stripe idempotency key so Stripe refuses a second session for the
+   * same attempt too.
+   */
+  checkoutAttempt: int("checkoutAttempt").default(0).notNull(),
+  /** When the current attempt was claimed — a claim with no session after a minute is abandoned. */
+  checkoutClaimedAt: timestamp("checkoutClaimedAt"),
+  /**
+   * Set while a delayed payment (ACH, bank transfer) is in flight: Checkout
+   * completed but the money has not landed. The pay link shows "your bank
+   * payment is processing" and refuses a new checkout, reminders stop, and
+   * the async failure clears it so the customer can try again.
+   */
+  paymentProcessingAt: timestamp("paymentProcessingAt"),
+  /** The payment intent that is processing — only ITS success settles the invoice, only ITS failure clears the state. */
+  paymentProcessingIntentId: varchar("paymentProcessingIntentId", { length: 255 }),
+  /** Payment intent that settled this invoice. A duplicate never overwrites it. */
   stripePaymentIntentId: varchar("stripePaymentIntentId", { length: 255 }),
+  /** The most recent duplicate payment recorded against this invoice — the redelivery guard for its alert. */
+  lastDuplicateIntentId: varchar("lastDuplicateIntentId", { length: 255 }),
   /** When the payment link was last emailed to the customer (null = never sent). */
   linkSentAt: timestamp("linkSentAt"),
   /** End of the payment link's validity window (7 days from send/resend). */
@@ -687,9 +710,10 @@ export const invoices = mysqlTable("invoices", {
    */
   reminderExhaustedAlertAt: timestamp("reminderExhaustedAlertAt"),
   /**
-   * Set when a card payment landed on an invoice that was already settled
-   * (collected in person, or paid twice). Manual payment always wins; this
-   * flags the money that has to be refunded instead of double-marking paid.
+   * Set when a second Stripe payment landed on an invoice that was already
+   * settled (collected in person, or paid twice) or had a payment processing.
+   * The earlier payment always stands; this flags the money that has to be
+   * refunded instead of double-marking paid.
    */
   refundNeeded: boolean("refundNeeded").default(false).notNull(),
   repairNote: text("repairNote"),
@@ -719,10 +743,42 @@ export const payments = mysqlTable("payments", {
   recordedAt: timestamp("recordedAt"),
   stripePaymentIntentId: varchar("stripePaymentIntentId", { length: 255 }),
   status: mysqlEnum("status", ["pending", "succeeded", "failed", "refunded"]).default("pending").notNull(),
+  /**
+   * True for a second Stripe payment on an invoice that was already paid or
+   * had a payment processing: real money, recorded so the books show it, but
+   * never applied to the invoice — it is waiting on a refund.
+   */
+  duplicate: boolean("duplicate").default(false).notNull(),
   repairNote: text("repairNote"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 export type Payment = typeof payments.$inferSelect;
+
+/**
+ * Every Checkout Session minted for an invoice, with the window it was payable
+ * in. The invoice row holds only the current one; this keeps the history the
+ * daily health check reads to prove no session was ever minted while another
+ * was still live. endedAt is stamped when the app sees a session die (expired,
+ * payment failed, closed early) before minting its replacement.
+ */
+export const invoiceCheckoutSessions = mysqlTable(
+  "invoice_checkout_sessions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    invoiceId: int("invoiceId").notNull(),
+    stripeSessionId: varchar("stripeSessionId", { length: 255 }).notNull(),
+    attempt: int("attempt").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    expiresAt: timestamp("expiresAt").notNull(),
+    endedAt: timestamp("endedAt"),
+    endReason: varchar("endReason", { length: 40 }),
+  },
+  table => [
+    uniqueIndex("invoice_checkout_sessions_session_unique").on(table.stripeSessionId),
+    index("invoice_checkout_sessions_invoice_idx").on(table.invoiceId, table.createdAt),
+  ]
+);
+export type InvoiceCheckoutSession = typeof invoiceCheckoutSessions.$inferSelect;
 
 export const reviews = mysqlTable("reviews", {
   id: int("id").autoincrement().primaryKey(),

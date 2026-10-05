@@ -7,7 +7,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Express, Request, Response } from "express";
 
 const mockApplyBalancePayment = vi.fn();
-const mockCreateBalanceSession = vi.fn();
+const mockOpenCheckout = vi.fn();
+const mockMarkProcessing = vi.fn();
+const mockClearProcessing = vi.fn();
 const mockFinalizeBooking = vi.fn();
 const mockConstructEvent = vi.fn();
 const mockGetInvoiceByPayToken = vi.fn();
@@ -18,7 +20,10 @@ const mockUpdateInvoice = vi.fn();
 vi.mock("./balance", () => ({
   BALANCE_PAYMENT_TYPE: "balance",
   applyBalancePayment: (...args: unknown[]) => mockApplyBalancePayment(...args),
-  createBalanceCheckoutSession: (...args: unknown[]) => mockCreateBalanceSession(...args),
+  openBalanceCheckout: (...args: unknown[]) => mockOpenCheckout(...args),
+  markBalancePaymentProcessing: (...args: unknown[]) => mockMarkProcessing(...args),
+  clearBalancePaymentProcessing: (...args: unknown[]) => mockClearProcessing(...args),
+  balancePayUrl: (origin: string, token: string) => `${origin}/api/pay/balance/${token}`,
 }));
 
 vi.mock("./routers/booking", () => ({
@@ -105,7 +110,9 @@ beforeEach(() => {
   mockGetInvoiceByPayToken.mockResolvedValue(INVOICE);
   mockGetBookingById.mockResolvedValue(BOOKING);
   mockGetCustomerById.mockResolvedValue(CUSTOMER);
-  mockCreateBalanceSession.mockResolvedValue({ id: "cs_new", url: "https://stripe.test/checkout" });
+  mockOpenCheckout.mockResolvedValue({ kind: "redirect", url: "https://stripe.test/checkout", sessionId: "cs_new", reused: false });
+  mockMarkProcessing.mockResolvedValue({ outcome: "processing" });
+  mockClearProcessing.mockResolvedValue({ outcome: "cleared" });
 });
 
 // ---------------------------------------------------------------------------
@@ -116,8 +123,8 @@ describe("checkout.session.completed routing", () => {
   const webhookRequest = () =>
     ({ headers: { "stripe-signature": "sig" }, body: Buffer.from("{}") }) as unknown as Request;
 
-  function fireEvent(session: Record<string, unknown>, id = "evt_1") {
-    mockConstructEvent.mockReturnValue({ id, type: "checkout.session.completed", data: { object: session } });
+  function fireEvent(session: Record<string, unknown>, id = "evt_1", type = "checkout.session.completed") {
+    mockConstructEvent.mockReturnValue({ id, type, data: { object: session } });
     const handler = captureHandler(registerStripeWebhook);
     return handler(webhookRequest(), fakeRes() as unknown as Response);
   }
@@ -129,7 +136,7 @@ describe("checkout.session.completed routing", () => {
       payment_intent: "pi_balance_1",
     });
 
-    expect(mockApplyBalancePayment).toHaveBeenCalledWith(501, "pi_balance_1");
+    expect(mockApplyBalancePayment).toHaveBeenCalledWith(501, "pi_balance_1", { method: "card" });
     expect(mockFinalizeBooking).not.toHaveBeenCalled();
   });
 
@@ -150,14 +157,71 @@ describe("checkout.session.completed routing", () => {
     expect(mockApplyBalancePayment).not.toHaveBeenCalled();
   });
 
-  it("ignores balance sessions that were not actually paid", async () => {
+  it("never settles a balance session that completed unpaid", async () => {
     await fireEvent({
       metadata: { payment_type: "balance", invoice_id: "501" },
       payment_status: "unpaid",
       payment_intent: null,
     });
     expect(mockApplyBalancePayment).not.toHaveBeenCalled();
+    expect(mockMarkProcessing).not.toHaveBeenCalled();
     expect(mockFinalizeBooking).not.toHaveBeenCalled();
+  });
+
+  it("marks the invoice processing when a bank payment completes checkout unpaid", async () => {
+    await fireEvent({
+      metadata: { payment_type: "balance", invoice_id: "501" },
+      payment_status: "unpaid",
+      payment_intent: "pi_ach_1",
+    });
+    expect(mockMarkProcessing).toHaveBeenCalledWith(501, "pi_ach_1");
+    expect(mockApplyBalancePayment).not.toHaveBeenCalled();
+  });
+
+  it("settles on checkout.session.async_payment_succeeded, as a bank payment", async () => {
+    await fireEvent(
+      { metadata: { payment_type: "balance", invoice_id: "501" }, payment_status: "paid", payment_intent: "pi_ach_1" },
+      "evt_async_ok",
+      "checkout.session.async_payment_succeeded"
+    );
+    expect(mockApplyBalancePayment).toHaveBeenCalledWith(501, "pi_ach_1", { method: "bank" });
+    expect(mockFinalizeBooking).not.toHaveBeenCalled();
+  });
+
+  it("clears the processing state on checkout.session.async_payment_failed", async () => {
+    await fireEvent(
+      { metadata: { payment_type: "balance", invoice_id: "501" }, payment_status: "unpaid", payment_intent: "pi_ach_1" },
+      "evt_async_fail",
+      "checkout.session.async_payment_failed"
+    );
+    expect(mockClearProcessing).toHaveBeenCalledWith(501, "pi_ach_1");
+    expect(mockApplyBalancePayment).not.toHaveBeenCalled();
+  });
+
+  it("routes balance payment_intent events by the metadata copied onto the intent", async () => {
+    const intent = { id: "pi_ach_2", metadata: { payment_type: "balance", invoice_id: "501" } };
+    await fireEvent(intent, "evt_pi_1", "payment_intent.processing");
+    await fireEvent(intent, "evt_pi_2", "payment_intent.payment_failed");
+    await fireEvent(intent, "evt_pi_3", "payment_intent.succeeded");
+    expect(mockMarkProcessing).toHaveBeenCalledWith(501, "pi_ach_2");
+    expect(mockClearProcessing).toHaveBeenCalledWith(501, "pi_ach_2");
+    expect(mockApplyBalancePayment).toHaveBeenCalledWith(501, "pi_ach_2");
+  });
+
+  it("ignores payment_intent events that carry no invoice metadata (deposits, tips, old sessions)", async () => {
+    await fireEvent({ id: "pi_deposit", metadata: {} }, "evt_pi_4", "payment_intent.succeeded");
+    expect(mockApplyBalancePayment).not.toHaveBeenCalled();
+    expect(mockFinalizeBooking).not.toHaveBeenCalled();
+  });
+
+  it("does not touch deposits or tips on async events (not handled for them yet)", async () => {
+    await fireEvent(
+      { metadata: { booking_id: "42" }, payment_status: "paid", payment_intent: "pi_dep" },
+      "evt_async_dep",
+      "checkout.session.async_payment_succeeded"
+    );
+    expect(mockFinalizeBooking).not.toHaveBeenCalled();
+    expect(mockApplyBalancePayment).not.toHaveBeenCalled();
   });
 
   it("returns the verification response for Stripe test events without touching payments", async () => {
@@ -203,24 +267,121 @@ describe("GET /api/pay/balance/:token", () => {
       socket: { remoteAddress: "203.0.113.9" },
     }) as unknown as Request;
 
-  it("mints a fresh session and redirects while the window is open", async () => {
+  it("opens the invoice's one live session and redirects while the window is open", async () => {
     const res = fakeRes();
     await handler()(request("tok_abc"), res as unknown as Response);
 
-    expect(mockCreateBalanceSession).toHaveBeenCalledWith(
-      expect.objectContaining({ invoice: INVOICE, customerEmail: "ana@example.com" })
+    expect(mockOpenCheckout).toHaveBeenCalledWith(
+      expect.objectContaining({ invoiceId: 501, customerEmail: "ana@example.com", locale: "en" })
     );
+    // Never the look-only mode: this visit may mint if nothing is live.
+    expect(mockOpenCheckout.mock.calls[0]![0]).not.toHaveProperty("mint", false);
     expect(res.statusCode).toBe(303);
     expect(res.redirectUrl).toBe("https://stripe.test/checkout");
-    expect(mockUpdateInvoice).toHaveBeenCalledWith(501, { stripeSessionId: "cs_new" });
+    // The route no longer writes the session itself — the open stores it under its claim.
+    expect(mockUpdateInvoice).not.toHaveBeenCalled();
   });
 
-  it("shows the thank-you notice on return from Stripe without reopening checkout", async () => {
+  it("refuses a second checkout while the customer's bank payment is processing", async () => {
+    mockOpenCheckout.mockResolvedValue({ kind: "processing", paymentIntentId: "pi_ach_1" });
+    const res = fakeRes();
+    await handler()(request("tok_abc"), res as unknown as Response);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.redirectUrl).toBeUndefined();
+    expect(String(res.body)).toContain("Your bank payment is processing");
+  });
+
+  it("says processing in Spanish for a Spanish booking", async () => {
+    mockGetBookingById.mockResolvedValue({ ...BOOKING, locale: "es" });
+    mockOpenCheckout.mockResolvedValue({ kind: "processing", paymentIntentId: "pi_ach_1" });
+    const res = fakeRes();
+    await handler()(request("tok_abc"), res as unknown as Response);
+    expect(String(res.body)).toContain("Su pago bancario está en proceso");
+  });
+
+  it("shows the paid notice when Stripe reports the live session paid", async () => {
+    mockOpenCheckout.mockResolvedValue({ kind: "paid" });
+    const res = fakeRes();
+    await handler()(request("tok_abc"), res as unknown as Response);
+    expect(res.redirectUrl).toBeUndefined();
+    expect(String(res.body)).toContain("Payment received");
+  });
+
+  it("answers 'try again' rather than minting when another visit holds the claim", async () => {
+    mockOpenCheckout.mockResolvedValue({ kind: "busy" });
+    const res = fakeRes();
+    await handler()(request("tok_abc"), res as unknown as Response);
+    expect(res.statusCode).toBe(503);
+    expect(res.redirectUrl).toBeUndefined();
+  });
+
+  it("on return from Stripe asks Stripe (look only) and thanks a paid customer", async () => {
+    mockOpenCheckout.mockResolvedValue({ kind: "paid" });
     const res = fakeRes();
     await handler()(request("tok_abc", { paid: "1" }), res as unknown as Response);
 
-    expect(mockCreateBalanceSession).not.toHaveBeenCalled();
+    expect(mockOpenCheckout).toHaveBeenCalledWith(expect.objectContaining({ invoiceId: 501, mint: false }));
+    expect(res.redirectUrl).toBeUndefined();
     expect(String(res.body)).toContain("Payment received");
+  });
+
+  it("on return from a bank payment says processing — never 'paid in full'", async () => {
+    mockOpenCheckout.mockResolvedValue({ kind: "processing", paymentIntentId: "pi_ach_1" });
+    const res = fakeRes();
+    await handler()(request("tok_abc", { paid: "1" }), res as unknown as Response);
+
+    expect(String(res.body)).toContain("Your bank payment is processing");
+    expect(String(res.body)).not.toContain("paid in full");
+  });
+
+  it("on return with nothing settled yet says it is confirming, and still never reopens checkout", async () => {
+    mockOpenCheckout.mockResolvedValue({ kind: "redirect", url: "https://stripe.test/live", sessionId: "cs_live", reused: true });
+    const res = fakeRes();
+    await handler()(request("tok_abc", { paid: "1" }), res as unknown as Response);
+    expect(res.redirectUrl).toBeUndefined();
+    expect(String(res.body)).toContain("confirming your payment");
+  });
+
+  it("on return falls back to 'confirming' when Stripe cannot be read", async () => {
+    mockOpenCheckout.mockRejectedValue(new Error("Stripe is down"));
+    const res = fakeRes();
+    await handler()(request("tok_abc", { paid: "1" }), res as unknown as Response);
+    expect(res.statusCode).toBe(200);
+    expect(String(res.body)).toContain("confirming your payment");
+  });
+
+  it("lands Stripe's Back/cancel on a page with a button, never a redirect into the live session", async () => {
+    const res = fakeRes();
+    await handler()(request("tok_abc", { cancelled: "1" }), res as unknown as Response);
+
+    expect(mockOpenCheckout).not.toHaveBeenCalled();
+    expect(res.redirectUrl).toBeUndefined();
+    const body = String(res.body);
+    expect(body).toContain("Your payment wasn't completed");
+    expect(body).toContain('href="https://grapefruitclean.com/api/pay/balance/tok_abc"');
+  });
+
+  it("refuses to open checkout for a voided invoice whose window is still open", async () => {
+    mockGetInvoiceByPayToken.mockResolvedValue({ ...INVOICE, status: "void" });
+    const res = fakeRes();
+    await handler()(request("tok_abc"), res as unknown as Response);
+
+    expect(mockOpenCheckout).not.toHaveBeenCalled();
+    expect(String(res.body)).toContain("expired");
+  });
+
+  it("still asks Stripe for a processing invoice whose window has lapsed (the bank may have failed since)", async () => {
+    mockGetInvoiceByPayToken.mockResolvedValue({
+      ...INVOICE,
+      paymentProcessingAt: new Date(),
+      linkExpiresAt: new Date(Date.now() - 86_400_000),
+    });
+    mockOpenCheckout.mockResolvedValue({ kind: "processing", paymentIntentId: "pi_ach_1" });
+    const res = fakeRes();
+    await handler()(request("tok_abc"), res as unknown as Response);
+    expect(mockOpenCheckout).toHaveBeenCalledTimes(1);
+    expect(String(res.body)).toContain("Your bank payment is processing");
   });
 
   it("shows an expired notice once the 7-day window closes", async () => {
@@ -228,7 +389,7 @@ describe("GET /api/pay/balance/:token", () => {
     const res = fakeRes();
     await handler()(request("tok_abc"), res as unknown as Response);
 
-    expect(mockCreateBalanceSession).not.toHaveBeenCalled();
+    expect(mockOpenCheckout).not.toHaveBeenCalled();
     expect(String(res.body)).toContain("expired");
   });
 
@@ -237,7 +398,7 @@ describe("GET /api/pay/balance/:token", () => {
     const res = fakeRes();
     await handler()(request("tok_abc"), res as unknown as Response);
 
-    expect(mockCreateBalanceSession).not.toHaveBeenCalled();
+    expect(mockOpenCheckout).not.toHaveBeenCalled();
     expect(String(res.body)).toContain("Payment received");
   });
 
@@ -256,7 +417,7 @@ describe("GET /api/pay/balance/:token", () => {
     await handler()(request("nope"), res as unknown as Response);
 
     expect(res.statusCode).toBe(404);
-    expect(mockCreateBalanceSession).not.toHaveBeenCalled();
+    expect(mockOpenCheckout).not.toHaveBeenCalled();
   });
 
   it("rate-limits repeated hits so the link cannot be used to mint sessions in bulk", async () => {
@@ -266,11 +427,11 @@ describe("GET /api/pay/balance/:token", () => {
     await handler()(request("tok_abc"), res as unknown as Response);
 
     expect(res.statusCode).toBe(429);
-    expect(mockCreateBalanceSession).toHaveBeenCalledTimes(10);
+    expect(mockOpenCheckout).toHaveBeenCalledTimes(10);
   });
 
   it("degrades to an error notice when Stripe fails, without crashing the route", async () => {
-    mockCreateBalanceSession.mockRejectedValue(new Error("Stripe is down"));
+    mockOpenCheckout.mockRejectedValue(new Error("Stripe is down"));
     const res = fakeRes();
     await handler()(request("tok_abc"), res as unknown as Response);
 

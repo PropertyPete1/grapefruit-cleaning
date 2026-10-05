@@ -58,10 +58,35 @@ const INVOICE_STATUSES = ["draft", "sent", "overdue", "void"] as const;
 /** Payment-link state → an existing StatusBadge colour. */
 const LINK_BADGE_STATUS: Record<string, string> = {
   sent: "sent",
+  processing: "processing",
   paid: "paid",
   expired: "expired",
+  void: "void",
   none: "draft",
   awaiting_approval: "pending_deposit",
+};
+
+/**
+ * Resend makes sense only for a link the customer could still be asked to
+ * use. Never while a bank payment is processing (a second link is how a
+ * second debit happens) and never on a paid, voided or unapproved invoice.
+ */
+function canResendLink(linkStatus: string): boolean {
+  return linkStatus === "sent" || linkStatus === "expired";
+}
+
+/** "Check with Stripe" syncs any invoice with a link that is not settled — the one action for a processing invoice. */
+function canCheckStripe(linkStatus: string): boolean {
+  return linkStatus === "sent" || linkStatus === "expired" || linkStatus === "processing";
+}
+
+const SYNC_MESSAGES: Record<string, string> = {
+  paid: "Stripe shows it paid — the payment is recorded.",
+  processing: "A bank payment is processing on Stripe — the invoice waits for it.",
+  open: "Nothing paid on Stripe yet — the customer's checkout is still open.",
+  none: "Nothing paid on Stripe yet.",
+  closed: "This invoice is void.",
+  busy: "The customer is opening their checkout right now — try again in a moment.",
 };
 
 type PendingInvoice = {
@@ -474,6 +499,15 @@ export default function AdminInvoices() {
     onError: e => toast.error(e.message || "Failed to approve balance"),
   });
   const [resendingId, setResendingId] = useState<number | null>(null);
+  const [checkingId, setCheckingId] = useState<number | null>(null);
+  const checkStripe = trpc.admin.syncInvoicePayment.useMutation({
+    onSuccess: r => {
+      utils.admin.invoices.invalidate();
+      toast.success(SYNC_MESSAGES[r.state] ?? "Checked with Stripe.");
+    },
+    onError: e => toast.error(e.message || "Could not reach Stripe — try again in a moment"),
+    onSettled: () => setCheckingId(null),
+  });
   // Desktop rows opened to show their property and customer details. Phone cards
   // use RowCard's own Details toggle for the same panel.
   const [expandedIds, setExpandedIds] = useState<number[]>([]);
@@ -814,12 +848,12 @@ export default function AdminInvoices() {
                           {inv.refundNeeded && (
                             <span
                               className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700"
-                              title="A card payment arrived after this invoice was already settled — refund it in Stripe."
+                              title="A second payment arrived for this invoice — refund the duplicate in Stripe (the owner alert names both payment ids)."
                             >
                               <AlertTriangle className="h-3 w-3" /> Refund needed
                             </span>
                           )}
-                          {inv.linkStatus !== "paid" && inv.linkStatus !== "awaiting_approval" && (
+                          {canResendLink(inv.linkStatus) && (
                             <Button
                               size="sm"
                               variant="ghost"
@@ -832,6 +866,20 @@ export default function AdminInvoices() {
                             >
                               <Send className="mr-1 h-3 w-3" />
                               {resend.isPending && resendingId === inv.id ? "Sending…" : "Resend"}
+                            </Button>
+                          )}
+                          {canCheckStripe(inv.linkStatus) && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 rounded-lg px-2 text-xs"
+                              disabled={checkStripe.isPending && checkingId === inv.id}
+                              onClick={() => {
+                                setCheckingId(inv.id);
+                                checkStripe.mutate({ invoiceId: inv.id });
+                              }}
+                            >
+                              {checkStripe.isPending && checkingId === inv.id ? "Checking…" : "Check with Stripe"}
                             </Button>
                           )}
                         </div>
@@ -855,7 +903,7 @@ export default function AdminInvoices() {
                             </SelectContent>
                           </Select>
                         )}
-                        {inv.status !== "paid" && inv.status !== "void" && (
+                        {inv.status !== "paid" && inv.status !== "void" && inv.linkStatus !== "processing" && (
                           <Button size="sm" variant="outline" className="h-8 rounded-lg px-2 text-xs" onClick={() => setRecording(inv)}>
                             <Banknote className="mr-1 h-3 w-3" /> Record payment
                           </Button>
@@ -935,12 +983,12 @@ export default function AdminInvoices() {
                         </SelectContent>
                       </Select>
                     )}
-                    {inv.status !== "paid" && inv.status !== "void" && (
+                    {inv.status !== "paid" && inv.status !== "void" && inv.linkStatus !== "processing" && (
                       <Button size="sm" variant="outline" className="h-9 rounded-lg text-xs" onClick={() => setRecording(inv)}>
                         <Banknote className="mr-1 h-3.5 w-3.5" /> Record payment
                       </Button>
                     )}
-                    {inv.linkStatus !== "paid" && inv.linkStatus !== "awaiting_approval" && inv.linkStatus !== "none" && (
+                    {canResendLink(inv.linkStatus) && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -953,6 +1001,20 @@ export default function AdminInvoices() {
                       >
                         <Send className="mr-1 h-3 w-3" />
                         {resend.isPending && resendingId === inv.id ? "Sending…" : "Resend"}
+                      </Button>
+                    )}
+                    {canCheckStripe(inv.linkStatus) && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-9 rounded-lg text-xs"
+                        disabled={checkStripe.isPending && checkingId === inv.id}
+                        onClick={() => {
+                          setCheckingId(inv.id);
+                          checkStripe.mutate({ invoiceId: inv.id });
+                        }}
+                      >
+                        {checkStripe.isPending && checkingId === inv.id ? "Checking…" : "Check with Stripe"}
                       </Button>
                     )}
                   </>

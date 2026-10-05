@@ -24,6 +24,8 @@ export type BookingPaymentStatus =
   | "balance_pending_approval"
   /** The balance invoice is out (link sent) and not yet paid. */
   | "balance_due"
+  /** The customer paid the balance by bank (ACH) and the money is in flight — not owed, not yet landed. */
+  | "payment_processing"
   /** Nothing collected yet and nothing billed yet — an Airbnb job before its cleaning, or a finished job with no invoice. */
   | "unpaid"
   /** Settled online through Stripe. */
@@ -51,6 +53,7 @@ export interface PaymentStatusInput {
     paidVia?: string | null;
     paidMethod?: string | null;
     paymentPreference?: string | null;
+    paymentProcessingAt?: Date | string | null;
   } | null;
 }
 
@@ -68,6 +71,9 @@ export function derivePaymentStatus(booking: PaymentStatusInput): BookingPayment
       if (invoice.paidVia === "manual") return invoice.paidMethod === "cash" ? "paid_cash" : "paid_offline";
       return "paid";
     }
+    // Money in flight outranks any stated intention: never "Balance due" (and
+    // never Paid in Cash) for a customer whose bank payment is processing.
+    if (invoice.paymentProcessingAt) return "payment_processing";
     if (invoice.status === "awaiting_approval") return cash ? "cash_pending" : "balance_pending_approval";
     return cash ? "cash_pending" : "balance_due";
   }
@@ -91,6 +97,7 @@ export const PAYMENT_STATUS_LABELS: Record<BookingPaymentStatus, string> = {
   cash_pending: "Cash pending",
   balance_pending_approval: "Balance to approve",
   balance_due: "Balance due",
+  payment_processing: "Bank payment processing",
   unpaid: "Unpaid",
   paid: "Paid",
   paid_cash: "Paid in Cash",
@@ -115,19 +122,31 @@ export function canMarkPaidInCash(booking: { status: string; paymentStatus?: Boo
  * The invoice-side position, for Admin → Invoices: the same words the booking
  * badge uses, read off an invoice row alone (a manual invoice has no booking).
  */
-export type InvoicePaymentStatus = "paid" | "paid_cash" | "paid_offline" | "cash_pending" | "balance_pending_approval" | "balance_due" | "void" | "draft";
+export type InvoicePaymentStatus =
+  | "paid"
+  | "paid_cash"
+  | "paid_offline"
+  | "payment_processing"
+  | "cash_pending"
+  | "balance_pending_approval"
+  | "balance_due"
+  | "void"
+  | "draft";
 
 export function deriveInvoicePaymentStatus(invoice: {
   status: string;
   paidVia?: string | null;
   paidMethod?: string | null;
   paymentPreference?: string | null;
+  paymentProcessingAt?: Date | string | null;
 }): InvoicePaymentStatus {
   if (invoice.status === "paid") {
     if (invoice.paidVia === "manual") return invoice.paidMethod === "cash" ? "paid_cash" : "paid_offline";
     return "paid";
   }
   if (invoice.status === "void") return "void";
+  // Before the cash preference: money actually in flight outranks an intent.
+  if (invoice.paymentProcessingAt) return "payment_processing";
   if (invoice.paymentPreference === "cash") return "cash_pending";
   if (invoice.status === "awaiting_approval") return "balance_pending_approval";
   if (invoice.status === "draft") return "draft";
@@ -138,6 +157,7 @@ export const INVOICE_PAYMENT_STATUS_LABELS: Record<InvoicePaymentStatus, string>
   paid: "Paid online",
   paid_cash: "Paid in Cash",
   paid_offline: "Paid (recorded)",
+  payment_processing: "Bank payment processing",
   cash_pending: "Cash pending",
   balance_pending_approval: "Awaiting approval",
   balance_due: "Unpaid",

@@ -19,6 +19,11 @@ const mockRecordOfflineInvoicePayment = vi.fn();
 const mockUpdateBooking = vi.fn();
 const mockSessionCreate = vi.fn();
 const mockSessionExpire = vi.fn();
+const mockSessionRetrieve = vi.fn();
+const mockIntentRetrieve = vi.fn();
+const mockClaimCheckout = vi.fn();
+const mockRecordCheckoutSession = vi.fn();
+const mockFindPaymentByIntent = vi.fn();
 const mockSendMail = vi.fn();
 const mockNotifyOwner = vi.fn();
 
@@ -31,7 +36,13 @@ vi.mock("./db", () => ({
   createInvoice: (...args: unknown[]) => mockCreateInvoice(...args),
   updateInvoice: (...args: unknown[]) => mockUpdateInvoice(...args),
   settleUnpaidInvoice: (...args: unknown[]) => mockSettleUnpaidInvoice(...args),
-  flagInvoiceRefundNeeded: (...args: unknown[]) => mockFlagRefundNeeded(...args),
+  flagInvoiceDuplicatePayment: (...args: unknown[]) => mockFlagRefundNeeded(...args),
+  findInvoicePaymentByIntent: (...args: unknown[]) => mockFindPaymentByIntent(...args),
+  claimInvoiceCheckoutAttempt: (...args: unknown[]) => mockClaimCheckout(...args),
+  recordInvoiceCheckoutSession: (...args: unknown[]) => mockRecordCheckoutSession(...args),
+  releaseInvoiceCheckoutClaim: async () => undefined,
+  endInvoiceCheckoutSession: async () => undefined,
+  markInvoicePaymentProcessing: async () => true,
   createPayment: (...args: unknown[]) => mockCreatePayment(...args),
   recordOfflineInvoicePayment: (...args: unknown[]) => mockRecordOfflineInvoicePayment(...args),
   updateBooking: (...args: unknown[]) => mockUpdateBooking(...args),
@@ -44,8 +55,10 @@ vi.mock("./stripe", () => ({
       sessions: {
         create: (...args: unknown[]) => mockSessionCreate(...args),
         expire: (...args: unknown[]) => mockSessionExpire(...args),
+        retrieve: (...args: unknown[]) => mockSessionRetrieve(...args),
       },
     },
+    paymentIntents: { retrieve: (...args: unknown[]) => mockIntentRetrieve(...args) },
   }),
 }));
 
@@ -141,6 +154,12 @@ beforeEach(() => {
   mockGetBalanceInvoiceForBooking.mockResolvedValue(undefined);
   mockCreateInvoice.mockResolvedValue(501);
   mockSessionCreate.mockResolvedValue({ id: "cs_balance_1", url: "https://stripe.test/balance" });
+  // The invoice's stored session has died, unless a case says otherwise —
+  // so a mint is the expected path and the one-live-session cases opt in.
+  mockSessionRetrieve.mockResolvedValue({ id: "cs_balance_1", status: "expired", payment_status: "unpaid" });
+  mockClaimCheckout.mockResolvedValue(true);
+  mockRecordCheckoutSession.mockResolvedValue(true);
+  mockFindPaymentByIntent.mockResolvedValue(undefined);
   mockSendMail.mockResolvedValue({});
   // Default: this caller wins the conditional claim. Race cases override.
   mockSettleUnpaidInvoice.mockResolvedValue(true);
@@ -223,6 +242,18 @@ describe("balanceLinkStatus", () => {
 
   it("reports 'none' for a zero-balance invoice auto-marked paid without a link", () => {
     expect(balanceLinkStatus({ status: "paid", payToken: null, linkExpiresAt: null }, now)).toBe("none");
+  });
+
+  it("reports 'void' for a voided invoice, whatever its window says — the link must not open checkout", () => {
+    expect(balanceLinkStatus({ status: "void", payToken: "t", linkExpiresAt: "2026-08-10T00:00:00Z" }, now)).toBe("void");
+  });
+
+  it("reports 'processing' while a bank payment is in flight — even after the window lapses", () => {
+    const processing = { status: "sent", payToken: "t", paymentProcessingAt: "2026-08-04T00:00:00Z" };
+    expect(balanceLinkStatus({ ...processing, linkExpiresAt: "2026-08-10T00:00:00Z" }, now)).toBe("processing");
+    expect(balanceLinkStatus({ ...processing, linkExpiresAt: "2026-08-01T00:00:00Z" }, now)).toBe("processing");
+    // Settled beats processing.
+    expect(balanceLinkStatus({ ...processing, status: "paid", linkExpiresAt: null }, now)).toBe("paid");
   });
 });
 
@@ -486,6 +517,77 @@ describe("resendBalanceLink", () => {
     expect(email.subject).toContain("Your cleaning is complete");
   });
 
+  it("refuses to resend while the customer's bank payment is processing — a second link is a second debit", async () => {
+    mockGetInvoiceById.mockResolvedValue({ ...INVOICE, paymentProcessingAt: new Date(), paymentProcessingIntentId: "pi_ach" });
+    mockIntentRetrieve.mockResolvedValue({ id: "pi_ach", status: "processing" });
+    const result = await resendBalanceLink(501, ORIGIN);
+    expect(result.outcome).toBe("payment_processing");
+    // Stripe was asked — Resend doubles as the owner's sync — and said still processing.
+    expect(mockIntentRetrieve).toHaveBeenCalledWith("pi_ach", expect.anything());
+    expect(mockSessionCreate).not.toHaveBeenCalled();
+    expect(mockSendMail).not.toHaveBeenCalled();
+  });
+
+  it("refuses too when Stripe cannot be read about the processing payment", async () => {
+    mockGetInvoiceById.mockResolvedValue({ ...INVOICE, paymentProcessingAt: new Date(), paymentProcessingIntentId: "pi_ach" });
+    mockIntentRetrieve.mockRejectedValue(new Error("Stripe timeout"));
+    const result = await resendBalanceLink(501, ORIGIN);
+    expect(result.outcome).toBe("payment_processing");
+    expect(mockSessionCreate).not.toHaveBeenCalled();
+    expect(mockSendMail).not.toHaveBeenCalled();
+  });
+
+  it("Admin → Invoices reads a processing invoice as 'processing' / 'Bank payment processing'", async () => {
+    const dbModule = await import("./db");
+    vi.mocked(dbModule.listInvoices).mockResolvedValueOnce([
+      {
+        invoice: { ...INVOICE, paymentProcessingAt: new Date(), paymentProcessingIntentId: "pi_ach" },
+        booking: null,
+        customer: null,
+      },
+    ] as never);
+    const caller = adminRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+    const [row] = await caller.invoices();
+    expect(row).toMatchObject({ linkStatus: "processing", paymentStatus: "payment_processing" });
+    expect(row).not.toHaveProperty("payToken");
+  });
+
+  it("says why through the admin router when a payment is processing", async () => {
+    mockGetInvoiceById.mockResolvedValue({ ...INVOICE, paymentProcessingAt: new Date(), paymentProcessingIntentId: "pi_ach" });
+    const caller = adminRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+    await expect(caller.resendBalanceLink({ invoiceId: 501 })).rejects.toThrow(/bank payment is processing/i);
+  });
+
+  it("refuses to resend when Stripe shows the live session already completed by bank", async () => {
+    mockGetInvoiceById.mockResolvedValue(INVOICE);
+    mockSessionRetrieve.mockResolvedValue({
+      id: "cs_balance_1",
+      status: "complete",
+      payment_status: "unpaid",
+      payment_intent: { id: "pi_ach_late", status: "processing" },
+    });
+    const result = await resendBalanceLink(501, ORIGIN);
+    expect(result.outcome).toBe("payment_processing");
+    expect(mockSessionCreate).not.toHaveBeenCalled();
+  });
+
+  it("re-emails the link but reopens the live session rather than minting a second one", async () => {
+    mockGetInvoiceById.mockResolvedValue(INVOICE);
+    mockSessionRetrieve.mockResolvedValue({
+      id: "cs_balance_1",
+      status: "open",
+      payment_status: "unpaid",
+      payment_intent: null,
+      url: "https://stripe.test/live",
+      expires_at: Math.floor(Date.now() / 1000) + 20 * 3600,
+      amount_total: 20000,
+    });
+    const result = await resendBalanceLink(501, ORIGIN);
+    expect(result.outcome).toBe("resent");
+    expect(mockSessionCreate).not.toHaveBeenCalled();
+    expect(sentEmails()).toHaveLength(1);
+  });
+
   it("refuses to resend a paid invoice", async () => {
     mockGetInvoiceById.mockResolvedValue({ ...INVOICE, status: "paid" });
     const result = await resendBalanceLink(501, ORIGIN);
@@ -518,6 +620,16 @@ describe("resendBalanceLink", () => {
     const result = await caller.resendBalanceLink({ invoiceId: 501 });
     expect(result.emailed).toBe(true);
     expect(mockSessionCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("Check with Stripe reads Stripe and never mints or emails; an invoice without a link is refused", async () => {
+    mockGetInvoiceById.mockResolvedValue(INVOICE);
+    const caller = adminRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+    expect(await caller.syncInvoicePayment({ invoiceId: 501 })).toEqual({ state: "none" });
+    expect(mockSessionCreate).not.toHaveBeenCalled();
+    expect(mockSendMail).not.toHaveBeenCalled();
+    mockGetInvoiceById.mockResolvedValue({ ...INVOICE, payToken: null });
+    await expect(caller.syncInvoicePayment({ invoiceId: 501 })).rejects.toThrow(/never had a payment link/);
   });
 
   it("rejects resending a paid invoice through the admin router", async () => {

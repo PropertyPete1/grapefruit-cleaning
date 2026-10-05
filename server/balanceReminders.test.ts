@@ -28,6 +28,14 @@ const mockSendMail = vi.fn();
 const mockNotifyOwner = vi.fn();
 
 vi.mock("./db", () => ({
+  // One-live-session checkout (invoiceCheckout.ts): this caller wins every
+  // claim and the stored session has always died, so each open mints.
+  claimInvoiceCheckoutAttempt: async () => true,
+  recordInvoiceCheckoutSession: async () => true,
+  releaseInvoiceCheckoutClaim: async () => undefined,
+  endInvoiceCheckoutSession: async () => undefined,
+  markInvoicePaymentProcessing: async () => true,
+  findInvoicePaymentByIntent: async () => undefined,
   getSetting: (...a: unknown[]) => mockGetSetting(...a),
   getBookingById: (...a: unknown[]) => mockGetBookingById(...a),
   getCustomerById: (...a: unknown[]) => mockGetCustomerById(...a),
@@ -40,7 +48,7 @@ vi.mock("./db", () => ({
 }));
 
 vi.mock("./stripe", () => ({
-  getStripe: () => ({ checkout: { sessions: { create: (...a: unknown[]) => mockSessionCreate(...a) } } }),
+  getStripe: () => ({ checkout: { sessions: { create: (...a: unknown[]) => mockSessionCreate(...a), retrieve: async (id: string) => ({ id, status: "expired", payment_status: "unpaid" }) } } }),
 }));
 
 vi.mock("./_core/notification", () => ({
@@ -138,6 +146,13 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("balanceReminderAction — the 3/7-day schedule", () => {
+  it("never reminds a customer whose bank payment is processing, however late it gets", () => {
+    const processing = { ...INVOICE, paymentProcessingAt: daysLater(1) };
+    expect(balanceReminderAction(processing, daysLater(3))).toBeNull();
+    expect(balanceReminderAction(processing, daysLater(30))).toBeNull();
+    expect(balanceReminderAction({ ...processing, reminderCount: 2 }, daysLater(30))).toBeNull();
+  });
+
   it("stays silent before day 3, fires the first reminder from day 3", () => {
     expect(balanceReminderAction(INVOICE, daysLater(2.9))).toBeNull();
     expect(balanceReminderAction(INVOICE, daysLater(3))).toEqual({ action: "remind", reminderNumber: 1 });

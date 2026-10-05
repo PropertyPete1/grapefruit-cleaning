@@ -68,6 +68,8 @@ export type PayInCashOutcome =
   | { outcome: "booking_not_found" }
   | { outcome: "not_completed"; status: string }
   | { outcome: "already_settled"; invoiceId: number; status: string; paidMethod: string | null }
+  /** The customer's bank payment for this balance is in flight; collecting cash too would charge them twice. */
+  | { outcome: "payment_processing"; invoiceId: number }
   | { outcome: "nothing_due"; invoiceId: number }
   | { outcome: "tip_already_recorded"; invoiceId: number }
   | {
@@ -117,6 +119,7 @@ export async function payBookingInCash(args: {
   if (invoice.status === "paid" || invoice.status === "void") {
     return { outcome: "already_settled", invoiceId: invoice.id, status: invoice.status, paidMethod: invoice.paidMethod ?? null };
   }
+  if (invoice.paymentProcessingIntentId) return { outcome: "payment_processing", invoiceId: invoice.id };
 
   const amountCents = invoice.amountCents ?? dollarsToCents(invoice.amount);
   if (amountCents <= 0) return { outcome: "nothing_due", invoiceId: invoice.id };
@@ -138,6 +141,8 @@ export async function payBookingInCash(args: {
       return { outcome: "booking_not_found" };
     case "already_settled":
       return { outcome: "already_settled", invoiceId: invoice.id, status: result.status, paidMethod: null };
+    case "payment_processing":
+      return { outcome: "payment_processing", invoiceId: invoice.id };
     case "tip_already_recorded":
       return { outcome: "tip_already_recorded", invoiceId: invoice.id };
     case "amount_mismatch":

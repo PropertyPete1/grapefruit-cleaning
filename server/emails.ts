@@ -1143,7 +1143,7 @@ export function buildBalanceDueEmail(data: BalanceEmailData): { subject: string;
  * Works for manual invoices too, where `jobless` drops the booking reference
  * and service date rather than printing them empty.
  */
-export type ReceiptPaymentMethod = "card" | "manual" | "cash" | "venmo" | "zelle" | "check" | "other";
+export type ReceiptPaymentMethod = "card" | "bank" | "manual" | "cash" | "venmo" | "zelle" | "check" | "other";
 
 export function buildPaymentReceiptEmail(
   data: BalanceEmailData & { paidOn: string; paidVia: ReceiptPaymentMethod; tipAmount?: number }
@@ -1151,6 +1151,7 @@ export function buildPaymentReceiptEmail(
   const jobless = data.reference === "";
   const methods: Record<ReceiptPaymentMethod, { en: string; es: string }> = {
     card: { en: "Card (online)", es: "Tarjeta (en línea)" },
+    bank: { en: "Bank payment (online)", es: "Pago bancario (en línea)" },
     manual: { en: "Recorded by our team", es: "Registrado por nuestro equipo" },
     cash: { en: "Cash", es: "Efectivo" },
     venmo: { en: "Venmo", es: "Venmo" },
@@ -1463,6 +1464,60 @@ export async function sendBalanceReminderEmail(
 }
 
 /**
+ * The customer's bank payment (ACH) was returned or failed days after they
+ * paid. They were told it was processing and there was nothing else to do,
+ * so they need to hear it did not go through — with their payment link. No
+ * invoice number (customer-facing), no blame, and the reassurance that
+ * nothing was taken.
+ */
+export function buildBankPaymentFailedEmail(data: BalanceEmailData): { subject: string; body: string } {
+  const ref = referenceOf(data);
+  if (data.locale === "es") {
+    return {
+      subject: `Su pago bancario no se completó | Grapefruit Cleaning Co.`,
+      body: [
+        `Hola ${data.customerName},`,
+        ``,
+        `Su pago bancario de ${ref} (${fmtUsd(data.balance)}) no se pudo completar, así que no se cobró nada.`,
+        `Puede pagar de nuevo cuando le convenga, con tarjeta o cuenta bancaria:`,
+        data.payUrl,
+        ``,
+        data.bizPhone
+          ? `¿Preguntas? Responda a este correo o llámenos al ${data.bizPhone}.`
+          : `¿Preguntas? Simplemente responda a este correo.`,
+        ``,
+        `Con aprecio,`,
+        `El equipo de Grapefruit Cleaning Co.`,
+      ].join("\n"),
+    };
+  }
+  return {
+    subject: `Your bank payment didn't go through | Grapefruit Cleaning Co.`,
+    body: [
+      `Hi ${data.customerName},`,
+      ``,
+      `Your bank payment for ${ref} (${fmtUsd(data.balance)}) couldn't be completed, so nothing was taken.`,
+      `You can pay again whenever it suits you, by card or bank account:`,
+      data.payUrl,
+      ``,
+      data.bizPhone ? `Questions? Reply to this email or call us at ${data.bizPhone}.` : `Questions? Just reply to this email.`,
+      ``,
+      `Warmly,`,
+      `The Grapefruit Cleaning Co. Team`,
+    ].join("\n"),
+  };
+}
+
+/** Tells the customer their bank payment failed, with their link. Returns true when delivered. */
+export async function sendBankPaymentFailedEmail(data: BalanceEmailData, context?: EmailContext): Promise<boolean> {
+  const email = buildBankPaymentFailedEmail(data);
+  return deliverEmail(data.customerEmail, email.subject, email.body, undefined, {
+    ...context,
+    emailType: "balance_payment_failed",
+  });
+}
+
+/**
  * The hand-off to the owner: both automatic reminders went out and the balance
  * is still open, so the machine stops emailing the customer and a person takes
  * over. Sent once per sequence.
@@ -1522,17 +1577,74 @@ export function buildBalancePaidNotification(data: BalanceEmailData): { title: s
 }
 
 /**
- * Owner alert for the manual-payment race: the invoice was already settled
- * (collected in person, or paid once already) when a card payment landed.
- * The invoice is NOT double-marked — this money has to be refunded.
+ * The two payments behind a duplicate alert: the one that arrived second, and
+ * what it collided with. Payment intent ids are what the owner searches for in
+ * Stripe to issue the refund, so the alert names both whenever they exist.
  */
-export function buildRefundNeededAlert(data: BalanceEmailData): { title: string; content: string } {
+export interface DuplicatePaymentFacts {
+  duplicateIntentId: string | null;
+  duplicateMethod: "card" | "bank";
+  original:
+    | { kind: "settled"; intentId: string | null; method: string | null }
+    | { kind: "processing"; intentId: string | null }
+    | { kind: "settled_by_hand"; method: string | null }
+    | { kind: "settled_without_payment" }
+    | { kind: "void" };
+}
+
+function paymentWord(method: string | null | undefined): string {
+  return method === "bank" ? "bank (ACH) payment" : method === "card" || !method ? "card payment" : `${method} payment`;
+}
+
+function originalPaymentLines(original: DuplicatePaymentFacts["original"]): string[] {
+  switch (original.kind) {
+    case "settled":
+      return [`Original payment (keep): ${original.intentId ?? "(no payment id on file)"} — ${paymentWord(original.method)}, settled this invoice`];
+    case "processing":
+      return [
+        `Original payment (keep): ${original.intentId ?? "(no payment id on file)"} — bank payment, STILL PROCESSING`,
+        `Wait for the original to clear before refunding: you will get a "Balance paid" notice and a reminder to refund this one. If the original fails instead, this payment becomes the payment and there is nothing to refund — you will get an alert saying so.`,
+      ];
+    case "settled_by_hand":
+      return [`Original payment (keep): recorded by hand in Admin${original.method ? ` (${original.method})` : ""} — no Stripe payment id`];
+    case "settled_without_payment":
+      return [`Original settlement: the invoice was closed with nothing to collect`];
+    case "void":
+      return [`The invoice was VOIDED — nothing was owed`];
+  }
+}
+
+/**
+ * Owner alert for money arriving twice: the invoice was already settled
+ * (collected in person, voided, or paid once already) or had a payment still
+ * processing when another payment landed. The invoice is NOT double-marked —
+ * the duplicate is recorded, never applied, and has to be refunded. Names the
+ * invoice and both payment ids so the refund can go out at once.
+ */
+export function buildRefundNeededAlert(
+  data: BalanceEmailData,
+  payment?: DuplicatePaymentFacts
+): { title: string; content: string } {
+  const what = paymentWord(payment?.duplicateMethod ?? "card");
+  const waiting = payment?.original.kind === "processing";
+  const duplicateId = payment?.duplicateIntentId ?? "(Stripe sent no payment id — search Stripe by the amount and customer)";
   return {
     title: `⚠️ REFUND NEEDED — duplicate balance payment on ${data.invoiceNumber} (${data.reference})`,
     content: [
-      `⚠️ A card payment of ${fmtUsd(data.balance)} arrived for an invoice that was ALREADY settled.`,
-      `The invoice was left as-is (the earlier payment stands) — please refund this card payment in Stripe.`,
+      waiting
+        ? `⚠️ A second ${what} of ${fmtUsd(data.balance)} arrived while the customer's first payment for this invoice was still processing.`
+        : `⚠️ A ${what} of ${fmtUsd(data.balance)} arrived for an invoice that was ALREADY settled.`,
+      waiting
+        ? `The invoice was left as-is (the first payment owns it). Do NOT refund yet — see below.`
+        : `The invoice was left as-is (the earlier payment stands) — please refund this ${what} in Stripe.`,
       ``,
+      ...(payment
+        ? [
+            waiting ? `REFUND ONCE THE ORIGINAL CLEARS: ${duplicateId}` : `REFUND THIS: ${duplicateId}`,
+            ...originalPaymentLines(payment.original),
+            ``,
+          ]
+        : []),
       `Reference: ${data.reference}`,
       `Invoice: ${data.invoiceNumber}`,
       `Service: ${data.serviceName}`,
@@ -1601,9 +1713,9 @@ export async function sendBalancePaidNotification(data: BalanceEmailData): Promi
   await notifyOwnerWithEmailCopy(buildBalancePaidNotification(data));
 }
 
-/** Notifies the owner that a duplicate card payment needs refunding. */
-export async function sendRefundNeededAlert(data: BalanceEmailData): Promise<void> {
-  await notifyOwnerWithEmailCopy(buildRefundNeededAlert(data));
+/** Notifies the owner that a duplicate payment needs refunding, naming both payments. */
+export async function sendRefundNeededAlert(data: BalanceEmailData, payment?: DuplicatePaymentFacts): Promise<void> {
+  await notifyOwnerWithEmailCopy(buildRefundNeededAlert(data, payment));
 }
 
 /**
