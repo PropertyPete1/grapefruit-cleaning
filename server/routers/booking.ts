@@ -54,6 +54,7 @@ import { publicProcedure, router } from "../_core/trpc";
 import { bookingAddonSnapshots, loadAddonCatalog, resolveSelectedAddons } from "../addonCatalog";
 import { centsToDollars, depositCents, dollarsToCents, exactDollars, legacyWholeDollars } from "@shared/money";
 import { releaseExpiredCheckoutHolds } from "../checkoutHolds";
+import { IMMEDIATE_PAYMENT_METHOD_TYPES } from "../checkoutMethods";
 
 const quoteInputSchema = z.object({
   type: z.enum(["residential", "commercial", "airbnb", "moveinout", "deep", "office"]),
@@ -588,6 +589,9 @@ export const bookingRouter = router({
         customer_email: input.email,
         client_reference_id: String(bookingId),
         allow_promotion_codes: false,
+        // Card only: a bank debit would complete this session "unpaid" and the
+        // booking would sit pending until the hold sweep strands its slot.
+        payment_method_types: [...IMMEDIATE_PAYMENT_METHOD_TYPES],
         // Stripe only allows 30 min–24 h at creation. Our five-minute sweep
         // expires this session through Stripe's API after the 15-minute row
         // hold lapses, then releases the booking slot.

@@ -16,6 +16,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { exactDollars } from "@shared/money";
+import { IMMEDIATE_PAYMENT_METHOD_TYPES } from "./checkoutMethods";
 import * as db from "./db";
 import {
   sendTipReceivedNotification,
@@ -167,6 +168,9 @@ export async function createTipCheckoutSession(args: {
     customer_email: args.customerEmail ?? undefined,
     client_reference_id: String(booking.id),
     allow_promotion_codes: false,
+    // Card only: a bank debit would complete this session "unpaid", the tip
+    // would never be recorded, and the page would keep asking.
+    payment_method_types: [...IMMEDIATE_PAYMENT_METHOD_TYPES],
     line_items: [
       {
         price_data: {

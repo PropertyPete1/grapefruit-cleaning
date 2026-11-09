@@ -206,6 +206,15 @@ describe("Test D — a regular booking still runs the deposit flow exactly as be
     expect(result.checkoutUrl).toBe("https://stripe.test/pay");
   });
 
+  it("PAY ONLINE offers card only, so the deposit session can only complete paid", async () => {
+    await bookingCaller().create(CREATE_INPUT);
+    // A bank debit completes Checkout "unpaid": the webhook would never
+    // finalize it and the hold sweep skips a complete session, so the booking
+    // would sit pending with its slot stranded while the money moved anyway.
+    const args = mockSessionCreate.mock.calls[0]![0] as { payment_method_types?: string[] };
+    expect(args.payment_method_types).toEqual(["card"]);
+  });
+
   it("an explicit PAY ONLINE choice is the same flow, with the choice remembered", async () => {
     await bookingCaller().create({ ...CREATE_INPUT, paymentPreference: "online" });
     expect(written().status).toBe("pending_deposit");

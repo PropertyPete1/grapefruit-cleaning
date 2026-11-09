@@ -363,6 +363,14 @@ describe("minting the tip session", () => {
     expect(String(session["success_url"])).toContain(`/pay/tip/${TOKEN}?paid=1`);
   });
 
+  it("offers card only, so a completed tip session is always a paid one", async () => {
+    await caller().createSession({ token: TOKEN, preset: 15 });
+    const session = mockSessionCreate.mock.calls[0]![0] as { payment_method_types?: string[] };
+    // An ACH tip completed "unpaid": the webhook never recorded it, tipPaidAt
+    // stayed null, and the page kept asking — each visit a fresh session.
+    expect(session.payment_method_types).toEqual(["card"]);
+  });
+
   it("clamps a custom amount and rejects tampering above the job total", async () => {
     const modest = await caller().createSession({ token: TOKEN, customAmount: 22 });
     expect(modest.amount).toBe(22);
