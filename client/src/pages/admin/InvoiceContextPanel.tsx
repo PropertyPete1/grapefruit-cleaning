@@ -30,12 +30,18 @@ export function InvoiceContextPanel({ invoice }: { invoice: InvoiceContextInput 
   const view = describeInvoiceContext(invoice);
 
   if (view.kind === "no_booking") {
+    const warning = view.tone === "warning";
     return (
       <div className="grid gap-2 lg:grid-cols-3">
-        <div className="rounded-xl bg-amber-50 p-3 text-xs ring-1 ring-amber-200 lg:col-span-2">
-          <p className="font-semibold text-amber-900">{view.heading}</p>
-          <p className="mt-0.5 text-amber-800">{view.explanation}</p>
+        <div
+          className={`rounded-xl p-3 text-xs ring-1 lg:col-span-2 ${
+            warning ? "bg-amber-50 ring-amber-200" : "bg-muted/50 ring-border"
+          }`}
+        >
+          <p className={`font-semibold ${warning ? "text-amber-900" : "text-foreground"}`}>{view.heading}</p>
+          <p className={`mt-0.5 ${warning ? "text-amber-800" : "text-muted-foreground"}`}>{view.explanation}</p>
         </div>
+        {view.property && <Section title="Property" rows={view.property} />}
         <Section title="Customer on file" rows={view.customer} />
         {view.payment.length > 0 && <Section title="Payment" rows={view.payment} />}
       </div>

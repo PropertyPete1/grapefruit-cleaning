@@ -134,6 +134,9 @@ async function priceWithExtras(
   booking: {
     customerId: number;
     grandfatheredCustomerId: number | null;
+    /** A price the owner agreed by hand; it outranks any standing rate. */
+    customPriceCents: number | null;
+    customPriceReason: string | null;
     serviceType: string | null;
     frequency: string;
     bedrooms: number;
@@ -145,8 +148,9 @@ async function priceWithExtras(
 ) {
   const pricing = await loadPricingConfig();
   const catalog = await loadAddonCatalog(false);
-  // The customer's grandfathered rate for this service, when they have one —
-  // read live, so a service picked on the link prices at it too.
+  // The price the owner agreed by hand for this booking, else the customer's
+  // grandfathered rate for this service when they have one — read live, so a
+  // service picked on the link prices at it too.
   const lock = await lockForBooking(booking, booking.serviceType);
   if (booking.serviceType == null || booking.sqft == null) {
     return {
@@ -354,7 +358,9 @@ export const depositLinkRouter = router({
            * booked service — so the live preview shows the price the server
            * will charge, not the catalog's.
            */
-          priceLock: money.lock ? { basePriceCents: money.lock.basePriceCents, serviceType: money.lock.serviceType } : null,
+          priceLock: money.lock
+            ? { basePriceCents: money.lock.basePriceCents, serviceType: money.lock.serviceType, source: money.lock.source }
+            : null,
           basePrice: money.breakdown?.base ?? null,
           total: money.total,
           deposit: money.deposit,

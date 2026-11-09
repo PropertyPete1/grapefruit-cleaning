@@ -170,6 +170,19 @@ export const bookings = mysqlTable("bookings", {
    */
   grandfatheredBaseCents: int("grandfatheredBaseCents"),
   grandfatheredCustomerId: int("grandfatheredCustomerId"),
+  /**
+   * A price the owner agreed with the customer by hand on Admin → New booking,
+   * replacing the catalog's per-visit base for THIS booking only: the figure,
+   * the owner's reason ("quoted on the phone"), who set it and when. It prices
+   * the booking exactly as a grandfathered rate does — extras on top, the
+   * deposit derived from it, the deposit link re-reading it on every edit —
+   * through the same lock, with the reason and the author kept for the audit
+   * trail. NULL on every booking priced from the catalog or a customer's rate.
+   */
+  customPriceCents: int("customPriceCents"),
+  customPriceReason: varchar("customPriceReason", { length: 500 }),
+  customPriceByUserId: int("customPriceByUserId"),
+  customPriceAt: timestamp("customPriceAt"),
   stripeSessionId: varchar("stripeSessionId", { length: 255 }),
   stripePaymentIntentId: varchar("stripePaymentIntentId", { length: 255 }),
   /**
@@ -633,6 +646,16 @@ export const invoices = mysqlTable("invoices", {
    */
   serviceType: varchar("serviceType", { length: 20 }),
   serviceDate: varchar("serviceDate", { length: 10 }),
+  /**
+   * Where a MANUAL invoice's work was done, when the owner said: a bill raised
+   * by hand has no booking to take an address from. Shown on the invoice row,
+   * in the customer's email and on the pay page. NULL on balance invoices,
+   * which always read their booking's address instead — these columns are
+   * never written for them.
+   */
+  serviceAddress: varchar("serviceAddress", { length: 255 }),
+  serviceCity: varchar("serviceCity", { length: 100 }),
+  serviceZip: varchar("serviceZip", { length: 20 }),
   /**
    * The customer's declared way of paying THIS invoice: "cash" once they tap
    * PAY WITH CASH on the payment email (or booked with cash), which stops the

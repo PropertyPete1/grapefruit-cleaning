@@ -8,10 +8,13 @@
  * nothing to skip. Whatever is left blank, the CUSTOMER answers on the link —
  * service, size, time — watching the price assemble as they go.
  *
- * Still deliberately absent: extras, and any price field. Extras are the
- * customer's upsell to take on the pay page, and every dollar figure is
- * computed on the server from the live pricing config — there is nowhere here
- * to type an amount, because there is nowhere for one to be trusted from.
+ * Still deliberately absent: extras — the customer's upsell to take on the pay
+ * page. Every dollar figure is computed on the server from the live pricing
+ * config, with one admin-only exception: "Customize price" lets the owner type
+ * the price they agreed with the customer for the chosen service, with a
+ * reason. The server stores it on the booking and prices from it exactly as it
+ * does a grandfathered rate — flat base, extras on top, deposit derived from
+ * the total. The public form has no such field.
  */
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -41,12 +44,16 @@ type Result = {
   payUrl: string;
   basePrice: number | null;
   grandfathered?: { customerName: string; basePrice: number } | null;
+  customPrice?: { basePrice: number; reason: string } | null;
   deposit: number | null;
   emailSent: boolean;
   sqftCorrected: boolean;
   sqft: number | null;
   customerWillChoose: string[];
 };
+
+/** "$78" for whole dollars, "$389.50" otherwise — a typed price reads back as typed. */
+const usd = (n: number) => (Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`);
 
 const FREQUENCY_LABELS: Record<string, string> = {
   onetime: "One-time",
@@ -162,6 +169,13 @@ export function NewBookingDialog({ initialDate, open: controlledOpen, onOpenChan
   const [notes, setNotes] = useState("");
   const [couponCode, setCouponCode] = useState("");
   const [sendEmail, setSendEmail] = useState(true);
+  // Admin-only price override: off by default; when switched on, the catalog
+  // figure is prefilled as soon as the service and size are known, and the
+  // owner edits it to what was agreed. A reason is required.
+  const [customPriceOn, setCustomPriceOn] = useState(false);
+  const [customPrice, setCustomPrice] = useState("");
+  const [customPriceTouched, setCustomPriceTouched] = useState(false);
+  const [customPriceReason, setCustomPriceReason] = useState("");
 
   // Exact figure, clamped to the range the server accepts (200–10,000): the
   // owner types "1732", not a step on a slider. Nothing bigger than a home is
@@ -184,6 +198,28 @@ export function NewBookingDialog({ initialDate, open: controlledOpen, onOpenChan
     { enabled: open && /^\d{4}-\d{2}-\d{2}$/.test(date) }
   );
   const slots = useMemo(() => availability.data ?? [], [availability.data]);
+
+  /**
+   * The catalog figure for what is known so far — the prefill for a custom
+   * price, from the same public calculator the quote page uses. Fetched only
+   * while the toggle is on and the service and size are settled; until the
+   * owner edits the field, it follows whatever the facts above compute.
+   */
+  const catalogQuote = trpc.booking.calculate.useQuery(
+    {
+      type: serviceType as (typeof CLEANING_TYPES)[number],
+      frequency: frequency as (typeof FREQUENCIES)[number],
+      bedrooms: bedrooms.trim() ? Number(bedrooms) : 2,
+      bathrooms: bathrooms.trim() ? Number(bathrooms) : 1,
+      sqft: sqftNumber,
+      extras: [],
+    },
+    { enabled: open && customPriceOn && Boolean(serviceType) && sqftValid }
+  );
+  const catalogTotal = customPriceOn && serviceType && sqftValid ? (catalogQuote.data?.total ?? null) : null;
+  useEffect(() => {
+    if (customPriceOn && !customPriceTouched && catalogTotal != null) setCustomPrice(catalogTotal.toFixed(2));
+  }, [customPriceOn, customPriceTouched, catalogTotal]);
 
   const create = trpc.admin.createBooking.useMutation({
     onSuccess: data => {
@@ -215,7 +251,15 @@ export function NewBookingDialog({ initialDate, open: controlledOpen, onOpenChan
     setCustomerSearch("");
   };
   const scheduleConsistent = Boolean(date) === Boolean(time);
-  const valid = contactValid && scheduleConsistent;
+  // The override is a positive dollars-and-cents figure within the same cap
+  // every other amount has, for a chosen service, with a reason — the server
+  // checks the same things.
+  const customPriceAmount = Number(customPrice);
+  const customPriceFormatValid =
+    /^\d+(\.\d{1,2})?$/.test(customPrice.trim()) && customPriceAmount > 0 && customPriceAmount <= 100000;
+  const customPriceReasonValid = customPriceReason.trim().length >= 3;
+  const customPriceValid = !customPriceOn || (Boolean(serviceType) && customPriceFormatValid && customPriceReasonValid);
+  const valid = contactValid && scheduleConsistent && customPriceValid;
 
   const reset = () => {
     setResult(null);
@@ -239,6 +283,10 @@ export function NewBookingDialog({ initialDate, open: controlledOpen, onOpenChan
     setOverrideNotice(false);
     setNotes("");
     setCouponCode("");
+    setCustomPriceOn(false);
+    setCustomPrice("");
+    setCustomPriceTouched(false);
+    setCustomPriceReason("");
   };
 
   const copyLink = async (url: string) => {
@@ -252,8 +300,12 @@ export function NewBookingDialog({ initialDate, open: controlledOpen, onOpenChan
 
   // Summaries let the collapsed form show what is already locked.
   const serviceSummary = serviceType
-    ? `${SERVICE_LABELS[serviceType] ?? serviceType}${frequency !== "onetime" ? ` · ${FREQUENCY_LABELS[frequency]}` : ""}`
-    : "They'll choose on the link";
+    ? `${SERVICE_LABELS[serviceType] ?? serviceType}${frequency !== "onetime" ? ` · ${FREQUENCY_LABELS[frequency]}` : ""}${
+        customPriceOn && customPriceFormatValid ? ` · custom price $${customPriceAmount.toFixed(2)}` : ""
+      }`
+    : customPriceOn
+      ? "Pick the service the custom price is for"
+      : "They'll choose on the link";
   const sizeSummary = address
     ? `${address}${propertyType === "apartment" ? `${unitNumber ? ` · Apt ${unitNumber}` : ""} · apartment` : ""}${
         sqftValid
@@ -303,10 +355,10 @@ export function NewBookingDialog({ initialDate, open: controlledOpen, onOpenChan
               {result.basePrice != null && result.deposit != null ? (
                 <p className="mt-1 text-xs text-emerald-800">
                   {result.deposit > 0
-                    ? `Base price $${result.basePrice} · deposit $${result.deposit}. Both go up if they add extras — the link recalculates before they pay.`
+                    ? `Base price ${usd(result.basePrice)} · deposit ${usd(result.deposit)}. Both go up if they add extras — the link recalculates before they pay.`
                     : serviceType === "airbnb"
-                      ? `Base price $${result.basePrice} · no deposit — Airbnb is one full payment after the cleaning. The price goes up if they add extras.`
-                      : `Base price $${result.basePrice} · no deposit — they confirm on the link and pay after the cleaning. The price goes up if they add extras.`}
+                      ? `Base price ${usd(result.basePrice)} · no deposit — Airbnb is one full payment after the cleaning. The price goes up if they add extras.`
+                      : `Base price ${usd(result.basePrice)} · no deposit — they confirm on the link and pay after the cleaning. The price goes up if they add extras.`}
                 </p>
               ) : (
                 <p className="mt-1 text-xs text-emerald-800">
@@ -317,6 +369,12 @@ export function NewBookingDialog({ initialDate, open: controlledOpen, onOpenChan
                 <p className="mt-1 text-xs font-semibold text-emerald-900">
                   Grandfathered price: ${result.grandfathered.basePrice.toFixed(2)} per cleaning — {result.grandfathered.customerName}'s
                   locked rate, not the catalog.
+                </p>
+              )}
+              {result.customPrice && (
+                <p className="mt-1 text-xs font-semibold text-emerald-900">
+                  Custom price: ${result.customPrice.basePrice.toFixed(2)} per cleaning ({result.customPrice.reason}) — your
+                  agreed figure, not the catalog. Extras still add on top.
                 </p>
               )}
               {result.sqftCorrected && result.sqft != null && (
@@ -501,6 +559,77 @@ export function NewBookingDialog({ initialDate, open: controlledOpen, onOpenChan
                   ))}
                 </select>
               </Field>
+              {/* Admin-only: the price agreed with the customer, in place of the
+                  catalog figure. Extras still itemize on top; the deposit, the
+                  invoice and every email derive from it. */}
+              <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border p-3">
+                <Checkbox
+                  checked={customPriceOn}
+                  onCheckedChange={checked => {
+                    const on = checked === true;
+                    setCustomPriceOn(on);
+                    if (!on) {
+                      setCustomPrice("");
+                      setCustomPriceTouched(false);
+                      setCustomPriceReason("");
+                    }
+                  }}
+                  aria-label="Customize price"
+                  className="mt-0.5"
+                />
+                <span>
+                  <span className="block text-sm font-semibold text-foreground">Customize price</span>
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                    Off: the catalog computes the total. On: type the price you agreed — extras still add on top.
+                  </span>
+                </span>
+              </label>
+              {customPriceOn && (
+                <div className="space-y-3 rounded-xl bg-amber-50 p-3 ring-1 ring-amber-200" data-testid="custom-price-fields">
+                  {!serviceType && (
+                    <p className="text-xs font-semibold text-amber-900">
+                      Pick the service above — the price is for that service.
+                    </p>
+                  )}
+                  <Field
+                    label="Agreed price (USD)"
+                    hint={
+                      catalogTotal != null
+                        ? `Catalog figure: $${catalogTotal.toFixed(2)} for ${sqftNumber.toLocaleString()} ft² — edit it to what you agreed.`
+                        : serviceType && !sqftValid
+                          ? "Add the home's size below to see the catalog figure, or type the agreed price."
+                          : "Type the price you agreed with the customer."
+                    }
+                  >
+                    <Input
+                      id="custom-price-amount"
+                      type="number"
+                      inputMode="decimal"
+                      min="0.01"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={customPrice}
+                      onChange={e => {
+                        setCustomPrice(e.target.value);
+                        setCustomPriceTouched(true);
+                      }}
+                      aria-invalid={customPrice !== "" && !customPriceFormatValid}
+                    />
+                  </Field>
+                  <Field label="Reason" hint="Shows on the booking next to the price, with your name.">
+                    <Input
+                      id="custom-price-reason"
+                      placeholder="Quoted on the phone, repeat customer, …"
+                      maxLength={500}
+                      value={customPriceReason}
+                      onChange={e => setCustomPriceReason(e.target.value)}
+                    />
+                  </Field>
+                  {customPrice !== "" && !customPriceFormatValid && (
+                    <p className="text-xs text-amber-900">Enter a positive amount in dollars and cents, up to $100,000.</p>
+                  )}
+                </div>
+              )}
             </KnowSection>
 
             <KnowSection
@@ -710,6 +839,15 @@ export function NewBookingDialog({ initialDate, open: controlledOpen, onOpenChan
             {!scheduleConsistent && (
               <p className="text-xs text-amber-700">Pick a time for that date — or clear the date and let them choose.</p>
             )}
+            {customPriceOn && !customPriceValid && (
+              <p className="text-xs text-amber-700">
+                {!serviceType
+                  ? "Custom price: pick the service it's for."
+                  : !customPriceFormatValid
+                    ? "Custom price: enter the agreed amount."
+                    : "Custom price: add a short reason (at least 3 characters)."}
+              </p>
+            )}
             <DialogFooter sticky>
               <Button
                 className="w-full rounded-xl"
@@ -737,6 +875,10 @@ export function NewBookingDialog({ initialDate, open: controlledOpen, onOpenChan
                     notes: notes.trim() || undefined,
                     couponCode: couponCode.trim() || undefined,
                     overrideNotice,
+                    customPrice:
+                      customPriceOn && serviceType
+                        ? { amount: Number(customPrice), reason: customPriceReason.trim() }
+                        : undefined,
                     sendEmail: sendEmail && /.+@.+\..+/.test(email),
                   })
                 }

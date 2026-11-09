@@ -56,6 +56,7 @@ vi.mock("./db", async () => {
     setCustomerGrandfathered: (...a: unknown[]) => mockSetGrandfathered(...a),
     listBookings: (...a: unknown[]) => mockListBookings(...a),
     getCustomersByIds: (...a: unknown[]) => mockGetCustomersByIds(...a),
+    getUsersByIds: vi.fn().mockResolvedValue([]),
     // Recurring plans are for returning customers (PR C2): Maria, an original
     // client with a paid history, is one, so her bi-weekly booking goes through.
     findCustomersByContact: (...a: unknown[]) => mockFindCustomersByContact(...a),
@@ -326,6 +327,7 @@ describe("finding the grandfathered customer", () => {
       serviceType: "residential",
       customerId: 41,
       customerName: "Maria del Mar Prado",
+      source: "grandfathered",
     });
     expect(lockFromCustomer(ANA)).toBeNull();
     expect(lockFromCustomer({ ...MARIA, grandfatheredPriceCents: 0 })).toBeNull();
@@ -552,7 +554,7 @@ describe("admin.createBooking applies the lock", () => {
 describe("the deposit link prices from the lock", () => {
   it("get returns her price lock and her totals, so the page previews what she will pay", async () => {
     const result = await payCaller().get({ token: TOKEN });
-    expect(result.booking?.priceLock).toEqual({ basePriceCents: 8500, serviceType: "residential" });
+    expect(result.booking?.priceLock).toEqual({ basePriceCents: 8500, serviceType: "residential", source: "grandfathered" });
     expect(result.booking?.basePrice).toBe(85);
     expect(result.booking?.total).toBe(85);
     expect(result.booking?.deposit).toBe(17);
@@ -588,7 +590,7 @@ describe("the deposit link prices from the lock", () => {
   it("honours a rate the owner applied by hand to a booking under another record", async () => {
     mockGetBookingByPayToken.mockResolvedValue(linkRow({ customerId: 7, grandfatheredCustomerId: 41 }));
     const result = await payCaller().get({ token: TOKEN });
-    expect(result.booking?.priceLock).toEqual({ basePriceCents: 8500, serviceType: "residential" });
+    expect(result.booking?.priceLock).toEqual({ basePriceCents: 8500, serviceType: "residential", source: "grandfathered" });
     expect(result.booking?.total).toBe(85);
   });
 });

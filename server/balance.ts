@@ -97,11 +97,29 @@ export type InvoiceEmailFacts = Pick<Invoice, "number" | "amount"> & {
   paymentPreference?: string | null;
   serviceType?: string | null;
   serviceDate?: string | null;
+  /**
+   * Where the work was done, on a manual invoice whose owner entered it — the
+   * same three columns the row carries, composed into one line wherever it is
+   * shown. A balance invoice never sets these: its address is its booking's.
+   */
+  serviceAddress?: string | null;
+  serviceCity?: string | null;
+  serviceZip?: string | null;
 };
+
+/** The one-line service address a manual invoice carries, or null when none was entered. */
+export function manualServiceAddress(invoice: {
+  serviceAddress?: string | null;
+  serviceCity?: string | null;
+  serviceZip?: string | null;
+}): string | null {
+  return composeAddress({ addressLine: invoice.serviceAddress, city: invoice.serviceCity, zip: invoice.serviceZip }) || null;
+}
 
 /** The facts off a stored invoice row, items parsed. */
 export function invoiceFacts(
-  invoice: Pick<Invoice, "number" | "amount" | "amountCents" | "lineItems" | "paymentPreference" | "serviceType" | "serviceDate">
+  invoice: Pick<Invoice, "number" | "amount" | "amountCents" | "lineItems" | "paymentPreference" | "serviceType" | "serviceDate"> &
+    Partial<Pick<Invoice, "serviceAddress" | "serviceCity" | "serviceZip">>
 ): InvoiceEmailFacts {
   return {
     number: invoice.number,
@@ -111,6 +129,9 @@ export function invoiceFacts(
     paymentPreference: invoice.paymentPreference,
     serviceType: invoice.serviceType,
     serviceDate: invoice.serviceDate,
+    serviceAddress: invoice.serviceAddress ?? null,
+    serviceCity: invoice.serviceCity ?? null,
+    serviceZip: invoice.serviceZip ?? null,
   };
 }
 
@@ -201,9 +222,10 @@ function toBalanceEmailData(
  * invoices an owner raises by hand.
  *
  * Manual invoices are billable on identical terms, but the booking-derived
- * fields simply do not exist: there is no reference, no service date, no
- * address, and above all no deposit. Rather than invent placeholders, the
- * fields that would be fiction are left empty and `deposit` is zero with
+ * fields simply do not exist: there is no reference and above all no deposit,
+ * and the service date and address exist only when the owner entered them.
+ * Rather than invent placeholders, the fields that would be fiction are left
+ * empty and `deposit` is zero with
  * `total` equal to the amount owed — so the templates' "Total − deposit =
  * balance" arithmetic stays true (X − 0 = X) instead of implying a credit the
  * customer never paid. The email builders already omit blank lines.
@@ -239,6 +261,9 @@ function toManualEmailData(
     customerName: customer.firstName,
     customerEmail: customer.email ?? "",
     customerPhone: customer.phone ?? undefined,
+    // Where the work was done, when the owner said — the same "Address:" line
+    // a balance invoice's email takes from its booking.
+    address: manualServiceAddress(invoice) ?? undefined,
     payUrl,
     expiresOn: expiresOn.toISOString().slice(0, 10),
     locale,
@@ -384,6 +409,9 @@ export async function createBalanceCheckoutSession(args: {
     items?: InvoiceLineItem[];
     serviceType?: string | null;
     serviceDate?: string | null;
+    serviceAddress?: string | null;
+    serviceCity?: string | null;
+    serviceZip?: string | null;
   };
   /** Absent for a manual invoice, which has no job behind it. */
   booking?: Pick<Booking, "id" | "reference" | "serviceType" | "locale" | "scheduledDate"> &
@@ -406,6 +434,9 @@ export async function createBalanceCheckoutSession(args: {
   // The customer's name for the bill on the Stripe page too — never the
   // invoice number, which rides only in the session metadata.
   const reference = serviceReference(serviceName, booking ? booking.scheduledDate : invoice.serviceDate, locale);
+  // A manual invoice names where the work was done when the owner entered it;
+  // a balance invoice's description keeps naming its booking.
+  const manualAddress = booking ? null : manualServiceAddress(invoice);
   // One payment for the whole job when no deposit was captured: an Airbnb
   // turnover, a cash booking, or any manual invoice.
   const fullPayment = !booking || booking.depositAmount === undefined || !depositCaptured({
@@ -439,7 +470,9 @@ export async function createBalanceCheckoutSession(args: {
         ? locale === "es"
           ? `${reference} · Reserva ${booking.reference}`
           : `${reference} · Booking ${booking.reference}`
-        : reference,
+        : manualAddress
+          ? `${reference} · ${manualAddress}`
+          : reference,
     }),
     // payment_type stays "balance" for both kinds: it is what the webhook
     // switches on to route the settlement, and a manual invoice settles
@@ -1094,6 +1127,14 @@ export async function issueManualInvoice(args: {
   /** What the customer will see the bill called: "Deep Cleaning — September 28, 2026". Either may be left out. */
   serviceType?: CleaningType;
   serviceDate?: string;
+  /**
+   * Where the work was done — optional, and stored on the invoice itself since
+   * there is no booking to read it from. Shown on the row, in the customer's
+   * email and on the pay page.
+   */
+  serviceAddress?: string;
+  serviceCity?: string;
+  serviceZip?: string;
   origin: string;
   now?: Date;
 }): Promise<ManualInvoiceOutcome> {
@@ -1127,6 +1168,9 @@ export async function issueManualInvoice(args: {
     linkExpiresAt: expiresAt,
     serviceType: args.serviceType ?? null,
     serviceDate: args.serviceDate ?? null,
+    serviceAddress: args.serviceAddress ?? null,
+    serviceCity: args.serviceCity ?? null,
+    serviceZip: args.serviceZip ?? null,
   });
 
   const facts: InvoiceEmailFacts = {
@@ -1136,6 +1180,9 @@ export async function issueManualInvoice(args: {
     items,
     serviceType: args.serviceType ?? null,
     serviceDate: args.serviceDate ?? null,
+    serviceAddress: args.serviceAddress ?? null,
+    serviceCity: args.serviceCity ?? null,
+    serviceZip: args.serviceZip ?? null,
   };
   const session = await createBalanceCheckoutSession({
     invoice: { ...facts, id: invoiceId, payToken },

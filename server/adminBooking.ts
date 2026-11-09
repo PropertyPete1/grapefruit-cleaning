@@ -33,7 +33,7 @@ import {
   generateBookingReference,
   type PricingConfig,
 } from "@shared/pricing";
-import { depositCents, dollarsToCents } from "@shared/money";
+import { centsToDollars, depositCents, dollarsToCents } from "@shared/money";
 import { isSlotBookable, type AvailabilityContext } from "@shared/availability";
 import { durationHoursFor, type DurationConfig } from "@shared/duration";
 import { ADMIN_HOLD_SETTING_KEY, adminHoldMinutes } from "@shared/holdWindow";
@@ -47,7 +47,7 @@ import {
 } from "./depositLinkRules";
 import { lookupPropertySqft } from "./property";
 import { plausibleVerifiedSqft, type PropertyType } from "@shared/property";
-import { lockAppliesTo, lockFromCustomer, type PriceLock } from "@shared/priceLock";
+import { lockAppliesTo, lockFromBookingOverride, lockFromCustomer, type PriceLock } from "@shared/priceLock";
 import { findGrandfatheredCustomer, grandfatheredColumns } from "./priceLock";
 import { loadPricingConfig, loadSchedulingRules, occupiedIntervals } from "./routers/booking";
 
@@ -102,6 +102,15 @@ export interface AdminBookingInput {
    * applies.
    */
   overrideNotice?: boolean;
+  /**
+   * The price the owner agreed with the customer for the booked service,
+   * replacing the catalog figure: it becomes the base price the deposit, the
+   * balance invoice and every email derive from, with extras itemized on top
+   * exactly as they are on a grandfathered rate. Needs a service (it is that
+   * service's price) and a reason, which the Details panel shows with the
+   * figure and who set it. Admin only — the public form has no such field.
+   */
+  customPrice?: { amount: number; reason: string; byUserId: number };
 }
 
 export interface AdminBookingResult {
@@ -120,6 +129,8 @@ export interface AdminBookingResult {
   customerWillChoose: string[];
   /** Set when the price came from the customer's grandfathered rate, not the catalog. */
   grandfathered: { customerName: string; basePrice: number } | null;
+  /** Set when the owner priced this booking by hand: the per-visit figure and the reason. */
+  customPrice: { basePrice: number; reason: string } | null;
 }
 
 /** The one message the owner sees when the slot will not take this booking. */
@@ -363,7 +374,26 @@ export async function createAdminBooking(
       ? await db.getCustomerById(input.customerId)
       : await findGrandfatheredCustomer({ email: input.email, phone: input.phone });
   const lockCandidate = lockFromCustomer(lockedCustomer);
-  const priceLock = lockAppliesTo(lockCandidate, input.serviceType) ? lockCandidate : null;
+  const grandfatheredLock = lockAppliesTo(lockCandidate, input.serviceType) ? lockCandidate : null;
+  // A price the owner agreed by hand outranks the standing rate: it is the
+  // decision made for this job. It rides the same lock the engine already
+  // prices grandfathered rates with — flat base, extras on top — and is
+  // written to the booking so the deposit link keeps honouring it. The
+  // customer id on the lock is informational; the booking row is the record.
+  const customLock =
+    input.customPrice && input.serviceType
+      ? lockFromBookingOverride({
+          customerId: input.customerId ?? lockedCustomer?.id ?? 0,
+          serviceType: input.serviceType,
+          customPriceCents: dollarsToCents(input.customPrice.amount),
+          customPriceReason: input.customPrice.reason,
+        })
+      : null;
+  const custom =
+    customLock && input.customPrice
+      ? { cents: customLock.basePriceCents, reason: input.customPrice.reason.trim(), byUserId: input.customPrice.byUserId }
+      : null;
+  const priceLock = customLock ?? grandfatheredLock;
 
   // County verification runs whenever there is an address to look up, exactly
   // as the public flow does — the verified figure can settle the size question
@@ -523,6 +553,12 @@ export async function createAdminBooking(
       sqftSource: property.verified || property.addressVerified ? property.source : undefined,
       sqftMismatch,
       ...grandfatheredColumns(priceLock),
+      // The owner's agreed price, with its reason and author — read back by
+      // lockForBooking on every repricing of the link.
+      customPriceCents: custom?.cents ?? null,
+      customPriceReason: custom?.reason ?? null,
+      customPriceByUserId: custom?.byUserId ?? null,
+      customPriceAt: custom ? createdAt : null,
       kind: "admin",
       holdMinutes,
       payToken,
@@ -550,8 +586,10 @@ export async function createAdminBooking(
     sqftCorrected: sqftMismatch,
     sqft: effectiveSqft != null ? Math.round(effectiveSqft) : null,
     customerWillChoose: missing,
-    grandfathered: priceLock
-      ? { customerName: priceLock.customerName, basePrice: priceLock.basePriceCents / 100 }
-      : null,
+    grandfathered:
+      priceLock && priceLock.source === "grandfathered"
+        ? { customerName: priceLock.customerName, basePrice: centsToDollars(priceLock.basePriceCents) }
+        : null,
+    customPrice: custom ? { basePrice: centsToDollars(custom.cents), reason: custom.reason } : null,
   };
 }

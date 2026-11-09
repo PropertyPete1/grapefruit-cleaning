@@ -297,22 +297,38 @@ export function PaymentStatusBadge({ status }: { status: BookingPaymentStatus })
  * The one label for a price that came from a customer's grandfathered rate
  * rather than the catalog — on the customer list, the customer record, and a
  * booking's money block. Amber, like the other "this one is special" marks.
+ * The same mark, relabelled, flags a price the owner agreed by hand on one
+ * booking: one look for "not the catalog price", two words for why.
  */
 export const GRANDFATHERED_BADGE_CLASS = "bg-amber-100 text-amber-900 ring-1 ring-amber-200";
+export const CUSTOM_PRICE_LABEL = "Custom price";
 
-export function GrandfatheredBadge({ className = "" }: { className?: string }) {
+export function GrandfatheredBadge({
+  className = "",
+  label = "Grandfathered price",
+  title = "Priced at this customer's grandfathered rate, not the catalog",
+}: {
+  className?: string;
+  /** CUSTOM_PRICE_LABEL for a one-booking price the owner typed. */
+  label?: string;
+  title?: string;
+}) {
   return (
     <span
       className={`inline-block whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${GRANDFATHERED_BADGE_CLASS} ${className}`}
-      title="Priced at this customer's grandfathered rate, not the catalog"
+      title={title}
     >
-      Grandfathered price
+      {label}
     </span>
   );
 }
 
 export function fmtMoney(n: number | null | undefined): string {
-  return `$${Number(n ?? 0).toLocaleString()}`;
+  const amount = Number(n ?? 0);
+  // Whole dollars stay whole ("$145"); anything with cents shows both digits
+  // ("$389.50", never "$389.5"), so a price the owner typed reads back as typed.
+  const digits = Number.isInteger(amount) ? 0 : 2;
+  return `$${amount.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: 2 })}`;
 }
 
 export function fmtDate(d: string | Date | null | undefined): string {

@@ -10,7 +10,9 @@
  * Keyed on whether a booking came back, never on the invoice kind. Balance
  * invoices always have one and manual invoices raised today never do, but manual
  * invoices from before Aug 19 could carry one — and when a booking exists its
- * property is worth showing whatever created the invoice.
+ * property is worth showing whatever created the invoice. The one place the
+ * kind matters: a manual invoice can carry its own service address, entered by
+ * the owner, and that is shown as the property when there is no booking.
  */
 import { composeAddress } from "@shared/property";
 import { deriveInvoicePaymentStatus, INVOICE_PAYMENT_STATUS_LABELS } from "@shared/paymentStatus";
@@ -64,8 +66,12 @@ export type InvoiceContextView =
     }
   | {
       kind: "no_booking";
+      /** Amber when something is missing or gone; plain when the invoice simply has no booking by design. */
+      tone: "warning" | "note";
       heading: string;
       explanation: string;
+      /** The service address a manual invoice names, when the owner entered one. */
+      property?: ContextRow[];
       customer: ContextRow[];
       payment: ContextRow[];
     };
@@ -87,6 +93,10 @@ export type InvoiceContextInput = InvoicePaymentContext & {
   kind: string;
   booking: InvoiceBookingContext | null;
   customer: InvoiceCustomerContext | null;
+  /** Where the work was done, entered on a manual invoice. A balance invoice's address is its booking's. */
+  serviceAddress?: string | null;
+  serviceCity?: string | null;
+  serviceZip?: string | null;
 };
 
 const METHOD_LABELS: Record<string, string> = {
@@ -193,11 +203,30 @@ export function describeInvoiceContext(invoice: InvoiceContextInput): InvoiceCon
 
   if (!booking) {
     const manual = invoice.kind !== "balance";
+    // Only a manual invoice carries its own service address. A balance
+    // invoice's address is its booking's, and with the booking gone there is
+    // none to show — whatever the invoice columns happen to hold.
+    const serviceAddress = manual
+      ? composeAddress({ addressLine: invoice.serviceAddress, city: invoice.serviceCity, zip: invoice.serviceZip })
+      : "";
+    if (serviceAddress) {
+      return {
+        kind: "no_booking",
+        tone: "note",
+        heading: "Manual invoice",
+        explanation:
+          "Raised by hand, not from a booking — so there are no job details, but the service address entered on the invoice is below, with the customer on file.",
+        property: [{ label: "Service address", value: serviceAddress }],
+        customer: customerRows(customer, true),
+        payment: paymentRows(invoice),
+      };
+    }
     return {
       kind: "no_booking",
+      tone: "warning",
       heading: manual ? "No property linked to this invoice" : "Booking no longer available",
       explanation: manual
-        ? "This is a manual invoice — it was raised by hand, not from a booking, so there are no house or service details to show. The customer on file is below."
+        ? "This is a manual invoice — it was raised by hand, not from a booking, and no service address was entered, so there are no house or service details to show. The customer on file is below."
         : "The booking behind this balance invoice is no longer in the system, so its house and service details can't be shown. The customer on file is below.",
       // With no booking, the customer's own address is the only location there is.
       customer: customerRows(customer, true),

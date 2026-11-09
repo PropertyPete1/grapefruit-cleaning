@@ -6,7 +6,13 @@
  * applies — live in shared/priceLock.ts so the pay page's preview and the
  * admin panel run the same ones. This file only adds the database.
  */
-import { findLockedCustomer, lockAppliesTo, lockFromCustomer, type PriceLock } from "@shared/priceLock";
+import {
+  findLockedCustomer,
+  lockAppliesTo,
+  lockFromBookingOverride,
+  lockFromCustomer,
+  type PriceLock,
+} from "@shared/priceLock";
 import * as db from "./db";
 
 /**
@@ -30,10 +36,27 @@ export async function findGrandfatheredCustomer(contact: { email?: string | null
  * applying.
  */
 export async function lockForBooking(
-  booking: { customerId: number; grandfatheredCustomerId: number | null },
+  booking: {
+    customerId: number;
+    grandfatheredCustomerId: number | null;
+    serviceType?: string | null;
+    customPriceCents?: number | null;
+    customPriceReason?: string | null;
+  },
   serviceType: string | null | undefined
 ): Promise<PriceLock | null> {
   if (!serviceType) return null;
+  // A price the owner agreed for this booking outranks the customer's
+  // standing rate: it is the later, more specific decision, and the deposit
+  // link must keep honouring it on every edit rather than drift to the
+  // catalog or to a rate the owner deliberately replaced.
+  const custom = lockFromBookingOverride({
+    customerId: booking.customerId,
+    serviceType: booking.serviceType ?? serviceType,
+    customPriceCents: booking.customPriceCents ?? null,
+    customPriceReason: booking.customPriceReason ?? null,
+  });
+  if (lockAppliesTo(custom, serviceType)) return custom;
   const customer = await db.getCustomerById(booking.grandfatheredCustomerId ?? booking.customerId);
   const lock = lockFromCustomer(customer);
   return lockAppliesTo(lock, serviceType) ? lock : null;
@@ -44,8 +67,11 @@ export function grandfatheredColumns(lock: PriceLock | null | undefined): {
   grandfatheredBaseCents: number | null;
   grandfatheredCustomerId: number | null;
 } {
+  // Only a customer's standing rate is recorded here; a custom price has its
+  // own columns, and a booking priced by one is not "grandfathered".
+  const grandfathered = lock && lock.source === "grandfathered" ? lock : null;
   return {
-    grandfatheredBaseCents: lock ? lock.basePriceCents : null,
-    grandfatheredCustomerId: lock ? lock.customerId : null,
+    grandfatheredBaseCents: grandfathered ? grandfathered.basePriceCents : null,
+    grandfatheredCustomerId: grandfathered ? grandfathered.customerId : null,
   };
 }

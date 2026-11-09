@@ -846,8 +846,18 @@ export async function applyConfirmationSideEffects(
       slotConflict,
       paymentPreference: booking.paymentPreference ?? null,
       grandfathered: await grandfatheredEmailNote(booking, customer),
+      customPrice: customPriceEmailNote(booking),
     });
   }
+}
+
+/** For the owner's notification: the price the owner agreed by hand, when one priced this booking. */
+function customPriceEmailNote(booking: {
+  customPriceCents: number | null;
+  customPriceReason: string | null;
+}): { basePrice: number; reason: string } | null {
+  if (booking.customPriceCents == null) return null;
+  return { basePrice: centsToDollars(booking.customPriceCents), reason: booking.customPriceReason ?? "" };
 }
 
 /**
