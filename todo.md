@@ -561,3 +561,12 @@
 - [x] Fetch production `/api/version` and prove the fresh running build contains merged PR #23
 - [x] Open the live quote flow, choose Deep Cleaning, and prove its Deep cleaning add-on reads Included and cannot be selected
 - [x] Confirm private GitHub, managed source, and the production-tracked release are synchronized
+
+## PR #26 deployment — manual invoice address and custom booking price
+- [x] Pull latest GitHub main first and prove merged PR #26 (`7b572e99`) is present
+- [x] Review migration 0036: seven nullable additive columns, no backfill; verify no target columns or journal record exist in production
+- [x] Apply committed migration 0036 through the normal Drizzle migration workflow and verify all seven columns plus the exact journal record
+- [x] Run focused manual-invoice-address and custom-price regressions, TypeScript, full Vitest suite, and production build
+- [ ] Save the validated release checkpoint and deploy with a genuine production restart, without environment or customer-data changes
+- [ ] Prove the fresh production build through `/api/version` and reconfirm the migration in `__drizzle_migrations`
+- [ ] Synchronize the final deployment checkpoint with private GitHub main and the managed remote
