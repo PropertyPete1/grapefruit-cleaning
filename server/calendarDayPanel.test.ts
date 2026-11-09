@@ -27,6 +27,7 @@ vi.mock("./db", async () => {
     getSetting: vi.fn().mockResolvedValue(null),
     listBookings: (...a: unknown[]) => mockListBookings(...a),
     getCustomersByIds: (...a: unknown[]) => mockGetCustomersByIds(...a),
+    getUsersByIds: vi.fn().mockResolvedValue([]),
     listBalanceInvoicesForBookings: (...a: unknown[]) => mockListBalanceInvoices(...a),
   };
 });

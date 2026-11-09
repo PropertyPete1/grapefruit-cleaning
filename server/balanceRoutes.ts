@@ -152,7 +152,7 @@ const CASH_COPY = {
  */
 export function renderCashChoicePage(
   locale: "en" | "es",
-  data: Pick<BalanceEmailData, "serviceReference" | "serviceName" | "balance" | "payUrl">,
+  data: Pick<BalanceEmailData, "serviceReference" | "serviceName" | "balance" | "payUrl" | "address">,
   state: "ask" | "chosen" | "confirmed",
   formAction: string
 ): string {
@@ -163,6 +163,7 @@ export function renderCashChoicePage(
   const linkStyle = `display:inline-block;margin-top:14px;font-size:14px;font-weight:700;color:${BRAND_CORAL};text-decoration:underline;`;
   const body = `
       <p style="margin:0 0 6px;font-size:15px;font-weight:700;color:#2E2724;">${esc(data.serviceReference ?? data.serviceName)}</p>
+      ${data.address ? `<p style="margin:0 0 6px;font-size:14px;color:#7a716b;">${esc(data.address)}</p>` : ""}
       <p style="margin:0 0 18px;font-size:15px;color:#7a716b;">${esc(copy.amount)}: <strong style="color:#2E2724;">${esc(amount)}</strong></p>
       <p style="margin:0;font-size:15px;line-height:1.65;color:#3d3733;">${esc(lede)}</p>
       ${

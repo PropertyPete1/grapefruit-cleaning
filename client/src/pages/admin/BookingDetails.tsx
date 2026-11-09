@@ -27,7 +27,15 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { GrandfatheredBadge, NotesBlock, PaymentStatusBadge, SERVICE_LABELS, fmtDate, fmtMoney } from "./adminShared";
+import {
+  CUSTOM_PRICE_LABEL,
+  GrandfatheredBadge,
+  NotesBlock,
+  PaymentStatusBadge,
+  SERVICE_LABELS,
+  fmtDate,
+  fmtMoney,
+} from "./adminShared";
 import { ApplyGrandfatheredRateDialog, type RateSuggestion } from "./ApplyGrandfatheredRateDialog";
 import { PaidInCashDialog } from "./PaidInCashDialog";
 
@@ -70,6 +78,8 @@ export interface BookingDetailsRow {
   grandfatheredCustomerName?: string | null;
   /** A grandfathered customer this booking probably belongs to but was not priced for. */
   grandfatheredSuggestion?: RateSuggestion | null;
+  /** The price the owner agreed by hand for this booking — the figure, the reason, and who set it. */
+  customPrice?: { amount: number; reason: string; setBy: string | null; setAt?: Date | string | null } | null;
 }
 
 /** The statuses whose price can still change — the same set the server enforces. */
@@ -319,7 +329,18 @@ export function BookingDetails({ row }: { row: BookingDetailsRow }) {
           label="Rate"
           value={
             <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
-              {grandfathered ? (
+              {row.customPrice ? (
+                <>
+                  <GrandfatheredBadge
+                    label={CUSTOM_PRICE_LABEL}
+                    title="A price the owner agreed by hand for this booking, not the catalog"
+                  />
+                  <span data-testid="custom-price">
+                    {fmtMoney(row.customPrice.amount)} ({row.customPrice.reason})
+                    {row.customPrice.setBy ? ` — set by ${row.customPrice.setBy}` : ""}
+                  </span>
+                </>
+              ) : grandfathered ? (
                 <>
                   <GrandfatheredBadge />
                   <span>

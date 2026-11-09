@@ -857,3 +857,51 @@ returns exact `totalAmount`/`depositAmount`; `booking.confirm` and
 balance-approval context, the brain ticker and the resent deposit-link email
 all read through it. Emails already did. The client never reads the legacy
 figure any more; the confirmation page formats the total with `formatPrice`.
+
+## Manual invoice service address; admin custom price — November 9, 2026
+
+A manual invoice can now carry where the work was done. `invoices.serviceAddress`
+/`serviceCity`/`serviceZip` (nullable varchars, migration 0036) are written by
+`issueManualInvoice` from `admin.createInvoice`, which takes the three optional
+trimmed strings and refuses a city or ZIP without a street. The Create invoice
+dialog prefills them from the picked customer's record (editable) and holds the
+send button while a city or ZIP has no street. `InvoiceEmailFacts` carries the raw
+columns and `manualServiceAddress()` composes the one line: the manual email's
+`Address:` line (the same `BalanceEmailData.address` a balance email fills from
+its booking), the Stripe line description (`<reference> · <address>` for manual
+invoices only; balance invoices keep `· Booking <ref>`), and the cash-choice page
+(a line under the bill's name — it reads `data.address`, so a balance invoice
+shows its booking's address there too). The opened row (`describeInvoiceContext`)
+shows a plain "Manual invoice" note with a Property → "Service address" row when
+one is stored; without one it still reads "No property linked to this invoice".
+The no-booking view gained `tone` (amber warning vs plain note) and an optional
+`property`. A balance invoice never reads these columns: with its booking gone
+the row shows no property whatever the columns hold.
+
+Custom price on Admin → New booking (Appointments and the calendar day-click
+share the dialog). `PriceLock` gained `source: "grandfathered" | "custom"` and
+`reason`; `lockFromBookingOverride(row)` builds a custom lock from the booking's
+own columns `customPriceCents` / `customPriceReason` / `customPriceByUserId` /
+`customPriceAt` (migration 0036). `lockForBooking` returns the custom lock first
+and the customer's standing rate otherwise, so the deposit link reprices from
+the agreed figure on every edit; `grandfatheredColumns` records only
+grandfathered locks. `admin.createBooking` takes `customPrice: { amount, reason }`
+(positive, cents, at most $100,000, reason 3–500 characters, requires
+`serviceType`), stamps `byUserId: ctx.user.id`, and `createAdminBooking` prices
+through the same `computeBasePrice(..., lock)` path as a grandfathered rate —
+flat base, no recurring discount, extras on top, deposit from the total; the
+result carries `customPrice`, and `grandfathered` only for a real grandfathered
+lock. The public `booking.create` schema has no such field (an unknown key is
+dropped). Admin rows carry `customPrice: { amount, reason, setBy, setAt }` via
+`db.getUsersByIds`; the Details "Rate" row shows the grandfathered badge
+relabelled "Custom price" with "$X (reason) — set by Name"; no grandfathered
+suggestion is made for a custom-priced booking; `repriceBooking` (Change rate)
+clears the custom columns. The owner notification adds `Price: CUSTOM PRICE —
+$X per cleaning (reason)`; the pay page says "Your agreed price" (the lock's
+`source` rides `priceLock`) instead of "Your original price". The dialog's
+toggle prefills the catalog figure from `booking.calculate` once the service and
+size are known. `fmtMoney` now shows two decimals whenever an amount has cents.
+
+Known and unchanged: email bodies still format money with the whole-dollar
+`fmtUsd` ("$390 USD" for $389.50) — pre-existing across every email template;
+stored and charged amounts keep their cents.

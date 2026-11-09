@@ -18,6 +18,15 @@
  */
 import type { CleaningType } from "./pricing";
 
+/**
+ * Where a lock came from. "grandfathered" is a customer's standing rate, read
+ * from their record; "custom" is a price the owner agreed by hand for one
+ * booking, read from that booking. The engine prices both identically; the
+ * source decides which columns record it and which label the admin pages
+ * show.
+ */
+export type PriceLockSource = "grandfathered" | "custom";
+
 /** The lock as the pricing engine consumes it. */
 export interface PriceLock {
   /** Locked per-visit price before extras, in cents. */
@@ -27,6 +36,17 @@ export interface PriceLock {
   /** Whose rate this is — for the admin label and the booking's audit columns. */
   customerId: number;
   customerName: string;
+  source: PriceLockSource;
+  /** The owner's reason, on a custom price only. */
+  reason?: string | null;
+}
+
+/** The booking columns a custom price is read from. */
+export interface CustomPricedBookingRow {
+  customerId: number;
+  serviceType: string | null;
+  customPriceCents: number | null;
+  customPriceReason: string | null;
 }
 
 /** The customer columns the lock is read from. */
@@ -97,6 +117,25 @@ export function lockFromCustomer(customer: GrandfatheredCustomerRow | null | und
     serviceType: customer.grandfatheredServiceType as CleaningType,
     customerId: customer.id,
     customerName: `${customer.firstName} ${customer.lastName}`.trim(),
+    source: "grandfathered",
+  };
+}
+
+/**
+ * The lock a booking's own custom price makes, or null when the owner set
+ * none. It is for the booked service: a custom price is agreed for one job,
+ * so the admin form requires the service and locks it on the deposit link.
+ */
+export function lockFromBookingOverride(booking: CustomPricedBookingRow | null | undefined): PriceLock | null {
+  if (!booking || booking.customPriceCents == null || !booking.serviceType) return null;
+  if (!Number.isInteger(booking.customPriceCents) || booking.customPriceCents <= 0) return null;
+  return {
+    basePriceCents: booking.customPriceCents,
+    serviceType: booking.serviceType as CleaningType,
+    customerId: booking.customerId,
+    customerName: "",
+    source: "custom",
+    reason: booking.customPriceReason,
   };
 }
 

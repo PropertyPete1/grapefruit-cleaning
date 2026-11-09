@@ -82,6 +82,7 @@ const COPY = {
     notesPlaceholder: "Gate codes, parking, pets, anything we should know?",
     basePrice: "Base price",
     lockedPrice: "Your original price — locked in for you",
+    agreedPrice: "Your agreed price — as quoted to you",
     extrasTotal: "Extras",
     estimatedTotal: "Estimated total",
     depositDue: "Deposit due today",
@@ -148,6 +149,7 @@ const COPY = {
     notesPlaceholder: "Códigos de acceso, estacionamiento, mascotas, ¿algo que debamos saber?",
     basePrice: "Precio base",
     lockedPrice: "Su precio original — garantizado para usted",
+    agreedPrice: "Su precio acordado — tal como se le cotizó",
     extrasTotal: "Extras",
     estimatedTotal: "Total estimado",
     depositDue: "Depósito a pagar hoy",
@@ -824,7 +826,9 @@ export default function PayDeposit() {
               <span>{money(preview.base)}</span>
             </div>
             {preview.grandfathered && (
-              <p className="mt-1 text-xs font-semibold text-[#2f9e6e]">{c.lockedPrice}</p>
+              <p className="mt-1 text-xs font-semibold text-[#2f9e6e]">
+                {booking.priceLock?.source === "custom" ? c.agreedPrice : c.lockedPrice}
+              </p>
             )}
             {preview.extrasTotal > 0 && (
               <div className="mt-1.5 flex justify-between text-[#7a716b]">

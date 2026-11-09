@@ -62,6 +62,11 @@ export interface BookingEmailData {
    * customer's confirmation simply shows the total.
    */
   grandfathered?: { customerName: string; basePrice: number } | null;
+  /**
+   * Set when the owner agreed a price by hand for this booking: the per-visit
+   * figure and the reason noted. Owner notification only, like grandfathered.
+   */
+  customPrice?: { basePrice: number; reason: string } | null;
 }
 
 const fmtUsd = (n: number) => `$${n.toFixed(0)} USD`;
@@ -645,6 +650,9 @@ export function buildOwnerNotification(data: BookingEmailData): { title: string;
       `Extras: ${data.extras.length > 0 ? data.extras.join(", ") : "None"}`,
       ...(data.grandfathered
         ? [`Price: GRANDFATHERED RATE — $${data.grandfathered.basePrice.toFixed(2)} per cleaning (${data.grandfathered.customerName}), not the catalog price`]
+        : []),
+      ...(data.customPrice
+        ? [`Price: CUSTOM PRICE — $${data.customPrice.basePrice.toFixed(2)} per cleaning (${data.customPrice.reason}), not the catalog price`]
         : []),
       ``,
       `Customer: ${data.customerName}`,

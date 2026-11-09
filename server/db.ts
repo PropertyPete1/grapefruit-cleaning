@@ -139,6 +139,16 @@ export async function getUserByOpenId(openId: string) {
   return result.length > 0 ? result[0] : undefined;
 }
 
+/** The staff accounts behind a set of ids — to name who set a booking's custom price. */
+export async function getUsersByIds(ids: number[]) {
+  if (ids.length === 0) return [];
+  const db = requireDb(await getDb());
+  return db
+    .select({ id: users.id, name: users.name, email: users.email })
+    .from(users)
+    .where(inArray(users.id, ids));
+}
+
 /**
  * Minimal identity projection for the read-only daily access-integrity check.
  * The health layer masks openIds before formatting them into an owner alert.

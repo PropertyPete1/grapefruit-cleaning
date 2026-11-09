@@ -392,13 +392,29 @@ function ReviewAndSendDialog({
   );
 }
 
+/**
+ * The create dialog's fields. The service address is optional and lives on the
+ * invoice itself: a manual invoice has no booking to read one from, so it is
+ * prefilled from the customer's record when they are picked and stays editable.
+ */
+const EMPTY_INVOICE_FORM = {
+  customerId: "",
+  amount: "",
+  dueDate: "",
+  serviceType: "",
+  serviceDate: "",
+  serviceAddress: "",
+  serviceCity: "",
+  serviceZip: "",
+};
+
 export default function AdminInvoices() {
   const utils = trpc.useUtils();
   const invoices = trpc.admin.invoices.useQuery();
   const customers = trpc.admin.customers.useQuery({});
   const addonCatalog = trpc.booking.addonCatalog.useQuery();
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ customerId: "", amount: "", dueDate: "", serviceType: "", serviceDate: "" });
+  const [form, setForm] = useState(EMPTY_INVOICE_FORM);
   const [newAddons, setNewAddons] = useState<string[]>([]);
   const [newCustoms, setNewCustoms] = useState<CustomItemRow[]>([]);
   const pricing = usePricing();
@@ -413,12 +429,15 @@ export default function AdminInvoices() {
     (newBaseValid ? newBase : 0) +
     addonsTotal(pricing.extras, newAddons, addonCatalog.data) +
     (newCustomsValid ? newCustomsParsed.reduce((sum, row) => sum + row.amount, 0) : 0);
+  // A city or ZIP on its own is not an address; the street is what identifies the property.
+  const serviceAddressValid =
+    form.serviceAddress.trim() !== "" || (form.serviceCity.trim() === "" && form.serviceZip.trim() === "");
 
   const create = trpc.admin.createInvoice.useMutation({
     onSuccess: r => {
       utils.admin.invoices.invalidate();
       setOpen(false);
-      setForm({ customerId: "", amount: "", dueDate: "", serviceType: "", serviceDate: "" });
+      setForm(EMPTY_INVOICE_FORM);
       setNewAddons([]);
       setNewCustoms([]);
       // A manual invoice now bills the customer, so what matters is whether the
@@ -526,7 +545,21 @@ export default function AdminInvoices() {
               <div className="space-y-4">
                 <div>
                   <Label>Customer</Label>
-                  <Select value={form.customerId} onValueChange={v => setForm(f => ({ ...f, customerId: v }))}>
+                  <Select
+                    value={form.customerId}
+                    onValueChange={v => {
+                      // Most jobs are at the customer's own home: prefill the service
+                      // address from their record, leaving every field editable.
+                      const picked = (customers.data ?? []).find(c => String(c.id) === v);
+                      setForm(f => ({
+                        ...f,
+                        customerId: v,
+                        serviceAddress: picked?.address ?? "",
+                        serviceCity: picked?.city ?? "",
+                        serviceZip: picked?.zip ?? "",
+                      }));
+                    }}
+                  >
                     <SelectTrigger className="mt-1.5 rounded-xl">
                       <SelectValue placeholder="Select customer" />
                     </SelectTrigger>
@@ -578,6 +611,48 @@ export default function AdminInvoices() {
                 <p className="-mt-2 text-xs text-muted-foreground">
                   The customer's emails call this invoice by service and date, never by its number.
                 </p>
+                {/* Where the work was done. A manual invoice has no booking to read an
+                    address from, so it is stored on the invoice itself — prefilled from
+                    the customer's record, editable, and optional. */}
+                <div className="space-y-2">
+                  <Label htmlFor="inv-service-address">Service address (optional)</Label>
+                  <Input
+                    id="inv-service-address"
+                    autoComplete="off"
+                    placeholder="Street address"
+                    className="rounded-xl"
+                    value={form.serviceAddress}
+                    onChange={e => setForm(f => ({ ...f, serviceAddress: e.target.value }))}
+                  />
+                  <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,7rem)] gap-2">
+                    <Input
+                      id="inv-service-city"
+                      aria-label="Service address city"
+                      autoComplete="off"
+                      placeholder="City"
+                      className="rounded-xl"
+                      value={form.serviceCity}
+                      onChange={e => setForm(f => ({ ...f, serviceCity: e.target.value }))}
+                    />
+                    <Input
+                      id="inv-service-zip"
+                      aria-label="Service address ZIP"
+                      autoComplete="off"
+                      inputMode="numeric"
+                      placeholder="ZIP"
+                      className="rounded-xl"
+                      value={form.serviceZip}
+                      onChange={e => setForm(f => ({ ...f, serviceZip: e.target.value }))}
+                    />
+                  </div>
+                  <p className={`text-xs ${serviceAddressValid ? "text-muted-foreground" : "text-amber-700"}`}>
+                    {!serviceAddressValid
+                      ? "Enter the street too, or clear the city and ZIP."
+                      : form.serviceAddress.trim()
+                        ? "Shown on the invoice row, in the customer's email and on the pay page."
+                        : "Leave blank if the invoice isn't for a particular property."}
+                  </p>
+                </div>
                 <div>
                   <Label htmlFor="inv-amount">Amount (USD)</Label>
                   <Input
@@ -638,7 +713,9 @@ export default function AdminInvoices() {
                 <DialogFooter sticky>
                   <Button
                     className="w-full rounded-xl"
-                    disabled={!form.customerId || !newBaseValid || !newCustomsValid || create.isPending}
+                    disabled={
+                      !form.customerId || !newBaseValid || !newCustomsValid || !serviceAddressValid || create.isPending
+                    }
                     onClick={() =>
                       create.mutate({
                         customerId: Number(form.customerId),
@@ -646,6 +723,9 @@ export default function AdminInvoices() {
                         dueDate: form.dueDate || undefined,
                         serviceType: (form.serviceType || undefined) as (typeof CLEANING_TYPES)[number] | undefined,
                         serviceDate: form.serviceDate || undefined,
+                        serviceAddress: form.serviceAddress.trim() || undefined,
+                        serviceCity: form.serviceCity.trim() || undefined,
+                        serviceZip: form.serviceZip.trim() || undefined,
                         addonIds: newAddons,
                         customItems: newCustomsParsed,
                       })

@@ -52,6 +52,7 @@ vi.mock("./db", async () => {
     markEmailAlertSent: vi.fn().mockResolvedValue(undefined),
     listBookings: (...a: unknown[]) => mockListBookings(...a),
     getCustomersByIds: (...a: unknown[]) => mockGetCustomersByIds(...a),
+    getUsersByIds: vi.fn().mockResolvedValue([]),
     listBalanceInvoicesForBookings: (...a: unknown[]) => mockListBalanceInvoices(...a),
   };
 });

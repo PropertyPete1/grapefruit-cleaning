@@ -129,16 +129,29 @@ describe("every list query strips it", () => {
   });
 });
 
-describe("the admin form takes no money", () => {
+describe("the admin form takes no computed money from the browser", () => {
   const source = readFileSync(DIALOG, "utf-8");
 
-  it("has no price, total or deposit input", () => {
-    expect(source).not.toMatch(/setTotal|setDeposit|setPrice|totalAmount:|depositAmount:/);
+  it("has no total or deposit input, and no catalog price field", () => {
+    expect(source).not.toMatch(/setTotal|setDeposit|setPrice\b|totalAmount:|depositAmount:/);
+  });
+
+  it("the one amount it can send is the owner's custom price — opt-in, reasoned, and server-validated", () => {
+    expect(source).toContain("Customize price");
+    expect(source).toContain("customPriceReason");
+    // Sent only when the toggle is on and a service is chosen; never a bare total.
+    expect(source).toMatch(/customPrice:\s*\n?\s*customPriceOn && serviceType/);
+    const call = source.slice(source.indexOf("create.mutate({"), source.indexOf("sendEmail: sendEmail"));
+    expect(call).toContain("customPrice:");
+    expect(call).not.toMatch(/total:|deposit:|basePrice:|amount: newBase/);
   });
 
   it("has no extras picker — those belong to the customer", () => {
     expect(source).not.toContain("EXTRA_IDS");
-    expect(source).not.toMatch(/setExtras|extras:/);
+    expect(source).not.toMatch(/setExtras/);
+    // The only extras it ever mentions is the empty list it hands the public
+    // calculator to prefill a custom price with the catalog figure.
+    expect(source.match(/extras:[^,\n]*/g)).toEqual(["extras: []"]);
   });
 
   it("offers the notice override explicitly rather than silently bypassing", () => {

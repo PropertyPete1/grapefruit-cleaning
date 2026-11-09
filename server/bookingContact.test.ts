@@ -28,6 +28,7 @@ vi.mock("./db", async () => {
     isSlotTakenError: actual.isSlotTakenError,
     listBookings: (...a: unknown[]) => mockListBookings(...a),
     getCustomersByIds: (...a: unknown[]) => mockGetCustomersByIds(...a),
+    getUsersByIds: vi.fn().mockResolvedValue([]),
     listBalanceInvoicesForBookings: vi.fn().mockResolvedValue([]),
     getBookingById: (...a: unknown[]) => mockGetBookingById(...a),
     getCustomerById: (...a: unknown[]) => mockGetCustomerById(...a),

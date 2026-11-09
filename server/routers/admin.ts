@@ -164,13 +164,23 @@ function grandfatheredSuggestionFor(
     serviceType: string | null;
     customerId: number;
     grandfatheredBaseCents: number | null;
+    customPriceCents: number | null;
     addressLine: string | null;
     zip: string | null;
   },
   customer: { email: string | null; phone: string | null } | undefined,
   grandfathered: Awaited<ReturnType<typeof db.listGrandfatheredCustomers>>
 ): { customerId: number; customerName: string; basePrice: number; reason: "same_customer" | "contact" | "address" } | null {
-  if (row.grandfatheredBaseCents != null || !REPRICEABLE_STATUSES.has(row.status) || !row.serviceType) return null;
+  // A booking the owner priced by hand is not at the catalog price either —
+  // suggesting a standing rate over it would second-guess the decision.
+  if (
+    row.grandfatheredBaseCents != null ||
+    row.customPriceCents != null ||
+    !REPRICEABLE_STATUSES.has(row.status) ||
+    !row.serviceType
+  ) {
+    return null;
+  }
   for (const candidate of grandfathered) {
     const lock = lockFromCustomer(candidate);
     if (!lockAppliesTo(lock, row.serviceType)) continue;
@@ -204,6 +214,30 @@ function adminServiceReference(
   const type = invoice.serviceType ?? booking?.serviceType ?? null;
   const name = (type && SERVICE_NAMES[type]?.en) || "Cleaning services";
   return serviceReference(name, invoice.serviceDate ?? booking?.scheduledDate ?? null, "en");
+}
+
+/**
+ * A booking's custom price as the Details panel shows it: the figure, the
+ * reason the owner noted, and who set it (the staff account's name, or its
+ * email when the name is blank).
+ */
+function customPriceSummary(
+  row: {
+    customPriceCents: number | null;
+    customPriceReason: string | null;
+    customPriceByUserId: number | null;
+    customPriceAt: Date | null;
+  },
+  userById: Map<number, { name: string | null; email: string | null }>
+): { amount: number; reason: string; setBy: string | null; setAt: Date | null } | null {
+  if (row.customPriceCents == null) return null;
+  const user = row.customPriceByUserId != null ? userById.get(row.customPriceByUserId) : undefined;
+  return {
+    amount: centsToDollars(row.customPriceCents),
+    reason: row.customPriceReason ?? "",
+    setBy: user?.name?.trim() || user?.email || null,
+    setAt: row.customPriceAt,
+  };
 }
 
 export const adminRouter = router({
@@ -251,6 +285,11 @@ export const adminRouter = router({
       // SHOULD have been (same person under another email, or the rate set
       // after the booking) can carry the suggestion to apply it.
       const grandfathered = await db.listGrandfatheredCustomers();
+      // Who set each custom price — the owner's own name on the Details panel.
+      const setByIds = Array.from(
+        new Set(rows.flatMap(row => (row.customPriceByUserId != null ? [row.customPriceByUserId] : [])))
+      );
+      const userById = new Map((await db.getUsersByIds(setByIds)).map(user => [user.id, user]));
       // The payment position of each job, derived from its balance invoice in
       // one query for the whole page — what the calendar's day panel shows.
       const invoiceByBooking = new Map(
@@ -296,6 +335,8 @@ export const adminRouter = router({
               ? fullName(customerById.get(row.grandfatheredCustomerId ?? row.customerId)) || "grandfathered customer"
               : null,
           grandfatheredSuggestion: grandfatheredSuggestionFor(row, customer, grandfathered),
+          /** The price the owner agreed by hand for this booking, when one was. */
+          customPrice: customPriceSummary(row, userById),
         };
       });
     }),
@@ -421,6 +462,20 @@ export const adminRouter = router({
           locale: z.enum(["en", "es"]).default("en"),
           couponCode: z.string().max(40).optional(),
           overrideNotice: z.boolean().optional(),
+          /**
+           * The price the owner agreed with the customer for the booked
+           * service, replacing the catalog figure — the deposit, the balance
+           * invoice and every email derive from it, extras still itemize on
+           * top. Admin only: the public form has no such field. Same bounds
+           * as every other amount (positive, cents, capped), plus the reason
+           * the Details panel shows next to the figure.
+           */
+          customPrice: z
+            .object({
+              amount: z.number().positive().max(100000).multipleOf(0.01),
+              reason: z.string().trim().min(3, "Say why in a few words — it shows on the booking.").max(500),
+            })
+            .optional(),
           /** Owner's choice: email the link, or copy it for a text message. */
           sendEmail: z.boolean().default(true),
         })
@@ -430,10 +485,20 @@ export const adminRouter = router({
         .refine(input => Boolean(input.date) === Boolean(input.time), {
           message: "A held time needs both a date and a time — or leave both blank and let them pick.",
         })
+        .refine(input => !input.customPrice || input.serviceType != null, {
+          message: "Pick the service the custom price is for — it is that service's price, and extras still add on top.",
+        })
     )
     .mutation(async ({ ctx, input }) => {
       const origin = originFromRequest(ctx.req);
-      const result = await createAdminBooking(input, origin);
+      const result = await createAdminBooking(
+        {
+          ...input,
+          // Who agreed the price is part of the record the Details panel shows.
+          customPrice: input.customPrice ? { ...input.customPrice, byUserId: ctx.user.id } : undefined,
+        },
+        origin
+      );
 
       let emailSent = false;
       if (input.sendEmail && input.email) {
@@ -479,6 +544,7 @@ export const adminRouter = router({
         sqftCorrected: result.sqftCorrected,
         customerWillChoose: result.customerWillChoose,
         grandfathered: result.grandfathered,
+        customPrice: result.customPrice,
         emailSent,
       };
     }),
@@ -1199,6 +1265,12 @@ export const adminRouter = router({
         discountAppliedCents: money.discountAppliedCents,
         discountApplied: centsToDollars(money.discountAppliedCents),
         ...grandfatheredColumns(lock),
+        // Changing the rate is the later decision: a price the owner typed by
+        // hand on the booking gives way to it, whichever way it went.
+        customPriceCents: null,
+        customPriceReason: null,
+        customPriceByUserId: null,
+        customPriceAt: null,
       });
       return {
         success: true as const,
@@ -1414,6 +1486,15 @@ export const adminRouter = router({
         serviceType: z.enum(CLEANING_TYPES).optional(),
         serviceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
         /**
+         * Where the work was done, for a bill with no booking behind it.
+         * Optional; the dialog prefills it from the customer's address on
+         * file. Stored on the invoice and shown on its row, in the customer's
+         * email and on the pay page. City and ZIP only ride with a street.
+         */
+        serviceAddress: z.string().trim().min(1).max(255).optional(),
+        serviceCity: z.string().trim().min(1).max(100).optional(),
+        serviceZip: z.string().trim().min(3).max(20).optional(),
+        /**
          * Same itemization the approval flow takes, deliberately the same
          * shape: ids only for catalog add-ons (the server prices them from the
          * live catalog, so a stale client cannot dictate dollars), and named
@@ -1442,6 +1523,9 @@ export const adminRouter = router({
           .max(10)
           .optional(),
       })
+        .refine(input => input.serviceAddress || (!input.serviceCity && !input.serviceZip), {
+          message: "Enter the street for the service address, or leave the whole address blank.",
+        })
     )
     .mutation(async ({ ctx, input }) => {
       // The whole lifecycle lives in balance.ts, shared with the approval
@@ -1456,6 +1540,9 @@ export const adminRouter = router({
         customItems: input.customItems,
         serviceType: input.serviceType,
         serviceDate: input.serviceDate,
+        serviceAddress: input.serviceAddress,
+        serviceCity: input.serviceCity,
+        serviceZip: input.serviceZip,
         origin: originFromRequest(ctx.req),
       });
       switch (result.outcome) {
