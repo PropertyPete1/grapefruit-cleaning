@@ -567,6 +567,8 @@
 - [x] Review migration 0036: seven nullable additive columns, no backfill; verify no target columns or journal record exist in production
 - [x] Apply committed migration 0036 through the normal Drizzle migration workflow and verify all seven columns plus the exact journal record
 - [x] Run focused manual-invoice-address and custom-price regressions, TypeScript, full Vitest suite, and production build
-- [ ] Save the validated release checkpoint and deploy with a genuine production restart, without environment or customer-data changes
-- [ ] Prove the fresh production build through `/api/version` and reconfirm the migration in `__drizzle_migrations`
-- [ ] Synchronize the final deployment checkpoint with private GitHub main and the managed remote
+- [x] Save the validated release checkpoint and deploy with a genuine production restart, without environment or customer-data changes
+- [x] Prove the fresh production build through `/api/version` and reconfirm the migration in `__drizzle_migrations`
+- [x] Synchronize the final deployment checkpoint with private GitHub main and the managed remote
+
+Production proof: release checkpoint `e06e3f04` serves PR #26 parent `7b572e99fd867c01faffdfcd1a5da6b6a9ea4326`; all three domains report production environment, builtAt `2026-11-09T02:04:13.053Z`, and fresh startedAt `2026-11-09T02:06:13.467Z`. EN/ES home, booking, admin, and invoice route shells return 200. Migration 0036 journal id `9031372`, created_at `1794185608374`, hash `aaae787aee327bd829434ea76f24cdc142d4649e0bc4138081e3eb016bc507a0` matches the committed SQL. All seven columns are nullable; the 42 existing bookings and 46 invoices retained NULL values in the new fields after migration. Focused 46 tests and full 1,796 tests passed (4 skipped); TypeScript and production build passed. No upstream application code, environment values, or customer records were modified in this deployment round.
